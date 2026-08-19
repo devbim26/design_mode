@@ -15,3 +15,9 @@ data/*
 # Служебные папки инструментов
 .playwright-mcp/
 __pycache__/
+
+# временная папка сборки ассетов IFC-вьювера (node_modules)
+ifc_assets/node_modules/
+ifc_assets/package.json
+ifc_assets/package-lock.json
+ifc_assets/entry.mjs
