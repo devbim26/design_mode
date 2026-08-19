@@ -86,6 +86,61 @@ invokeai==6.2.0` их нужно запускать повторно (снача
    отдельными регионами уведомлений, не через этот поповер. Статус очереди
    виден у кнопки Generate (счётчик + прогресс). Кнопка «Меню» и индикатор
    соединения оставлены.
+11. **`.env` + админский пароль: «Менеджер моделей» за шестерёнкой**
+   (19.08, поздний вечер). Секреты — `.env` в корне проекта
+   (`IMAGEROUTER_API_KEY`, `ADMIN_PASSWORD`), грузится роутером при старте
+   (`_load_env_file`: cwd → INVOKEAI_ROOT → на уровень выше; без перекрытия
+   уже заданных переменных). Ключ из env имеет приоритет над
+   `data/imagerouter.json` (`_load_key`, в `/status` появился
+   `key_source: env|file|null`). Проверка пароля — `POST
+   /api/v1/imagerouter/admin-auth` (hmac.compare_digest, 401 + пауза 0.3 с;
+   `GET` того же пути — `{"protected":bool}`). UI: вкладка «Модели» убрана
+   из рейки (`patch_admin_gate`, App-бандл); в меню в группу «Настройки»
+   добавлен пункт «Менеджер моделей» (onClick → `window.__devbimOpenModels`);
+   `patch_tab_guard` (index-бандл) оборачивает синглтон навигации:
+   `connectToApp` экспортирует `window.__devbimSwitchTab/__devbimGetTab`,
+   `switchToTab("models")` при незаблокированной сессии вызывает
+   `window.__devbimGuardModels()` и НЕ переключает вкладку — гейтит все
+   обходные пути (кнопка «Manage Models» в ModelPicker, хоткеи, тосты).
+   Окно пароля — `imagerouter/devbim_admin.js` → `dist/devbim-admin.js`
+   (подключён в `index.html`, `patch_index_html`): перехват клика по
+   шестерёнке «Настройки» в capture-фазе (текст пункта сравнивается со
+   значениями `common.settingsLabel` всех 19 локалей!), окно глотает
+   mousedown/pointerdown (меню под ним не закрывается — после верного
+   пароля пункт «нажимается» повторно программно). Разблокировка — до
+   перезагрузки страницы; восстановленная после F5 вкладка «models»
+   сбрасывается на generate (поллинг `__devbimGetTab`).
+   ГРАБЛЯ: при правке хвоста `switchToTab` в index-бандле легко ошибиться
+   со скобками (одна лишняя `)` ломала ВЕСЬ бандл — «Unexpected token»,
+   белый экран). Проверка после патча обязательна:
+   `node -e "import('file:///.../index-*.js').catch(e=>console.log(e.message))"`
+   — допустима только рантайм-ошибка (document is not defined), не SyntaxError.
+12. **Вкладка «IFC» — 3D-просмотр BIM-моделей** (19.08, ветка
+   `feature/ifc-viewer`, эксперимент): кнопка в левой рейке после
+   Workflows, панель — iframe `/ifcviewer.html`. Разбор IFC в браузере
+   (@thatopen/components 3.4.8 + fragments 3.4.7 + three 0.182.0 +
+   web-ifc 0.0.77; ассеты `ifc/assets/` → `dist/ifc/`; воркер разбора
+   кладём локально — по умолчанию библиотека тянет его с unpkg.com).
+   Дерево структуры (getSpatialStructure), клик-выбор (worker-raycast),
+   свойства с psets (getItemsData), скрыть/изолировать (Hider), секущие
+   плоскости (Clipper). Сервер: `ifc_router.py` (`/api/v1/ifc/list|upload|
+   file/{name}` DELETE, хранение `data/ifc/`, лимит 500 МБ). Установка —
+   `setup_ifcviewer.py` (идемпотентный, `*.ifcviewer-bak`). ГРАБЛИ:
+   `fragments.raycast` ждёт мышь в ПИКСЕЛЯХ страницы (не NDC — screenToCast
+   сам вычитает rect); в 3.x в сцену добавляется `model.object` (не сама
+   модель) + `model.useCamera(cam)` + `fragments.core.update(true)`;
+   `Worlds` создаётся `new Worlds(components)`, а не `components.worlds`;
+   `ifc` добавлен в zod-enum activeTab (index-бандл
+   `ct([...,"queue"])` → `+ "ifc"`), иначе перезагрузка со вкладкой IFC
+   сбрасывает настройки UI. Идемпотентность патча App-бандла проверяется
+   по сигнатуре `e==="ifc"&&o.jsx(IFE,{})` (первая версия проверяла
+   неправильно и дублировала вкладку). Порядок скриптов после
+   force-reinstall: rebrand → imagerouter → ifcviewer. `_ir_server_hidden.bat`
+   теперь ставит PYTHONUTF8=1 (как start_devbim.bat) — без этого сервер,
+   запущенный через WMI, падал на конфиге с кириллицей; перезапуск
+   сервера — `_restart_server.ps1`. Отладка вьювера: в iframe доступен
+   `window.__ifc` (модель, выбор, raycast, clipper). Подробности — README,
+   раздел «IFC-вьювер».
 
 ## Ключевые технические детали (грабли, на которые уже наступили)
 
@@ -142,12 +197,11 @@ invokeai==6.2.0` их нужно запускать повторно (снача
   WMI (`_ir_server_hidden.bat`, лог — `ir_server.log`). Запущенные из
   агентских сессий фоновые процессы убиваются вместе с сессией —
   используйте WMI/`start_devbim.bat`.
-- **API-ключ задан** — пользователь ввёл его заново 19.08 ~15:09
-  (файл `data/imagerouter.json`; при удалении ключ запрашивается заново).
-- «Неизвестная ошибка» в тосте очереди больше не должна появляться:
-  все ошибки ImageRouter (нет ключа, модель без правки, сбой облака)
-  приходят как 422 с текстом. Проверено подменой модели без
-  image-input: тост получает «Модель «…» не поддерживает редактирование…».
+- **`.env` в корне проекта** — источник ключа и админского пароля
+  (в git не входит, см. `.gitignore`). Ключ ImageRouter подтягивается при
+  старте сервера (`key_source: env`), админский пароль — `ADMIN_PASSWORD`
+  (менять в `.env` + перезапуск). При удалении `.env` ключ берётся из
+  `data/imagerouter.json`, защита паролем отключается.
 - Каталог моделей кэшируется на сервере 10 мин (`_ir_models_cache`).
 - Диагностический дамп последнего перехваченного графа:
   `data/_ir_last_graph.json` (удобно для разбора «что ушло»).
@@ -172,11 +226,14 @@ invokeai==6.2.0` их нужно запускать повторно (снача
 ```powershell
 cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
 .\venv\Scripts\python.exe .\setup_imagerouter.py        # применить патчи
-.\venv\Scripts\python.exe .\imagerouter\_test_extract.py # тест извлечения графа
+# проверить, что index-бандл парсится (после патчей навигации!):
+node -e "import('file:///C:/Users/Lenovo/Desktop/проект SOFT_2/Дизайн/InvokeAI/InvokeAI/venv/Lib/site-packages/invokeai/frontend/web/dist/assets/index-BFW2ubNY.js').catch(e=>console.log(e.message))"
 # перезапустить сервер, затем:
 # 1) GET http://127.0.0.1:9090/api/v2/models/ — модели imagerouter/ в списке
-# 2) вкладка ImageRouter в Model Manager, ключ, каталог
-# 3) Canvas: выбрать edit-модель, фото+маска+промпт → Generate → галерея
+# 2) GET /api/v1/imagerouter/status — key_source:env; POST admin-auth — пароль
+# 3) UI: Меню → Настройки → пароль → «Менеджер моделей» → вкладка ImageRouter
+# 4) F5 — блокировка сбрасывается, вкладка models не восстанавливается
+# 5) Canvas: выбрать edit-модель, фото+маска+промпт → Generate → галерея
 ```
 
 Откат интеграции: восстановить `*.imagerouter-bak`, удалить
