@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IFC-вьювер — DevBIM</title>
+<style>
+  :root{
+    --bg:#0c0d0f; --panel:#16181b; --panel2:#1d2024; --border:#2b2f35;
+    --text:#e8e9ea; --muted:#9aa0a6; --accent:#38BDF8; --accent-dim:#1a5f80;
+    --ok:#34d399; --err:#f87171;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font:13px/1.45 "Inter","Segoe UI",system-ui,Arial,sans-serif;
+    display:flex; flex-direction:column; overflow:hidden;
+  }
+  header{
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+    padding:8px 12px; border-bottom:1px solid var(--border); background:var(--panel);
+    flex:0 0 auto;
+  }
+  header h1{font-size:15px; margin:0 8px 0 0; font-weight:600; white-space:nowrap}
+  header h1 .bim{color:var(--accent)}
+  button{
+    background:var(--accent); color:#04222f; border:none; border-radius:6px; padding:5px 12px;
+    font:inherit; font-weight:600; cursor:pointer; white-space:nowrap;
+  }
+  button:hover{filter:brightness(1.1)}
+  button:disabled{opacity:.45; cursor:default}
+  button.ghost{background:transparent; color:var(--muted); border:1px solid var(--border); font-weight:400}
+  button.ghost:hover{color:var(--text)}
+  button.active{background:#12232d; color:var(--accent); border-color:var(--accent)}
+  select{
+    background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px;
+    padding:5px 8px; font:inherit; outline:none; max-width:280px;
+  }
+  select:focus{border-color:var(--accent)}
+  .spacer{flex:1}
+  .chip{font-size:11px; padding:3px 9px; border:1px solid var(--border); border-radius:999px;
+    color:var(--muted); white-space:nowrap}
+  .chip.err{color:var(--err); border-color:var(--err)}
+  .chip.ok{color:var(--ok); border-color:var(--ok)}
+
+  main{flex:1; display:grid; grid-template-columns:270px 1fr 300px; min-height:0; gap:0}
+  .side{
+    background:var(--panel); border-right:1px solid var(--border); display:flex;
+    flex-direction:column; min-height:0;
+  }
+  .side.right{border-right:none; border-left:1px solid var(--border)}
+  .side h2{
+    font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted);
+    margin:0; padding:9px 12px 7px; border-bottom:1px solid var(--border); flex:0 0 auto;
+  }
+  #tree{flex:1; overflow:auto; padding:6px 4px; user-select:none}
+  #props{flex:1; overflow:auto; padding:8px 12px}
+  .tnode{display:flex; align-items:center; gap:6px; padding:3px 8px; border-radius:5px;
+    cursor:pointer; white-space:nowrap; overflow:hidden}
+  .tnode:hover{background:var(--panel2)}
+  .tnode.sel{background:#12232d; color:var(--accent)}
+  .tnode .caret{width:14px; flex:0 0 14px; color:var(--muted); font-size:9px; text-align:center; cursor:pointer}
+  .tnode .icon{flex:0 0 auto; font-size:12px}
+  .tnode .lbl{overflow:hidden; text-overflow:ellipsis}
+  .tnode .lbl .cat{color:var(--muted); font-size:11px}
+  .tnode.hidden-elt{opacity:.4}
+  .kids{margin-left:14px; border-left:1px solid var(--border); display:none}
+  .kids.open{display:block}
+
+  #viewport{position:relative; min-width:0; min-height:0; background:var(--bg)}
+  #viewport .empty{
+    position:absolute; inset:0; display:flex; flex-direction:column; gap:10px;
+    align-items:center; justify-content:center; color:var(--muted); text-align:center; padding:20px;
+  }
+  #viewport .empty .big{font-size:38px}
+  #loadbar{position:absolute; left:0; right:0; top:0; height:3px; background:#12232d; display:none}
+  #loadbar i{display:block; height:100%; width:0; background:var(--accent); transition:width .3s}
+  #toolbar{
+    position:absolute; left:10px; top:10px; display:flex; gap:6px; flex-wrap:wrap; max-width:calc(100% - 20px);
+  }
+  #toolbar button{padding:4px 10px; font-size:12px; font-weight:500}
+  #navhelp{
+    position:absolute; right:10px; bottom:10px; font-size:11px; color:var(--muted);
+    background:rgba(12,13,15,.75); border:1px solid var(--border); border-radius:6px; padding:4px 9px;
+  }
+
+  .prop-group{margin-bottom:10px; border:1px solid var(--border); border-radius:6px; overflow:hidden}
+  .prop-group .gtitle{
+    padding:5px 10px; background:var(--panel2); font-weight:600; font-size:12px; color:var(--accent);
+    word-break:break-word;
+  }
+  .prop-row{display:flex; gap:8px; padding:4px 10px; border-top:1px solid var(--border); font-size:12px}
+  .prop-row:first-of-type{border-top:none}
+  .prop-row .k{flex:0 0 42%; color:var(--muted); word-break:break-word}
+  .prop-row .v{flex:1; word-break:break-word}
+  .placeholder{color:var(--muted); font-size:12px; padding:8px 2px}
+
+  footer{
+    flex:0 0 auto; display:flex; gap:10px; align-items:center; padding:5px 12px;
+    border-top:1px solid var(--border); background:var(--panel); font-size:11.5px; color:var(--muted);
+  }
+  footer .err{color:var(--err)}
+  .spin{
+    width:12px; height:12px; border:2px solid var(--accent-dim); border-top-color:var(--accent);
+    border-radius:50%; display:inline-block; vertical-align:-2px; margin-right:6px;
+    animation:sp 0.8s linear infinite;
+  }
+  @keyframes sp{to{transform:rotate(360deg)}}
+  input[type=file]{display:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>IFC<span class="bim">Viewer</span></h1>
+  <button id="open-file">Открыть файл…</button>
+  <input type="file" id="file-input" accept=".ifc,.IFC">
+  <select id="server-list" title="Модели на сервере"><option value="">— с сервера —</option></select>
+  <button id="refresh-list" class="ghost" title="Обновить список моделей на сервере">↻</button>
+  <span class="spacer"></span>
+  <span class="chip" id="stat-model">модель не загружена</span>
+</header>
+
+<main>
+  <section class="side">
+    <h2>Дерево модели</h2>
+    <div id="tree"><div class="placeholder">Загрузите IFC-файл…</div></div>
+  </section>
+
+  <section id="viewport">
+    <div id="loadbar"><i></i></div>
+    <div id="toolbar">
+      <button id="btn-show-all" class="ghost" title="Показать все элементы (сброс скрытия)">Показать всё</button>
+      <button id="btn-hide" class="ghost" title="Скрыть выделенные элементы">Скрыть</button>
+      <button id="btn-isolate" class="ghost" title="Оставить только выделенные элементы">Изолировать</button>
+      <button id="btn-fit" class="ghost" title="Вписать модель в окно">Вписать</button>
+      <button id="btn-plane" class="ghost" title="Добавить горизонтальную секущую плоскость (перетаскивайте мышью)">Сечение</button>
+      <button id="btn-planes-del" class="ghost" title="Удалить все секущие плоскости">✕ сечения</button>
+    </div>
+    <div class="empty" id="empty">
+      <div class="big">🏢</div>
+      <div>Откройте IFC-файл с диска или выберите модель с сервера.<br>
+      BIM-модель разбирается прямо в браузере (web-ifc).</div>
+    </div>
+    <div id="navhelp">ЛКМ — вращение · колесо — зум · ПКМ — панорама · клик — выбор элемента</div>
+  </section>
+
+  <section class="side right">
+    <h2>Свойства элемента</h2>
+    <div id="props"><div class="placeholder">Кликните по элементу в 3D или в дереве…</div></div>
+  </section>
+</main>
+
+<footer>
+  <span id="status">Готов</span>
+  <span class="spacer"></span>
+  <span id="counts"></span>
+</footer>
+
+<script type="module">
+import {
+  Components, Worlds, SimpleScene, OrthoPerspectiveCamera, SimpleRenderer,
+  FragmentsManager, IfcLoader, Hider, Clipper,
+  Vector2, Vector3, Box3, Color,
+} from "/ifc/thatopen.mjs";
+
+const $ = (id) => document.getElementById(id);
+const setStatus = (msg, isErr) => {
+  $("status").innerHTML = isErr ? `<span class="err"></span>` : "";
+  $("status").textContent = msg;
+  if (isErr) { const s = $("status"); s.className = "err"; s.textContent = msg; }
+  else $("status").className = "";
+};
+
+// --- ядро @thatopen/components ---
+const components = new Components();
+const worlds = new Worlds(components);
+const world = worlds.create();
+
+world.scene = new SimpleScene(components);
+world.scene.setup();
+world.scene.three.background = null;               // прозрачный фон -> CSS-фон вьюпорта
+
+world.renderer = new SimpleRenderer(components, $("viewport"));
+world.camera = new OrthoPerspectiveCamera(components);
+world.camera.projection.set("Perspective");
+
+new ResizeObserver(() => world.renderer.resize?.()).observe($("viewport"));
+
+const fragments = new FragmentsManager(components);
+const hider = new Hider(components);
+const clipper = new Clipper(components);
+clipper.enabled = true;
+
+// обновление LOD/видимости фрагментов при движении камеры
+world.camera.controls.addEventListener("update", () => fragments.core.update());
+
+const ifcLoader = new IfcLoader(components);
+await ifcLoader.setup({
+  autoSetWasm: false,
+  wasm: { path: "/ifc/", absolute: true },          // web-ifc.wasm лежит в dist/ifc/
+});
+
+// воркер разбора IFC — локальный файл (по умолчанию библиотека тянет его с unpkg.com)
+await fragments.init("/ifc/worker.mjs");
+
+await components.init();
+
+// --- состояние ---
+let model = null;          // FragmentsModel
+let modelId = "";          // id в fragments.list
+let selection = new Set(); // выделенные localId
+let elementIds = new Set();// все localId модели (для счётчика)
+
+const ACCENT = new Color(0x38bdf8);
+const highlightDef = { color: ACCENT, opacity: 0.75, transparent: true, renderedFaces: 1 };
+
+function modelIdMap(ids) { return { [modelId]: [...ids] }; }
+
+async function setProgress(p) { // p: 0..1 | null
+  const bar = $("loadbar");
+  if (p === null) { bar.style.display = "none"; bar.firstElementChild.style.width = "0"; return; }
+  bar.style.display = "block";
+  bar.firstElementChild.style.width = Math.round(p * 100) + "%";
+}
+
+// --- подсветка выделения ---
+async function applyHighlight() {
+  await fragments.resetHighlight();
+  if (selection.size && model) {
+    await fragments.highlight(highlightDef, modelIdMap(selection));
+  }
+}
+
+async function selectElements(ids, { showProps = true } = {}) {
+  selection = new Set(ids);
+  await applyHighlight();
+  markTreeSelection();
+  if (showProps) {
+    if (ids.length === 1) await showProperties(ids[0]);
+    else if (ids.length > 1) showPropsSummary(ids.length);
+  }
+}
+
+// --- загрузка модели ---
+async function loadIfc(bytes, name) {
+  if (model) {
+    try {
+      await fragments.resetHighlight();
+      await hider.set(true);
+      world.scene.three.remove(model.object);
+      model.dispose?.();
+    } catch (e) { console.warn("dispose:", e); }
+    model = null; selection.clear();
+  }
+  setStatus("Разбор IFC…");
+  await setProgress(0.05);
+  const t0 = performance.now();
+  try {
+    model = await ifcLoader.load(bytes, true, name, {
+      processData: {
+        progressCallback: (p) => {
+          const ratio = p && p.total ? p.processed / p.total : null;
+          if (ratio !== null) setProgress(0.1 + ratio * 0.7);
+        },
+      },
+    });
+  } catch (e) {
+    console.error(e);
+    await setProgress(null);
+    setStatus("Ошибка разбора IFC: " + (e?.message || e), true);
+    return;
+  }
+  modelId = model.modelId ?? [...fragments.list.keys()].find((k) => fragments.list.get(k) === model);
+  model.useCamera(world.camera.three);
+  world.scene.three.add(model.object);
+  fragments.core.update(true);
+  await setProgress(0.9);
+
+  await buildTree();
+  fitModel();
+  await setProgress(null);
+
+  const secs = ((performance.now() - t0) / 1000).toFixed(1);
+  const n = countElements();
+  $("stat-model").textContent = name;
+  $("stat-model").className = "chip ok";
+  $("empty").style.display = "none";
+  $("counts").textContent = `элементов: ${n}`;
+  setStatus(`Модель загружена за ${secs} с`);
+}
+
+function fitModel() {
+  if (!model) return;
+  const box = model.box ?? new Box3().setFromObject(model.object);
+  if (!box || box.isEmpty()) return;
+  const size = box.getSize(new Vector3());
+  const center = box.getCenter(new Vector3());
+  const maxDim = Math.max(size.x, size.y, size.z) || 10;
+  const dist = maxDim * 1.4;
+  world.camera.controls.setLookAt(
+    center.x + dist * 0.7, center.y + dist * 0.6, center.z + dist * 0.7,
+    center.x, center.y, center.z,
+  );
+  world.camera.controls.update();
+}
+
+// --- дерево пространственной структуры ---
+const CAT_RU = {
+  IFCPROJECT: "Проект", IFCSITE: "Площадка", IFCBUILDING: "Здание",
+  IFCBUILDINGSTOREY: "Этаж", IFCSPACE: "Помещение", IFCWALL: "Стена",
+  IFCWALLSTANDARDCASE: "Стена", IFCWALL: "Стена", IFCCOLUMN: "Колонна",
+  IFCSLAB: "Перекрытие", IFCROOF: "Крыша", IFCDOOR: "Дверь", IFCWINDOW: "Окно",
+  IFCSTAIR: "Лестница", IFCSTAIRFLIGHT: "Марш лестницы", IFCRAILING: "Ограждение",
+  IFCBEAM: "Балка", IFCFOOTING: "Фундамент", IFCPILE: "Свая",
+  IFCMEMBER: "Элемент каркаса", IFCPLATE: "Пластина", IFCCOVERING: "Отделка",
+  IFCFURNISHINGELEMENT: "Оборудование/мебель", IFCDISTRIBUTIONELEMENT: "Инженерия",
+  IFCFLOWTERMINAL: "Сантехника/осветители", IFCFLOWSEGMENT: "Трубопровод/воздуховод",
+  IFCFLOWFITTING: "Фитинг", IFCBUILDINGELEMENTPROXY: "Прочее",
+};
+const CAT_ICON = {
+  IFCPROJECT: "📁", IFCSITE: "🌍", IFCBUILDING: "🏢", IFCBUILDINGSTOREY: "🏢",
+  IFCSPACE: "⬜", IFCWALL: "🧱", IFCWALLSTANDARDCASE: "🧱", IFCSLAB: "▬",
+  IFCROOF: "🏠", IFCDOOR: "🚪", IFCWINDOW: "🪟", IFCSTAIR: "🪜",
+  IFCRAILING: "≡", IFCBEAM: "▬", IFCCOLUMN: "▮", IFCFOOTING: "▭",
+};
+
+function catTitle(cat) { return CAT_RU[cat] || cat?.replace(/^IFC/, "").toLowerCase() || "элемент"; }
+function catIcon(cat) { return CAT_ICON[cat] || "•"; }
+
+function collectIds(node) {
+  const ids = [];
+  if (node.localId != null) ids.push(node.localId);
+  for (const c of node.children || []) ids.push(...collectIds(c));
+  return ids;
+}
+
+function countElements() {
+  return elementIds.size;
+}
+
+// отладочный доступ из консоли браузера
+window.__ifc = {
+  get components() { return components; }, get world() { return world; },
+  get fragments() { return fragments; }, get hider() { return hider; },
+  get clipper() { return clipper; }, get model() { return model; },
+  get selection() { return selection; },
+  selectElements, loadIfc, raycast: (x = 0, y = 0) => {
+    // x, y — координаты мыши в пикселях страницы
+    const mouse = new Vector2(x, y);
+    return fragments.raycast({ camera: world.camera.three, mouse, dom });
+  },
+};
+
+async function buildTree() {
+  const container = $("tree");
+  container.innerHTML = "";
+  if (!model) return;
+  const root = await model.getSpatialStructure();
+  elementIds = new Set(collectIds(root));
+  const el = renderNode(root, true);
+  container.appendChild(el);
+}
+
+function renderNode(node, open) {
+  const wrap = document.createElement("div");
+
+  const row = document.createElement("div");
+  row.className = "tnode";
+  row.dataset.localId = node.localId ?? "";
+
+  const kids = node.children || [];
+  const caret = document.createElement("span");
+  caret.className = "caret";
+  caret.textContent = kids.length ? (open ? "▼" : "▶") : "";
+
+  const icon = document.createElement("span");
+  icon.className = "icon";
+  icon.textContent = catIcon(node.category);
+
+  const lbl = document.createElement("span");
+  lbl.className = "lbl";
+  lbl.innerHTML = `${catTitle(node.category)} <span class="cat">#${node.localId ?? ""}</span>`;
+
+  row.append(caret, icon, lbl);
+  wrap.appendChild(row);
+
+  if (kids.length) {
+    const box = document.createElement("div");
+    box.className = "kids" + (open ? " open" : "");
+    for (const k of kids) box.appendChild(renderNode(k, false));
+    wrap.appendChild(box);
+    caret.addEventListener("click", (e) => {
+      e.stopPropagation();
+      box.classList.toggle("open");
+      caret.textContent = box.classList.contains("open") ? "▼" : "▶";
+    });
+  }
+
+  if (node.localId != null) {
+    row.addEventListener("click", async () => {
+      const ids = kids.length ? collectIds(node) : [node.localId];
+      await selectElements(ids);
+    });
+  }
+  return wrap;
+}
+
+function markTreeSelection() {
+  document.querySelectorAll("#tree .tnode").forEach((n) => {
+    const id = n.dataset.localId;
+    n.classList.toggle("sel", id !== "" && selection.has(Number(id)));
+  });
+}
+
+// --- свойства ---
+const PROP_RU = {
+  Name: "Имя", GlobalId: "GUID", ObjectType: "Тип", Tag: "Марка",
+  Description: "Описание", type: "Класс IFC",
+  _category: "Класс IFC", _localId: "ID (модели)", _guid: "GUID",
+  IsDefinedBy: "Наборы свойств", HasProperties: "Свойства",
+};
+
+function fmtVal(v) {
+  if (v == null) return "—";
+  if (typeof v === "object") {
+    if ("value" in v) return fmtVal(v.value);
+    return JSON.stringify(v);
+  }
+  return String(v);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+async function showProperties(localId) {
+  const box = $("props");
+  box.innerHTML = `<div class="placeholder"><span class="spin"></span>Чтение свойств…</div>`;
+  let data = null;
+  try {
+    // встроенные атрибуты + наборы свойств (psets) и количества
+    data = await model.getItemsData([localId], {
+      attributesDefault: true,
+      relations: { IsDefinedBy: { attributes: true, relations: true } },
+    });
+  } catch (e) {
+    console.warn("getItemsData:", e);
+  }
+  const item = data?.[0] || await model.getItemAttributes(localId).catch?.(() => null) || {};
+  let html = "";
+
+  const attrs = {};
+  const groups = [];
+  for (const [k, v] of Object.entries(item)) {
+    if (Array.isArray(v)) groups.push([k, v]);
+    else attrs[k] = v;
+  }
+  // служебные поля — вперёд, в понятном порядке
+  const order = ["_category", "_localId", "_guid", "Name", "ObjectType", "Tag", "Description", "type"];
+  const sorted = Object.entries(attrs).sort((a, b) => {
+    const ia = order.indexOf(a[0]), ib = order.indexOf(b[0]);
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+  });
+  html += `<div class="prop-group"><div class="gtitle">Атрибуты</div>${sorted.map(([k, v]) => `<div class="prop-row"><span class="k">${PROP_RU[k] || k}</span><span class="v">${escapeHtml(fmtVal(v))}</span></div>`).join("") || '<div class="prop-row"><span class="k">—</span><span class="v"></span></div>'}</div>`;
+
+  for (const [gname, arr] of groups) {
+    // psets: [{Name:{value}, HasProperties:[...]}] — раскрываем на 2 уровня
+    let rows = "";
+    for (const pset of arr) {
+      const inner = pset?.HasProperties || pset?.properties || [];
+      const title = fmtVal(pset?.Name) !== "—" ? fmtVal(pset?.Name) : (PROP_RU[gname] || gname);
+      const sub = (Array.isArray(inner) ? inner : Object.entries(inner || {}))
+        .map((p) => {
+          if (Array.isArray(p)) return `<div class="prop-row"><span class="k">${escapeHtml(p[0])}</span><span class="v">${escapeHtml(fmtVal(p[1]))}</span></div>`;
+          const nm = fmtVal(p?.Name);
+          const val = p?.NominalValue != null ? fmtVal(p.NominalValue) : fmtVal(p?.Value ?? p);
+          return `<div class="prop-row"><span class="k">${escapeHtml(nm)}</span><span class="v">${escapeHtml(val)}</span></div>`;
+        }).join("");
+      rows += sub
+        ? `<div style="padding:4px 10px 2px;font-weight:600;font-size:11.5px;color:var(--muted)">${escapeHtml(title)}</div>${sub}`
+        : "";
+    }
+    if (rows) html += `<div class="prop-group"><div class="gtitle">${escapeHtml(PROP_RU[gname] || gname)}</div>${rows}</div>`;
+  }
+  box.innerHTML = html || '<div class="placeholder">Свойства не найдены</div>';
+}
+
+function showPropsSummary(n) { $("props").innerHTML = `<div class="placeholder">Выделено элементов: ${n}</div>`; }
+
+// --- клик-выбор в 3D (отличаем клик от вращения камеры) ---
+let downPos = null;
+const dom = world.renderer.three.domElement;
+dom.addEventListener("pointerdown", (e) => { downPos = [e.clientX, e.clientY]; });
+dom.addEventListener("pointerup", (e) => {
+  if (!downPos) return;
+  const dx = e.clientX - downPos[0], dy = e.clientY - downPos[1];
+  downPos = null;
+  if (dx * dx + dy * dy > 25) return;             // это было вращение/панорама
+  if (e.button !== 0 || !model) return;
+  // fragments.raycast ждёт координаты мыши в пикселях страницы (screenToCast
+  // сам вычитает rect канваса и нормализует)
+  const mouse = new Vector2(e.clientX, e.clientY);
+  fragments.raycast({ camera: world.camera.three, mouse, dom }).then((hit) => {
+    if (hit) selectElements([hit.localId]);
+    else selectElements([]);
+  });
+});
+
+// --- кнопки тулбара ---
+$("btn-show-all").addEventListener("click", async () => {
+  if (!model) return;
+  await hider.set(true);
+  unhideTreeMarks();
+  setStatus("Все элементы показаны");
+});
+
+$("btn-hide").addEventListener("click", async () => {
+  if (!model || !selection.size) { setStatus("Сначала выделите элемент(ы)", true); return; }
+  await hider.set(false, modelIdMap(selection));
+  hideTreeMarks(selection);
+  setStatus(`Скрыто элементов: ${selection.size}`);
+});
+
+$("btn-isolate").addEventListener("click", async () => {
+  if (!model || !selection.size) { setStatus("Сначала выделите элемент(ы)", true); return; }
+  await hider.isolate(modelIdMap(selection));
+  hideTreeMarksAllExcept(selection);
+  setStatus(`Изолировано элементов: ${selection.size}`);
+});
+
+$("btn-fit").addEventListener("click", fitModel);
+
+$("btn-plane").addEventListener("click", async () => {
+  if (!model) return;
+  const box = model.box ?? new Box3().setFromObject(model.object);
+  const center = box.getCenter(new Vector3());
+  const size = box.getSize(new Vector3());
+  clipper.enabled = true;
+  clipper.visible = true;
+  await clipper.createFromNormalAndCoplanarPoint(world, new Vector3(0, -1, 0), center.add(new Vector3(0, size.y * 0.25, 0)));
+  setStatus("Секущая плоскость добавлена — тяните её мышью; всё выше плоскости скрыто");
+});
+
+$("btn-planes-del").addEventListener("click", () => {
+  clipper.deleteAll();
+  setStatus("Секущие плоскости удалены");
+});
+
+function hideTreeMarks(ids) {
+  document.querySelectorAll("#tree .tnode").forEach((n) => {
+    const id = n.dataset.localId;
+    if (id !== "" && ids.has(Number(id))) n.classList.add("hidden-elt");
+  });
+}
+function hideTreeMarksAllExcept(ids) {
+  document.querySelectorAll("#tree .tnode").forEach((n) => {
+    const id = n.dataset.localId;
+    if (id === "") return;
+    n.classList.toggle("hidden-elt", !ids.has(Number(id)));
+  });
+}
+function unhideTreeMarks() {
+  document.querySelectorAll("#tree .tnode.hidden-elt").forEach((n) => n.classList.remove("hidden-elt"));
+}
+
+// --- загрузка файла с диска ---
+$("open-file").addEventListener("click", () => $("file-input").click());
+$("file-input").addEventListener("change", async (e) => {
+  const f = e.target.files?.[0];
+  if (!f) return;
+  setStatus(`Чтение ${f.name}…`);
+  const buf = await f.arrayBuffer();
+  await loadIfc(new Uint8Array(buf), f.name);
+  e.target.value = "";
+});
+
+// --- модели с сервера ---
+async function refreshServerList() {
+  const sel = $("server-list");
+  try {
+    const r = await fetch("/api/v1/ifc/list");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const d = await r.json();
+    const names = d.models || d || [];
+    sel.innerHTML = '<option value="">— с сервера —</option>' +
+      names.map((n) => `<option value="${escapeHtml(n.name ?? n)}">${escapeHtml(n.name ?? n)}${n.size ? " · " + fmtSize(n.size) : ""}</option>`).join("");
+  } catch (e) {
+    sel.innerHTML = '<option value="">— сервер: нет моделей —</option>';
+  }
+}
+
+function fmtSize(b) {
+  if (b > 1024 * 1024) return (b / 1024 / 1024).toFixed(1) + " МБ";
+  if (b > 1024) return (b / 1024).toFixed(0) + " КБ";
+  return b + " Б";
+}
+
+$("refresh-list").addEventListener("click", refreshServerList);
+$("server-list").addEventListener("change", async (e) => {
+  const name = e.target.value;
+  if (!name) return;
+  try {
+    setStatus(`Загрузка ${name} с сервера…`);
+    const r = await fetch("/api/v1/ifc/file/" + encodeURIComponent(name));
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const buf = await r.arrayBuffer();
+    await loadIfc(new Uint8Array(buf), name);
+  } catch (err) {
+    setStatus("Не удалось загрузить: " + err.message, true);
+  } finally {
+    e.target.value = "";
+  }
+});
+
+refreshServerList();
+</script>
+</body>
+</html>
