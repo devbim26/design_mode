@@ -31,6 +31,7 @@ import binascii
 import io
 import json
 import re
+import threading
 import time
 import traceback
 import uuid
@@ -301,6 +302,17 @@ def _ir_fake_configs() -> list[dict]:
     return [_ir_fake_config(m) for m in _fetch_ir_models()] + [_ir_ipadapter_fake()]
 
 
+def _add_ir_models(data: Any) -> None:
+    """Дописывает модели ImageRouter в ответ /api/v2/models (без дублей)."""
+    models = data.get("models") if isinstance(data, dict) else None
+    if not isinstance(models, list):
+        return
+    existing = {m.get("key") for m in models if isinstance(m, dict)}
+    for fake in _ir_fake_configs():
+        if fake["key"] not in existing:
+            models.append(fake)
+
+
 def _pick_size(mid: str, width: int, height: int) -> Optional[str]:
     """Размер для API: точный, если разрешён моделью; иначе auto (None)."""
     m = _ir_model_by_id(mid) or {}
@@ -316,6 +328,43 @@ class _IRClientError(Exception):
     def __init__(self, message: str, status: int = 400):
         super().__init__(message)
         self.status = status
+
+
+# --- Видимость генерации в UI (полоска/статус очереди) ---
+#
+# Облачная генерация не проходит через реальную очередь InvokeAI (элемент в
+# БД не ставится), поэтому фронтенд считает очередь пустой и стирает прогресс
+# при любом обновлении стора (подписка: queue.in_progress === 0 -> очистить
+# $lastProgressEvent). Чтобы полоска «Generating» и счётчик очереди жили:
+#   1) держим счётчик выполняемых генераций и на его основе патчим ответ
+#      GET /api/v1/queue/{q}/status (in_progress + N);
+#   2) шлём события invocation_started / invocation_progress (алерт «Generating»)
+#      и queue_item_status_changed(in_progress) (обновление бейджа очереди).
+
+_INFLIGHT: dict[str, int] = {}
+_INFLIGHT_LOCK = threading.Lock()
+
+# интервал «пульса» invocation_progress, сек
+PROGRESS_TICK = 2.0
+
+
+def _inflight_count(queue_id: str) -> int:
+    with _INFLIGHT_LOCK:
+        return _INFLIGHT.get(queue_id, 0)
+
+
+def _inflight_inc(queue_id: str) -> None:
+    with _INFLIGHT_LOCK:
+        _INFLIGHT[queue_id] = _INFLIGHT.get(queue_id, 0) + 1
+
+
+def _inflight_dec(queue_id: str) -> None:
+    with _INFLIGHT_LOCK:
+        n = max(0, _INFLIGHT.get(queue_id, 0) - 1)
+        if n:
+            _INFLIGHT[queue_id] = n
+        else:
+            _INFLIGHT.pop(queue_id, None)
 
 
 def _supports_image_input(mid: str) -> bool:
@@ -531,6 +580,8 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
     from invokeai.app.services.events.events_common import (
         BatchEnqueuedEvent,
         InvocationCompleteEvent,
+        InvocationProgressEvent,
+        InvocationStartedEvent,
         QueueItemStatusChangedEvent,
     )
     from invokeai.app.services.image_records.image_records_common import ImageCategory, ResourceOrigin
@@ -566,204 +617,267 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
         )
     )
 
-    # --- режим правки: есть исходник и/или референсные изображения ---
-    refs_pil: list[Any] = []
-    if info["references"]:
-        try:
-            refs_pil = [services.images.get_pil_image(n) for n in info["references"]]
-        except Exception as e:  # noqa: BLE001
-            raise _IRClientError(f"ImageRouter: не удалось загрузить референсное изображение ({e})", 500) from e
+    # --- статус генерации в UI: бейдж очереди + алерт «Generating» ---
 
-    is_edit = info["mode"] in ("inpaint", "outpaint", "img2img") and info["init_image"]
-    # референсы тоже уходят через edits-эндпоинт (multipart image[])
-    use_edits = is_edit or bool(refs_pil)
-    init_full = None
-    mask_full = None
-    zone_full = None
-    edit_bbox = None
-    init_pil = None
-    mask_pil = None
-    if use_edits:
-        if not _supports_image_input(mid):
-            raise _IRClientError(
-                f"Модель «{mid}» не поддерживает редактирование (не принимает изображение на вход). "
-                "Выберите в списке моделей модель с пометкой «редактирование» — например "
-                "google/nano-banana:free, qwen-image:free, openai/gpt-image-2, "
-                "black-forest-labs/flux-kontext-dev.",
-                400,
-            )
-        if info["init_image"]:
-            try:
-                init_full = services.images.get_pil_image(info["init_image"])
-                mask_full = services.images.get_pil_image(info["mask"]) if info["mask"] else None
-            except Exception as e:  # noqa: BLE001
-                raise _IRClientError(f"ImageRouter: не удалось загрузить исходное изображение ({e})", 500) from e
-            # зона правки в семантике канваса: 255 = менять
-            zone_full = _mask_edit_alpha(mask_full).point(lambda v: 255 - v) if mask_full is not None else None
-            # Кадрируем по содержимому и маске (+8px запас): без прозрачных полей
-            # канваса модель правит точнее. Результат затем вклеивается только
-            # в зону маски (см. _apply_edit_mask)
-            alpha_full = init_full.convert("RGBA").getchannel("A")
-            content = alpha_full.point(lambda v: 255 if v > 8 else 0).getbbox()
-            zone_bbox = zone_full.point(lambda v: 255 if v >= 128 else 0).getbbox() if zone_full is not None else None
-            boxes = [b for b in (content, zone_bbox) if b]
-            if boxes:
-                pad = 8
-                edit_bbox = (
-                    max(0, min(b[0] for b in boxes) - pad),
-                    max(0, min(b[1] for b in boxes) - pad),
-                    min(init_full.width, max(b[2] for b in boxes) + pad),
-                    min(init_full.height, max(b[3] for b in boxes) + pad),
-                )
-            else:
-                edit_bbox = (0, 0, init_full.width, init_full.height)
-            init_pil = init_full.crop(edit_bbox)
-            mask_pil = mask_full.crop(edit_bbox) if mask_full is not None else None
-            size = _pick_size(mid, init_pil.width, init_pil.height)
-        else:
-            size = _pick_size(mid, info["width"], info["height"])
-    else:
-        size = _pick_size(mid, info["width"], info["height"])
-
-    base_prompt = (info["positive"] or "").strip()
-    if refs_pil:
-        base_prompt += PROMPT_REFERENCE_NOTE
-
-    use_marker = False  # модель отвергла параметр mask — зона правки подсвечивается в картинке
-    marked_pil: Any = None
-    saved: list[Any] = []
-    for _ in range(runs):
-        if use_edits:
-            while True:
-                if use_marker:
-                    if marked_pil is None:
-                        marked_pil = _draw_mask_marker(init_pil, mask_pil)
-                    send_init = marked_pil
-                    send_prompt = base_prompt + PROMPT_MARKER_NOTE
-                    send_mask = None
-                else:
-                    send_init, send_prompt, send_mask = init_pil, base_prompt, mask_pil
-                data: dict[str, Any] = {"model": mid, "prompt": send_prompt}
-                if size:
-                    data["size"] = size
-                files: list[Any] = []
-                if send_init is not None:
-                    buf = io.BytesIO()
-                    send_init.save(buf, format="PNG")
-                    files.append(("image", ("image.png", buf.getvalue(), "image/png")))
-                if send_mask is not None:
-                    # OpenAI-семантика: правится прозрачная (alpha=0) область
-                    alpha = _mask_edit_alpha(send_mask)
-                    mask_out = Image.new("RGB", alpha.size, (0, 0, 0)).convert("RGBA")
-                    mask_out.putalpha(alpha)
-                    mbuf = io.BytesIO()
-                    mask_out.save(mbuf, format="PNG")
-                    files.append(("mask", ("mask.png", mbuf.getvalue(), "image/png")))
-                # референсные изображения — дополнительные входные картинки
-                for i, ref in enumerate(refs_pil):
-                    rb = io.BytesIO()
-                    ref.save(rb, format="PNG")
-                    files.append(("image[]", (f"ref{i + 1}.png", rb.getvalue(), "image/png")))
-                resp = requests.post(
-                    EDITS_URL,
-                    headers={"Authorization": f"Bearer {key}"},
-                    data=data,
-                    files=files,
-                    timeout=TIMEOUT_GENERATE,
-                )
-                try:
-                    data_out = _upstream_json(resp)
-                except HTTPException as e:
-                    raise _IRClientError(f"ImageRouter: {e.detail}", e.status_code) from e
-                err = _api_error_message(data_out)
-                if not err:
-                    break
-                # шлюз ImageRouter не принимает параметр mask (проверено 19.08
-                # на всех моделях правки) — подсвечиваем зону в картинке и повторяем
-                if mask_pil is not None and not use_marker and "mask" in err.lower():
-                    use_marker = True
-                    continue
-                raise _IRClientError(f"ImageRouter: {err}", 502)
-        else:
-            body: dict[str, Any] = {"model": mid, "prompt": info["positive"]}
-            if size:
-                body["size"] = size
-            resp = requests.post(
-                GENERATIONS_URL, headers={"Authorization": f"Bearer {key}"}, json=body, timeout=TIMEOUT_GENERATE
-            )
-            try:
-                data_out = _upstream_json(resp)
-            except HTTPException as e:
-                raise _IRClientError(f"ImageRouter: {e.detail}", e.status_code) from e
-            err = _api_error_message(data_out)
-            if err:
-                raise _IRClientError(f"ImageRouter: {err}", 502)
-        for item in data_out.get("data", []) if isinstance(data_out, dict) else []:
-            pil = _item_to_pil(item)
-            if pil is None:
-                continue
-            if is_edit and zone_full is not None:
-                pil = _apply_edit_mask(init_full, zone_full, pil, edit_bbox)
-            metadata = json.dumps(
-                {
-                    "generation_mode": "imagerouter-edit" if is_edit else "imagerouter",
-                    "imagerouter_model": mid,
-                    "positive_prompt": info["positive"],
-                    "negative_prompt": info["negative"],
-                    "width": info["width"],
-                    "height": info["height"],
-                    "source_image": info["init_image"],
-                },
-                ensure_ascii=False,
-            )
-            dto = services.images.create(
-                image=pil,
-                image_origin=ResourceOrigin.INTERNAL,
-                image_category=ImageCategory.GENERAL,
-                board_id=info["board_id"],
-                metadata=metadata,
-            )
-            saved.append(dto)
-            events.dispatch(
-                InvocationCompleteEvent(
-                    queue_id=queue_id,
-                    item_id=0,
-                    batch_id=batch_id,
-                    origin=origin,
-                    destination=destination,
-                    session_id=session_id,
-                    invocation=SaveImageInvocation(id="imagerouter_save", image=ImageField(image_name=dto.image_name)),
-                    invocation_source_id="imagerouter_save",
-                    result=ImageOutput.build(dto),
-                )
-            )
-    if not saved:
-        raise _IRClientError("ImageRouter: ответ не содержит изображений", 502)
-
-    events.dispatch(
-        QueueItemStatusChangedEvent(
+    def _status_event(status: str, completed: int = 0, failed: int = 0) -> QueueItemStatusChangedEvent:
+        return QueueItemStatusChangedEvent(
             queue_id=queue_id,
             item_id=0,
             batch_id=batch_id,
             origin=origin,
             destination=destination,
-            status="completed",
+            status=status,
             batch_status=BatchStatus(
                 queue_id=queue_id,
                 batch_id=batch_id,
                 origin=origin,
                 destination=destination,
                 pending=0,
-                in_progress=0,
-                completed=len(saved),
-                failed=0,
+                in_progress=1 if status == "in_progress" else 0,
+                completed=completed,
+                failed=failed,
                 canceled=0,
-                total=len(saved),
+                total=max(1, completed + failed),
             ),
             queue_status=services.session_queue.get_queue_status(queue_id=queue_id),
             session_id=session_id,
         )
+
+    def _progress_event(message: str) -> InvocationProgressEvent:
+        return InvocationProgressEvent(
+            queue_id=queue_id,
+            item_id=0,
+            batch_id=batch_id,
+            origin=origin,
+            destination=destination,
+            session_id=session_id,
+            invocation=SaveImageInvocation(id="imagerouter_save"),
+            invocation_source_id="imagerouter_save",
+            message=message,
+        )
+
+    _inflight_inc(queue_id)
+    # invalidates SessionQueueStatus -> клиент перезапросит /status (он патчится
+    # мидлварью, пока _INFLIGHT[queue_id] > 0) и покажет «в работе»
+    events.dispatch(_status_event("in_progress"))
+    events.dispatch(
+        InvocationStartedEvent(
+            queue_id=queue_id,
+            item_id=0,
+            batch_id=batch_id,
+            origin=origin,
+            destination=destination,
+            session_id=session_id,
+            invocation=SaveImageInvocation(id="imagerouter_save"),
+            invocation_source_id="imagerouter_save",
+        )
     )
+    # «пульс» для алерта «Generating» — реальные проценты облако не отдаёт
+    ticker_stop = threading.Event()
+    run_state = {"run": 0}
+
+    def _ticker() -> None:
+        t0 = time.time()
+        while not ticker_stop.wait(PROGRESS_TICK):
+            try:
+                events.dispatch(
+                    _progress_event(f"ImageRouter · {mid} · {run_state['run']}/{runs} · {int(time.time() - t0)} с")
+                )
+            except Exception:  # noqa: BLE001
+                break
+
+    threading.Thread(target=_ticker, daemon=True, name="ir-progress").start()
+
+    saved: list[Any] = []
+    try:
+        # --- режим правки: есть исходник и/или референсные изображения ---
+        refs_pil: list[Any] = []
+        if info["references"]:
+            try:
+                refs_pil = [services.images.get_pil_image(n) for n in info["references"]]
+            except Exception as e:  # noqa: BLE001
+                raise _IRClientError(f"ImageRouter: не удалось загрузить референсное изображение ({e})", 500) from e
+
+        is_edit = info["mode"] in ("inpaint", "outpaint", "img2img") and info["init_image"]
+        # референсы тоже уходят через edits-эндпоинт (multipart image[])
+        use_edits = is_edit or bool(refs_pil)
+        init_full = None
+        mask_full = None
+        zone_full = None
+        edit_bbox = None
+        init_pil = None
+        mask_pil = None
+        if use_edits:
+            if not _supports_image_input(mid):
+                raise _IRClientError(
+                    f"Модель «{mid}» не поддерживает редактирование (не принимает изображение на вход). "
+                    "Выберите в списке моделей модель с пометкой «редактирование» — например "
+                    "google/nano-banana:free, qwen-image:free, openai/gpt-image-2, "
+                    "black-forest-labs/flux-kontext-dev.",
+                    400,
+                )
+            if info["init_image"]:
+                try:
+                    init_full = services.images.get_pil_image(info["init_image"])
+                    mask_full = services.images.get_pil_image(info["mask"]) if info["mask"] else None
+                except Exception as e:  # noqa: BLE001
+                    raise _IRClientError(f"ImageRouter: не удалось загрузить исходное изображение ({e})", 500) from e
+                # зона правки в семантике канваса: 255 = менять
+                zone_full = _mask_edit_alpha(mask_full).point(lambda v: 255 - v) if mask_full is not None else None
+                # Кадрируем по содержимому и маске (+8px запас): без прозрачных полей
+                # канваса модель правит точнее. Результат затем вклеивается только
+                # в зону маски (см. _apply_edit_mask)
+                alpha_full = init_full.convert("RGBA").getchannel("A")
+                content = alpha_full.point(lambda v: 255 if v > 8 else 0).getbbox()
+                zone_bbox = zone_full.point(lambda v: 255 if v >= 128 else 0).getbbox() if zone_full is not None else None
+                boxes = [b for b in (content, zone_bbox) if b]
+                if boxes:
+                    pad = 8
+                    edit_bbox = (
+                        max(0, min(b[0] for b in boxes) - pad),
+                        max(0, min(b[1] for b in boxes) - pad),
+                        min(init_full.width, max(b[2] for b in boxes) + pad),
+                        min(init_full.height, max(b[3] for b in boxes) + pad),
+                    )
+                else:
+                    edit_bbox = (0, 0, init_full.width, init_full.height)
+                init_pil = init_full.crop(edit_bbox)
+                mask_pil = mask_full.crop(edit_bbox) if mask_full is not None else None
+                size = _pick_size(mid, init_pil.width, init_pil.height)
+            else:
+                size = _pick_size(mid, info["width"], info["height"])
+        else:
+            size = _pick_size(mid, info["width"], info["height"])
+
+        base_prompt = (info["positive"] or "").strip()
+        if refs_pil:
+            base_prompt += PROMPT_REFERENCE_NOTE
+
+        use_marker = False  # модель отвергла параметр mask — зона правки подсвечивается в картинке
+        marked_pil: Any = None
+        for i in range(runs):
+            run_state["run"] = i + 1
+            if use_edits:
+                while True:
+                    if use_marker:
+                        if marked_pil is None:
+                            marked_pil = _draw_mask_marker(init_pil, mask_pil)
+                        send_init = marked_pil
+                        send_prompt = base_prompt + PROMPT_MARKER_NOTE
+                        send_mask = None
+                    else:
+                        send_init, send_prompt, send_mask = init_pil, base_prompt, mask_pil
+                    data: dict[str, Any] = {"model": mid, "prompt": send_prompt}
+                    if size:
+                        data["size"] = size
+                    files: list[Any] = []
+                    if send_init is not None:
+                        buf = io.BytesIO()
+                        send_init.save(buf, format="PNG")
+                        files.append(("image", ("image.png", buf.getvalue(), "image/png")))
+                    if send_mask is not None:
+                        # OpenAI-семантика: правится прозрачная (alpha=0) область
+                        alpha = _mask_edit_alpha(send_mask)
+                        mask_out = Image.new("RGB", alpha.size, (0, 0, 0)).convert("RGBA")
+                        mask_out.putalpha(alpha)
+                        mbuf = io.BytesIO()
+                        mask_out.save(mbuf, format="PNG")
+                        files.append(("mask", ("mask.png", mbuf.getvalue(), "image/png")))
+                    # референсные изображения — дополнительные входные картинки
+                    for j, ref in enumerate(refs_pil):
+                        rb = io.BytesIO()
+                        ref.save(rb, format="PNG")
+                        files.append(("image[]", (f"ref{j + 1}.png", rb.getvalue(), "image/png")))
+                    resp = requests.post(
+                        EDITS_URL,
+                        headers={"Authorization": f"Bearer {key}"},
+                        data=data,
+                        files=files,
+                        timeout=TIMEOUT_GENERATE,
+                    )
+                    try:
+                        data_out = _upstream_json(resp)
+                    except HTTPException as e:
+                        raise _IRClientError(f"ImageRouter: {e.detail}", e.status_code) from e
+                    err = _api_error_message(data_out)
+                    if not err:
+                        break
+                    # шлюз ImageRouter не принимает параметр mask (проверено 19.08
+                    # на всех моделях правки) — подсвечиваем зону в картинке и повторяем
+                    if mask_pil is not None and not use_marker and "mask" in err.lower():
+                        use_marker = True
+                        continue
+                    raise _IRClientError(f"ImageRouter: {err}", 502)
+            else:
+                body: dict[str, Any] = {"model": mid, "prompt": info["positive"]}
+                if size:
+                    body["size"] = size
+                resp = requests.post(
+                    GENERATIONS_URL, headers={"Authorization": f"Bearer {key}"}, json=body, timeout=TIMEOUT_GENERATE
+                )
+                try:
+                    data_out = _upstream_json(resp)
+                except HTTPException as e:
+                    raise _IRClientError(f"ImageRouter: {e.detail}", e.status_code) from e
+                err = _api_error_message(data_out)
+                if err:
+                    raise _IRClientError(f"ImageRouter: {err}", 502)
+            for item in data_out.get("data", []) if isinstance(data_out, dict) else []:
+                pil = _item_to_pil(item)
+                if pil is None:
+                    continue
+                if is_edit and zone_full is not None:
+                    pil = _apply_edit_mask(init_full, zone_full, pil, edit_bbox)
+                metadata = json.dumps(
+                    {
+                        "generation_mode": "imagerouter-edit" if is_edit else "imagerouter",
+                        "imagerouter_model": mid,
+                        "positive_prompt": info["positive"],
+                        "negative_prompt": info["negative"],
+                        "width": info["width"],
+                        "height": info["height"],
+                        "source_image": info["init_image"],
+                    },
+                    ensure_ascii=False,
+                )
+                dto = services.images.create(
+                    image=pil,
+                    image_origin=ResourceOrigin.INTERNAL,
+                    image_category=ImageCategory.GENERAL,
+                    board_id=info["board_id"],
+                    metadata=metadata,
+                )
+                saved.append(dto)
+                events.dispatch(
+                    InvocationCompleteEvent(
+                        queue_id=queue_id,
+                        item_id=0,
+                        batch_id=batch_id,
+                        origin=origin,
+                        destination=destination,
+                        session_id=session_id,
+                        invocation=SaveImageInvocation(
+                            id="imagerouter_save", image=ImageField(image_name=dto.image_name)
+                        ),
+                        invocation_source_id="imagerouter_save",
+                        result=ImageOutput.build(dto),
+                    )
+                )
+        if not saved:
+            raise _IRClientError("ImageRouter: ответ не содержит изображений", 502)
+    except Exception:
+        ticker_stop.set()
+        _inflight_dec(queue_id)
+        try:
+            events.dispatch(_status_event("failed", failed=1))
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+        raise
+    ticker_stop.set()
+    # уменьшаем ДО отправки статуса: перезапрошенный /status должен быть чистым
+    _inflight_dec(queue_id)
+
+    events.dispatch(_status_event("completed", completed=len(saved)))
 
     return {
         "queue_id": queue_id,
@@ -778,6 +892,19 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
 # --- ASGI-мидлварь ---
 
 _ENQUEUE_RE = re.compile(r"^/api/v1/queue/[^/]+/enqueue_batch$")
+_QUEUE_STATUS_RE = re.compile(r"^/api/v1/queue/[^/]+/status$")
+
+
+def _queue_status_mutator(n: int):
+    """Пока идёт облачная генерация, очередь для UI не пустая: in_progress + n."""
+
+    def mutate(data: Any) -> None:
+        q = data.get("queue") if isinstance(data, dict) else None
+        if isinstance(q, dict):
+            q["in_progress"] = int(q.get("in_progress") or 0) + n
+            q["total"] = int(q.get("total") or 0) + n
+
+    return mutate
 
 
 async def _read_body(receive) -> bytes:
@@ -854,6 +981,16 @@ class ImageRouterCanvasMiddleware:
             await self.app(scope, receive, send)
             return
 
+        if method == "GET" and _QUEUE_STATUS_RE.match(path):
+            # во время облачной генерации отчёт очереди должен показывать
+            # «в работе», иначе UI стирает прогресс (см. _INFLIGHT выше)
+            n = _inflight_count(path.split("/")[4])
+            if n:
+                await self._proxy_json(scope, receive, send, _queue_status_mutator(n))
+                return
+            await self.app(scope, receive, send)
+            return
+
         if method == "POST" and _ENQUEUE_RE.match(path):
             body = await _read_body(receive)
             try:
@@ -889,6 +1026,10 @@ class ImageRouterCanvasMiddleware:
 
     async def _models_list(self, scope, receive, send) -> None:
         """Прокси ответа /api/v2/models с добавлением моделей ImageRouter."""
+        await self._proxy_json(scope, receive, send, _add_ir_models)
+
+    async def _proxy_json(self, scope, receive, send, mutator) -> None:
+        """Проксирует ответ приложения и правит JSON-тело через mutator(data)."""
         status_code, headers, chunks = 200, [], []
 
         async def send_wrapper(message):
@@ -904,12 +1045,7 @@ class ImageRouterCanvasMiddleware:
         raw = b"".join(chunks)
         try:
             data = json.loads(raw or b"{}")
-            models = data.get("models")
-            if isinstance(models, list):
-                existing = {m.get("key") for m in models if isinstance(m, dict)}
-                for fake in _ir_fake_configs():
-                    if fake["key"] not in existing:
-                        models.append(fake)
+            mutator(data)
             raw = json.dumps(data, ensure_ascii=False).encode("utf-8")
         except Exception:
             traceback.print_exc()
