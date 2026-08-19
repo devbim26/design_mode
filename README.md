@@ -4,11 +4,18 @@
 с ребрендингом под **DevBIM** («Dev» — чёрный, «BIM» — голубой `#38BDF8`,
 ссылки — на `devbim.com`).
 
+Корневая папка проекта (далее `<ROOT>`):
+`C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI`.
+Проект перенесён 19.08.2026 из `C:\InvokeAI` — см. «Перенос проекта».
+
 ## Структура
 
 | Путь | Назначение |
 |---|---|
 | `rebrand_devbim.py` | Скрипт ребрендинга: названия, ссылки, цвета, логотипы |
+| `setup_imagerouter.py` | Скрипт интеграции ImageRouter (см. «ImageRouter») |
+| `imagerouter/` | Исходники интеграции: прокси-роутер и страница вкладки |
+| `start_devbim.bat` | Запуск сервера (сам находит `data\`, пишет лог в консоль) |
 | `data/invokeai.yaml` | Конфиг сервера (host 127.0.0.1, port 9090, CPU, float32) |
 | `docs/` | Скриншоты интерфейса после ребрендинга |
 
@@ -18,7 +25,7 @@
 ## Установка (с нуля)
 
 ```powershell
-mkdir C:\InvokeAI; cd C:\InvokeAI
+cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI"
 python -m venv venv                     # Python 3.11
 .\venv\Scripts\python.exe -m pip install --upgrade pip
 .\venv\Scripts\python.exe -m pip install "invokeai[cpu]" --use-pep517
@@ -35,34 +42,63 @@ InvokeAI не поддерживается и отвергается валид�
 
 ## Запуск
 
-Стандартный способ:
+Проще всего — запускателем из корня проекта (двойной клик или из консоли):
 
 ```powershell
-cd C:\InvokeAI
-$env:INVOKEAI_ROOT="C:\InvokeAI\data"
-.\venv\Scripts\invokeai-web.exe
+.\start_devbim.bat
 ```
 
-Если `invokeai-web.exe` молча завершается с кодом 1 и пустым логом
-(на этой машине враппер-exe периодически блокируется защитой Windows) —
-запускайте напрямую через Python без буферизации, это надёжный вариант:
+Либо напрямую через Python (после переноса проекта
+`venv\Scripts\invokeai-web.exe` и другие exe-заглушки нерабочие,
+см. «Перенос проекта»):
 
 ```powershell
-cd C:\InvokeAI
-$env:INVOKEAI_ROOT="C:\InvokeAI\data"
+cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI"
+$env:INVOKEAI_ROOT="C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\data"
 .\venv\Scripts\python.exe -u -c "from invokeai.app.run_app import run_app; run_app()"
 ```
 
+Ключ `-u` отключает буферизацию stdout — без него логи «молчат» до
+завершения процесса.
+
+Если exe-заглушки восстановлены (см. «Перенос проекта»), сработает и
+стандартный вариант:
+
+```powershell
+cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI"
+$env:INVOKEAI_ROOT="C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\data"
+.\venv\Scripts\invokeai-web.exe
+```
+
 Веб-интерфейс и Swagger API: `http://127.0.0.1:9090` (`/docs`, `/api/v1/...`).
+
+## Перенос проекта
+
+19.08.2026 проект перенесён из `C:\InvokeAI` в текущую папку
+(`venv`, `data`, `.git`, `dist_original_backup` — всё целиком).
+Последствия и что с этим делать:
+
+- **Exe-заглушки в `venv\Scripts\` сломаны.** В Windows venv непереносим:
+  в каждом `*.exe` (invokeai-web.exe и т.п.) зашит абсолютный путь к
+  старому `python.exe`. Сам `venv\Scripts\python.exe` работает —
+  запускать напрямую (см. «Запуск»). Починить заглушки можно
+  переустановкой пакета `pip install --force-reinstall --no-deps invokeai==6.2.0`,
+  но она перезапишет ребрендинг — после неё обязательно повторить
+  `rebrand_devbim.py`.
+- **`rebrand_devbim.py` определяет пути относительно себя** и работает
+  из любого расположения проекта.
+- `INVOKEAI_ROOT` теперь указывает на новую папку `data` (см. «Запуск»).
 
 ## Ребрендинг
 
 Скрипт правит собранный фронтенд в `venv/Lib/site-packages/invokeai/frontend/web/dist`
 и два файла бэкенда. Идемпотентен: после обновления пакета (`pip install -U invokeai`)
-запустите его повторно:
+запустите его повторно. Пути определяются относительно самого скрипта,
+так что команда одна и та же из любого расположения проекта:
 
 ```powershell
-C:\InvokeAI\venv\Scripts\python.exe C:\InvokeAI\rebrand_devbim.py
+cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI"
+.\venv\Scripts\python.exe .\rebrand_devbim.py
 ```
 
 Что делает:
@@ -79,5 +115,86 @@ C:\InvokeAI\venv\Scripts\python.exe C:\InvokeAI\rebrand_devbim.py
 `venv/Lib/site-packages/invokeai/frontend/web/dist` и восстановить
 `*.devbim-bak` файлы бэкенда.
 
-Модели Stable Diffusion не устанавливались (облегчённый режим): для генерации
-добавьте модель через Model Manager или `/api/v1/models/install`.
+Локальные модели Stable Diffusion не устанавливались (облегчённый режим):
+для генерации используется ImageRouter (см. следующий раздел) — либо
+добавьте локальную модель стандартно: `/api/v1/models/install`.
+
+## ImageRouter
+
+Интеграция облачных моделей через [ImageRouter](https://docs.imagerouter.io/)
+(OpenAI-совместимый шлюз: FLUX, GPT-Image, Nano Banana, Qwen-Image и др.).
+Скриншоты: `docs/imagerouter-tab.png`, `docs/imagerouter-canvas.png`.
+
+Ключ хранится на сервере (`data/imagerouter.json`) и в браузер не отдаётся —
+все запросы идут через прокси бэкенда. Каталог моделей доступен без ключа;
+генерация требует ключа ([получить](https://imagerouter.io/api-keys)).
+
+### Где модели ImageRouter в интерфейсе
+
+- **Canvas / Generate (основной экран генерации)** — модели ImageRouter
+  появляются прямо в выборе модели рядом с локальными; генерация с ними
+  выполняется через API ImageRouter, результат сохраняется в галерею как
+  обычное изображение (штатные события `invocation_complete` и т.д.).
+  Промпт и размер берутся из графа; «число итераций» = количество картинок
+  (не более 10 за раз). Параметры steps/cfg/scheduler облачными моделями
+  игнорируются — у API есть только size/quality.
+- **Редактирование (inpaint/outpaint/img2img)** — если на канвасе есть
+  исходное изображение, запрос уходит в `/v1/openai/images/edits`:
+  передаются промпт, исходное изображение и маска (конвертируется в
+  OpenAI-семантику: редактируется прозрачная область). Требуется модель
+  с пометкой «редактирование» в описании (например `google/nano-banana:free`,
+  `qwen/qwen-image:free`, `openai/gpt-image-2`, `black-forest-labs/flux-kontext-*`);
+  для остальных вернётся понятная ошибка. Инструкционные модели правят
+  по промпту («удали человека»), маска — вспомогательная.
+- **Model Manager → «Добавить модели»** — вкладка **ImageRouter**:
+  ввод/проверка ключа, каталог моделей (поиск, фильтр «только бесплатные»,
+  сортировка, цены) и форма генерации с просмотром результата. Вкладки
+  установки локальных моделей (Launchpad, URL/путь, HuggingFace, скан
+  папки, стартовые модели) скрыты.
+
+Технически: модели помечаются ключами `imagerouter/<provider>/<model>` и
+показываются как main-модели (base sdxl — только чтобы граф собрался;
+локально ничего не исполняется). Запрос `enqueue_batch` с такой моделью
+перехватывает мидлварь `ImageRouterCanvasMiddleware`: вызывает
+`/v1/openai/images/generations`, сохраняет картинку через сервис галереи и
+отправляет клиенту события как при обычной генерации. Удаление такой
+«модели» из списка заблокировано (это каталог API, а не файлы).
+
+Главная кнопка генерации переименована из «DevBIM» в понятную
+**«Generate»** (левая панель, рядом со счётчиком итераций; также
+Ctrl+Enter и «Add to Queue» на панели канваса). Подсказки интерфейса,
+упоминавшие нажатие кнопки, обновлены.
+
+API бэкенда (Swagger: `/docs`): `GET /api/v1/imagerouter/status`,
+`PUT|DELETE /api/v1/imagerouter/key`, `GET /api/v1/imagerouter/credits`,
+`GET /api/v1/imagerouter/models`, `POST /api/v1/imagerouter/generate`.
+
+### Применение и откат
+
+```powershell
+cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI"
+.\venv\Scripts\python.exe .\setup_imagerouter.py   # применить (идемпотентно)
+```
+
+Скрипт копирует `imagerouter/imagerouter_router.py` в
+`venv/Lib/site-packages/invokeai/app/api/routers/`, страницу в `dist/`,
+патчит `api_app.py` (подключение роутера + мидлварь) и собранный JS
+(вкладки). Бэкапы — `*.imagerouter-bak` рядом с патчеными файлами. После
+переустановки пакета `invokeai` запустить повторно (как и `rebrand_devbim.py`).
+Откат: восстановить `*.imagerouter-bak`, удалить `routers/imagerouter.py`
+и `dist/imagerouter.html`.
+
+### Диагностика
+
+- При каждом перехвате генерации граф сохраняется в
+  `data/_ir_last_graph.json` — по нему видно, что реально ушло с канваса
+  (модель, промпт, картинка, маска).
+- «API-ключ не задан» — ввести ключ на вкладке ImageRouter (хранится в
+  `data/imagerouter.json`; при удалении файла ключ запрашивается заново).
+- «Модель не поддерживает редактирование» — выбрана text-to-image модель,
+  для правки фото нужна модель с пометкой «редактирование».
+- «Не удалось загрузить исходное изображение» — канвас ссылается на
+  удалённую картинку (например, после чистки галереи); заново положите
+  изображение на канвас.
+- Порт 9090 занят другим процессом — проверьте, что не запущено два
+  сервера (`netstat -ano | findstr :9090`), лишний завершите.

@@ -4,10 +4,11 @@
 
 Правит собранный фронтенд (venv/Lib/site-packages/invokeai/frontend/web/dist)
 и пару строк бэкенда. Идемпотентен: повторный запуск ничего не меняет.
-Первый запуск создаёт бэкап: C:/InvokeAI/dist_original_backup
+Первый запуск создаёт бэкап: dist_original_backup/ рядом со скриптом.
 Восстановление: скопировать содержимое бэкапа обратно в dist.
 
-Запуск: C:/InvokeAI/venv/Scripts/python.exe C:/InvokeAI/rebrand_devbim.py
+Пути определяются относительно расположения скрипта (проект переносим).
+Запуск: venv\Scripts\python.exe rebrand_devbim.py
 """
 import json
 import re
@@ -15,9 +16,10 @@ import shutil
 import sys
 from pathlib import Path
 
-VENV = Path(r"C:\InvokeAI\venv")
+BASE = Path(__file__).resolve().parent
+VENV = BASE / "venv"
 DIST = VENV / "Lib" / "site-packages" / "invokeai" / "frontend" / "web" / "dist"
-BACKUP = Path(r"C:\InvokeAI\dist_original_backup")
+BACKUP = BASE / "dist_original_backup"
 BACKEND_FILES = [
     VENV / "Lib" / "site-packages" / "invokeai" / "app" / "api_app.py",
     VENV / "Lib" / "site-packages" / "invokeai" / "backend" / "util" / "logging.py",

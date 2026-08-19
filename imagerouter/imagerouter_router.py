@@ -1,0 +1,696 @@
+# -*- coding: utf-8 -*-
+"""
+Интеграция ImageRouter (https://docs.imagerouter.io/) в DevBIM / InvokeAI.
+
+Часть 1 — прокси-роутер (монтируется под /api):
+    GET  /api/v1/imagerouter/status     — установлен ли ключ
+    PUT  /api/v1/imagerouter/key        — сохранить и проверить ключ
+    DELETE /api/v1/imagerouter/key      — удалить ключ
+    GET  /api/v1/imagerouter/credits    — баланс (прокси /v1/credits)
+    GET  /api/v1/imagerouter/models     — список моделей (прокси /v3/models)
+    POST /api/v1/imagerouter/generate   — генерация (прокси /v1/openai/images/generations)
+
+Часть 2 — ImageRouterCanvasMiddleware: модели ImageRouter в основном интерфейсе:
+    GET    /api/v2/models/               — к списку добавляются модели ImageRouter
+                                            (появляются в выборе модели на Canvas)
+    POST   /api/v1/queue/{q}/enqueue_batch — если в графе выбрана модель ImageRouter,
+                                            генерация выполняется через API, картинка
+                                            сохраняется в галерею, клиенту отправляются
+                                            штатные события batch_enqueued /
+                                            invocation_complete / queue_item_status_changed
+    GET/DELETE /api/v2/models/i/{key}    — чтение/запрет удаления для моделей ImageRouter
+
+Ключ хранится на сервере (<INVOKEAI_ROOT>/imagerouter.json) и в браузер не отдаётся.
+Разворачивается в venv скриптом setup_imagerouter.py.
+"""
+from __future__ import annotations
+
+import asyncio
+import base64
+import binascii
+import io
+import json
+import re
+import time
+import traceback
+import uuid
+from pathlib import Path
+from typing import Any, Optional
+from urllib.parse import unquote
+
+import requests
+from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel, Field
+
+from invokeai.app.services.config.config_default import get_config
+
+imagerouter_router = APIRouter(prefix="/v1/imagerouter", tags=["imagerouter"])
+
+IR_BASE = "https://api.imagerouter.io"
+AUTH_TEST_URL = f"{IR_BASE}/v1/auth/test"
+CREDITS_URL = f"{IR_BASE}/v1/credits"
+MODELS_URL = f"{IR_BASE}/v3/models"
+GENERATIONS_URL = f"{IR_BASE}/v1/openai/images/generations"
+EDITS_URL = f"{IR_BASE}/v1/openai/images/edits"
+
+TIMEOUT_SHORT = 30
+TIMEOUT_GENERATE = 300
+
+# Префикс ключей моделей ImageRouter в интерфейсе InvokeAI
+IR_KEY_PREFIX = "imagerouter/"
+# Модели представляются как main/diffusers/base=sdxl — единственная база, для которой
+# фронтенд строит граф без обязательных субмоделей (T5/CLIP и т.п.); сам граф
+# сервером не исполняется, а перехватывается мидлварью.
+FAKE_BASE = "sdxl"
+IR_MODELS_CACHE_TTL = 600.0
+MAX_RUNS = 10
+
+
+# --- Хранение ключа: <INVOKEAI_ROOT>/imagerouter.json ---
+
+def _key_path() -> Path:
+    return Path(get_config().root_path) / "imagerouter.json"
+
+
+def _load_key() -> Optional[str]:
+    p = _key_path()
+    if not p.exists():
+        return None
+    try:
+        return json.loads(p.read_text(encoding="utf-8")).get("api_key") or None
+    except Exception:
+        return None
+
+
+def _auth_headers() -> dict[str, str]:
+    key = _load_key()
+    if not key:
+        raise HTTPException(status_code=401, detail="API-ключ ImageRouter не задан")
+    return {"Authorization": f"Bearer {key}"}
+
+
+def _upstream_json(resp: requests.Response) -> Any:
+    """Ответ апстрима -> dict; ошибки -> HTTPException с сообщением ImageRouter."""
+    try:
+        data = resp.json()
+    except ValueError:
+        data = None
+    if resp.status_code >= 400:
+        msg = None
+        if isinstance(data, dict):
+            err = data.get("error")
+            if isinstance(err, dict):
+                msg = err.get("message")
+            elif isinstance(err, str):
+                msg = err
+            msg = msg or data.get("detail")
+        raise HTTPException(status_code=resp.status_code, detail=msg or f"ImageRouter: HTTP {resp.status_code}")
+    return data
+
+
+class KeyBody(BaseModel):
+    api_key: str = Field(min_length=8)
+
+
+class GenerateBody(BaseModel):
+    model: str = Field(min_length=1)
+    prompt: str = Field(min_length=1, max_length=20000)
+    size: Optional[str] = None
+    quality: Optional[str] = None
+
+
+@imagerouter_router.get("/status")
+def get_status() -> dict:
+    key = _load_key()
+    return {
+        "has_key": key is not None,
+        "hint": f"...{key[-4:]}" if key else None,
+    }
+
+
+@imagerouter_router.put("/key")
+def put_key(body: KeyBody) -> dict:
+    # сначала проверяем ключ на стороне ImageRouter, потом сохраняем
+    resp = requests.post(AUTH_TEST_URL, headers={"Authorization": f"Bearer {body.api_key.strip()}"}, timeout=TIMEOUT_SHORT)
+    if resp.status_code != 200:
+        _upstream_json(resp)  # -> HTTPException с сообщением
+    _key_path().write_text(json.dumps({"api_key": body.api_key.strip()}), encoding="utf-8")
+    return {"status": "valid"}
+
+
+@imagerouter_router.delete("/key")
+def delete_key() -> dict:
+    p = _key_path()
+    if p.exists():
+        p.unlink()
+    return {"status": "deleted"}
+
+
+@imagerouter_router.get("/credits")
+def get_credits() -> Any:
+    resp = requests.get(CREDITS_URL, headers=_auth_headers(), timeout=TIMEOUT_SHORT)
+    return _upstream_json(resp)
+
+
+@imagerouter_router.get("/models")
+def list_models(
+    search: Optional[str] = None,
+    free: Optional[bool] = None,
+    sort: str = "name",
+    limit: int = 500,
+) -> Any:
+    params: dict[str, Any] = {"output_modalities": "image", "sort": sort, "limit": max(1, min(limit, 1000))}
+    if search:
+        params["name"] = search
+    if free is not None:
+        params["free"] = "true" if free else "false"
+    headers = {"Authorization": f"Bearer {_load_key()}"} if _load_key() else {}
+    resp = requests.get(MODELS_URL, params=params, headers=headers, timeout=TIMEOUT_SHORT)
+    return _upstream_json(resp)
+
+
+@imagerouter_router.post("/generate")
+def generate(body: GenerateBody) -> Any:
+    payload: dict[str, Any] = {"model": body.model, "prompt": body.prompt}
+    if body.size:
+        payload["size"] = body.size
+    if body.quality:
+        payload["quality"] = body.quality
+    resp = requests.post(GENERATIONS_URL, headers=_auth_headers(), json=payload, timeout=TIMEOUT_GENERATE)
+    return _upstream_json(resp)
+
+
+# ============================================================================
+# Интеграция в основной интерфейс (Canvas): модели ImageRouter в выборе модели
+# ============================================================================
+
+_ir_models_cache: dict[str, Any] = {"ts": 0.0, "items": []}
+
+
+def _fetch_ir_models(force: bool = False) -> list[dict]:
+    """Каталог ImageRouter (публичный), кэш на 10 минут."""
+    now = time.time()
+    if not force and _ir_models_cache["items"] and now - _ir_models_cache["ts"] < IR_MODELS_CACHE_TTL:
+        return _ir_models_cache["items"]
+    try:
+        resp = requests.get(
+            MODELS_URL,
+            params={"output_modalities": "image", "limit": 500, "sort": "name"},
+            timeout=TIMEOUT_SHORT,
+        )
+        data = resp.json()
+        if resp.status_code == 200 and isinstance(data, list):
+            _ir_models_cache["ts"] = now
+            _ir_models_cache["items"] = data
+    except Exception:
+        traceback.print_exc()
+    return _ir_models_cache["items"]
+
+
+def _ir_model_by_id(mid: str) -> Optional[dict]:
+    for m in _fetch_ir_models():
+        if m.get("id") == mid:
+            return m
+    return None
+
+
+def _avg_price(m: dict) -> Optional[float]:
+    p = m.get("pricing") or {}
+    v = p.get("average", p.get("min"))
+    return v if isinstance(v, (int, float)) else None
+
+
+def _ir_fake_config(m: dict) -> dict:
+    import hashlib
+
+    mid = m.get("id", "")
+    price = _avg_price(m)
+    desc = "Облачная модель ImageRouter"
+    if price is not None:
+        desc += f" · ~${price}/img" if price > 0 else " · бесплатно"
+    inputs = ((m.get("architecture") or {}).get("input_modalities")) or []
+    if "image" in inputs:
+        desc += " · редактирование"
+    return {
+        "key": IR_KEY_PREFIX + mid,
+        # hash обязателен (zod: min(1)) — стабильный псевдохеш от id
+        "hash": hashlib.md5(mid.encode("utf-8")).hexdigest(),
+        "path": f"imagerouter://{mid}",
+        "file_size": 0,
+        "name": mid.split("/")[-1],
+        "type": "main",
+        "format": "diffusers",
+        "base": FAKE_BASE,
+        "source": "https://imagerouter.io",
+        "source_type": "url",
+        "description": desc,
+        "variant": "normal",
+        "cover_image": None,
+    }
+
+
+def _ir_fake_configs() -> list[dict]:
+    return [_ir_fake_config(m) for m in _fetch_ir_models()]
+
+
+def _pick_size(mid: str, width: int, height: int) -> Optional[str]:
+    """Размер для API: точный, если разрешён моделью; иначе auto (None)."""
+    m = _ir_model_by_id(mid) or {}
+    params = (m.get("parameters") or {}).get("size") or []
+    allowed = [s for s in params if isinstance(s, str) and s not in ("auto", "custom")]
+    candidate = f"{int(width)}x{int(height)}"
+    if not allowed:
+        return candidate  # модель принимает произвольные размеры
+    return candidate if candidate in allowed else None
+
+
+class _IRClientError(Exception):
+    def __init__(self, message: str, status: int = 400):
+        super().__init__(message)
+        self.status = status
+
+
+def _supports_image_input(mid: str) -> bool:
+    m = _ir_model_by_id(mid) or {}
+    inputs = ((m.get("architecture") or {}).get("input_modalities")) or []
+    return "image" in inputs
+
+
+def _extract_ir_info(batch: dict) -> dict:
+    """Из графа Canvas достаём модель, промпт, размер, доску и исходное
+    изображение/маску (для режимов inpaint/outpaint/img2img)."""
+    nodes = (batch.get("graph") or {}).get("nodes") or {}
+    info: dict[str, Any] = {
+        "model_key": None,
+        "positive": "",
+        "negative": "",
+        "width": 0,
+        "height": 0,
+        "board_id": None,
+        "mode": "txt2img",
+        "init_image": None,
+        "mask": None,
+    }
+    for node in nodes.values():
+        if not isinstance(node, dict):
+            continue
+        ntype = node.get("type")
+        if ntype == "core_metadata":
+            info["positive"] = node.get("positive_prompt") or info["positive"]
+            info["negative"] = node.get("negative_prompt") or info["negative"]
+            info["width"] = node.get("width") or info["width"]
+            info["height"] = node.get("height") or info["height"]
+            # generation_mode приходит с префиксом базы (sdxl_inpaint,
+            # flux_img2img, cogview4_outpaint, ...) — убираем его
+            gm = node.get("generation_mode")
+            info["mode"] = gm.split("_")[-1] if gm else info["mode"]
+        m = node.get("model")
+        if isinstance(m, dict) and str(m.get("key", "")).startswith(IR_KEY_PREFIX):
+            info["model_key"] = str(m["key"])
+        if ntype == "save_image":
+            board = node.get("board")
+            if isinstance(board, dict) and board.get("board_id"):
+                info["board_id"] = str(board["board_id"])
+        # исходное изображение: create_gradient_mask.image / i2l.image / любой ImageField
+        for fname in ("image", "mask"):
+            v = node.get(fname)
+            if isinstance(v, dict) and isinstance(v.get("image_name"), str):
+                if fname == "image" and not info["init_image"]:
+                    info["init_image"] = v["image_name"]
+                elif fname == "mask" and not info["mask"]:
+                    info["mask"] = v["image_name"]
+    # Промпт может лежать не в core_metadata, а в узлах prompt/compel
+    if not info["positive"] or not info["negative"]:
+        for node in nodes.values():
+            if not isinstance(node, dict):
+                continue
+            nid = str(node.get("id", ""))
+            is_negative = "negative" in nid.lower()
+            for fname, target in (("positive", "positive"), ("prompt", "positive"), ("negative", "negative")):
+                val = node.get(fname)
+                if isinstance(val, str) and val.strip():
+                    if is_negative and target == "negative":
+                        info["negative"] = info["negative"] or val
+                    elif not is_negative and target == "positive" and not info["positive"]:
+                        info["positive"] = val
+    # ...или в batch.data (значения полей узлов: node_path/field_name/items)
+    for data_group in batch.get("data") or []:
+        for item in data_group or []:
+            try:
+                node_path = str(item.get("node_path", ""))
+                values = item.get("items") or []
+                value = values[0] if values else None
+            except AttributeError:
+                continue
+            if not isinstance(value, str) or not value.strip():
+                continue
+            if "negative" in node_path.lower():
+                info["negative"] = info["negative"] or value
+            elif "positive" in node_path.lower():
+                info["positive"] = value
+    info["width"] = int(info["width"] or 1024)
+    info["height"] = int(info["height"] or 1024)
+    return info
+
+
+def _item_to_pil(item: dict) -> Any:
+    """Элемент ответа API (url или b64_json) -> PIL.Image (RGB) или None."""
+    from PIL import Image
+
+    raw: Optional[bytes] = None
+    url = item.get("url")
+    if url:
+        r = requests.get(url, timeout=TIMEOUT_GENERATE)
+        if r.status_code == 200:
+            raw = r.content
+    elif item.get("b64_json"):
+        try:
+            raw = base64.b64decode(item["b64_json"])
+        except (binascii.Error, ValueError):
+            raw = None
+    if not raw:
+        return None
+    img = Image.open(io.BytesIO(raw))
+    return img.convert("RGB")
+
+
+def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
+    """Генерация через ImageRouter вместо локального исполнения графа."""
+    from PIL import Image
+
+    from invokeai.app.api.dependencies import ApiDependencies
+    from invokeai.app.invocations.fields import ImageField
+    from invokeai.app.invocations.image import SaveImageInvocation
+    from invokeai.app.invocations.primitives import ImageOutput
+    from invokeai.app.services.events.events_common import (
+        BatchEnqueuedEvent,
+        InvocationCompleteEvent,
+        QueueItemStatusChangedEvent,
+    )
+    from invokeai.app.services.image_records.image_records_common import ImageCategory, ResourceOrigin
+    from invokeai.app.services.session_queue.session_queue_common import BatchStatus
+
+    batch = payload.get("batch") or {}
+    graph = batch.get("graph") or {}
+    info = _extract_ir_info(batch)
+    model_key = info["model_key"]
+    if not model_key:
+        raise _IRClientError("ImageRouter: в графе не найдена модель ImageRouter")
+    mid = model_key[len(IR_KEY_PREFIX):]
+    key = _load_key()
+    if not key:
+        raise _IRClientError(
+            "API-ключ ImageRouter не задан. Откройте Model Manager → «Добавить модели» → "
+            "ImageRouter и введите ключ (imagerouter.io/api-keys).",
+            401,
+        )
+
+    runs = max(1, min(int(batch.get("runs") or 1), MAX_RUNS))
+    batch_id = str(batch.get("batch_id") or uuid.uuid4())
+    session_id = str(graph.get("id") or batch_id)
+    origin = batch.get("origin") or "canvas"
+    destination = batch.get("destination") or "canvas"
+
+    services = ApiDependencies.invoker.services
+    events = services.events
+
+    events.dispatch(
+        BatchEnqueuedEvent(
+            queue_id=queue_id, batch_id=batch_id, enqueued=runs, requested=runs, priority=0, origin=origin
+        )
+    )
+
+    # --- режим редактирования: в графе есть исходное изображение ---
+    init_pil = None
+    mask_pil = None
+    is_edit = info["mode"] in ("inpaint", "outpaint", "img2img") and info["init_image"]
+    if is_edit:
+        if not _supports_image_input(mid):
+            raise _IRClientError(
+                f"Модель «{mid}» не поддерживает редактирование (не принимает изображение на вход). "
+                "Выберите в списке моделей модель с пометкой «редактирование» — например "
+                "google/nano-banana:free, qwen-image:free, openai/gpt-image-2, "
+                "black-forest-labs/flux-kontext-dev.",
+                400,
+            )
+        try:
+            init_pil = services.images.get_pil_image(info["init_image"]).convert("RGB")
+            if info["mask"]:
+                mask_pil = services.images.get_pil_image(info["mask"])
+        except Exception as e:  # noqa: BLE001
+            raise _IRClientError(f"ImageRouter: не удалось загрузить исходное изображение ({e})", 500) from e
+        size = _pick_size(mid, init_pil.width, init_pil.height) if init_pil else None
+    else:
+        size = _pick_size(mid, info["width"], info["height"])
+
+    saved: list[Any] = []
+    for _ in range(runs):
+        if is_edit and init_pil is not None:
+            buf = io.BytesIO()
+            init_pil.save(buf, format="PNG")
+            data: dict[str, Any] = {"model": mid, "prompt": info["positive"]}
+            if size:
+                data["size"] = size
+            files: dict[str, Any] = {"image": ("image.png", buf.getvalue(), "image/png")}
+            if mask_pil is not None:
+                # OpenAI-семантика маски: редактируется прозрачная (alpha=0) область;
+                # маска канваса — зона правки непрозрачна/белая
+                rgba = mask_pil.convert("RGBA")
+                alpha = rgba.getchannel("A")
+                if alpha.getextrema()[0] >= 255:
+                    alpha = mask_pil.convert("L")  # прозрачности нет — носитель яркость
+                inverted = alpha.point(lambda v: 255 - v)
+                mask_out = Image.new("RGB", alpha.size, (0, 0, 0)).convert("RGBA")
+                mask_out.putalpha(inverted)
+                mbuf = io.BytesIO()
+                mask_out.save(mbuf, format="PNG")
+                files["mask"] = ("mask.png", mbuf.getvalue(), "image/png")
+            resp = requests.post(
+                EDITS_URL,
+                headers={"Authorization": f"Bearer {key}"},
+                data=data,
+                files=files,
+                timeout=TIMEOUT_GENERATE,
+            )
+        else:
+            body: dict[str, Any] = {"model": mid, "prompt": info["positive"]}
+            if size:
+                body["size"] = size
+            resp = requests.post(
+                GENERATIONS_URL, headers={"Authorization": f"Bearer {key}"}, json=body, timeout=TIMEOUT_GENERATE
+            )
+        try:
+            data_out = _upstream_json(resp)
+        except HTTPException as e:
+            raise _IRClientError(f"ImageRouter: {e.detail}", e.status_code) from e
+        for item in data_out.get("data", []) if isinstance(data_out, dict) else []:
+            pil = _item_to_pil(item)
+            if pil is None:
+                continue
+            metadata = json.dumps(
+                {
+                    "generation_mode": "imagerouter-edit" if is_edit else "imagerouter",
+                    "imagerouter_model": mid,
+                    "positive_prompt": info["positive"],
+                    "negative_prompt": info["negative"],
+                    "width": info["width"],
+                    "height": info["height"],
+                    "source_image": info["init_image"],
+                },
+                ensure_ascii=False,
+            )
+            dto = services.images.create(
+                image=pil,
+                image_origin=ResourceOrigin.INTERNAL,
+                image_category=ImageCategory.GENERAL,
+                board_id=info["board_id"],
+                metadata=metadata,
+            )
+            saved.append(dto)
+            events.dispatch(
+                InvocationCompleteEvent(
+                    queue_id=queue_id,
+                    item_id=0,
+                    batch_id=batch_id,
+                    origin=origin,
+                    destination=destination,
+                    session_id=session_id,
+                    invocation=SaveImageInvocation(id="imagerouter_save", image=ImageField(image_name=dto.image_name)),
+                    invocation_source_id="imagerouter_save",
+                    result=ImageOutput.build(dto),
+                )
+            )
+    if not saved:
+        raise _IRClientError("ImageRouter: ответ не содержит изображений", 502)
+
+    events.dispatch(
+        QueueItemStatusChangedEvent(
+            queue_id=queue_id,
+            item_id=0,
+            batch_id=batch_id,
+            origin=origin,
+            destination=destination,
+            status="completed",
+            batch_status=BatchStatus(
+                queue_id=queue_id,
+                batch_id=batch_id,
+                origin=origin,
+                destination=destination,
+                pending=0,
+                in_progress=0,
+                completed=len(saved),
+                failed=0,
+                canceled=0,
+                total=len(saved),
+            ),
+            queue_status=services.session_queue.get_queue_status(queue_id=queue_id),
+            session_id=session_id,
+        )
+    )
+
+    return {
+        "queue_id": queue_id,
+        "enqueued": runs,
+        "requested": runs,
+        "batch": batch,
+        "priority": 0,
+        "item_ids": [0] * len(saved),
+    }
+
+
+# --- ASGI-мидлварь ---
+
+_ENQUEUE_RE = re.compile(r"^/api/v1/queue/[^/]+/enqueue_batch$")
+
+
+async def _read_body(receive) -> bytes:
+    chunks = []
+    while True:
+        message = await receive()
+        if message["type"] != "http.request":
+            break
+        chunks.append(message.get("body", b""))
+        if not message.get("more_body", False):
+            break
+    return b"".join(chunks)
+
+
+def _replay_receive(body: bytes):
+    """Новый receive, отдающий сохранённое тело запроса нижележащему приложению."""
+    sent = False
+
+    async def receive():
+        nonlocal sent
+        if sent:
+            await asyncio.sleep(3600)
+        sent = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return receive
+
+
+class ImageRouterCanvasMiddleware:
+    """Добавляет модели ImageRouter в /api/v2/models и перехватывает их генерацию."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        path = scope.get("path", "")
+        method = scope.get("method", "")
+
+        if method == "GET" and path.rstrip("/") == "/api/v2/models":
+            await self._models_list(scope, receive, send)
+            return
+
+        if path.startswith("/api/v2/models/i/") and method in ("GET", "DELETE"):
+            key = unquote(path[len("/api/v2/models/i/"):].rstrip("/"))
+            if key.startswith(IR_KEY_PREFIX):
+                if method == "GET":
+                    m = _ir_model_by_id(key[len(IR_KEY_PREFIX):])
+                    if m:
+                        await self._send_json(send, _ir_fake_config(m))
+                        return
+                else:  # DELETE
+                    await self._send_json(
+                        send,
+                        {"detail": "Модели ImageRouter предоставляются через API и не удаляются локально."},
+                        status=400,
+                    )
+                    return
+            await self.app(scope, receive, send)
+            return
+
+        if method == "POST" and _ENQUEUE_RE.match(path):
+            body = await _read_body(receive)
+            try:
+                payload = json.loads(body) if body else {}
+            except ValueError:
+                payload = None
+            batch = (payload or {}).get("batch") or {}
+            if _extract_ir_info(batch)["model_key"]:
+                # /api/v1/queue/{queue_id}/enqueue_batch -> queue_id в пятом сегменте
+                queue_id = path.split("/")[4]
+                # диагностический дамп последнего перехваченного графа
+                try:
+                    Path(get_config().root_path, "_ir_last_graph.json").write_text(
+                        json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8"
+                    )
+                except Exception:
+                    pass
+                try:
+                    result = await asyncio.to_thread(_handle_canvas_generation, queue_id, payload)
+                except _IRClientError as e:
+                    await self._send_json(send, {"detail": str(e)}, status=e.status)
+                    return
+                except Exception as e:  # noqa: BLE001
+                    traceback.print_exc()
+                    await self._send_json(send, {"detail": f"ImageRouter: {e}"}, status=500)
+                    return
+                await self._send_json(send, result)
+                return
+            await self.app(scope, _replay_receive(body), send)
+            return
+
+        await self.app(scope, receive, send)
+
+    async def _models_list(self, scope, receive, send) -> None:
+        """Прокси ответа /api/v2/models с добавлением моделей ImageRouter."""
+        status_code, headers, chunks = 200, [], []
+
+        async def send_wrapper(message):
+            if message["type"] == "http.response.start":
+                nonlocal status_code, headers
+                status_code = message["status"]
+                headers = list(message.get("headers", []))
+            elif message["type"] == "http.response.body":
+                chunks.append(message.get("body", b""))
+
+        await self.app(scope, receive, send_wrapper)
+
+        raw = b"".join(chunks)
+        try:
+            data = json.loads(raw or b"{}")
+            models = data.get("models")
+            if isinstance(models, list):
+                existing = {m.get("key") for m in models if isinstance(m, dict)}
+                for fake in _ir_fake_configs():
+                    if fake["key"] not in existing:
+                        models.append(fake)
+            raw = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        except Exception:
+            traceback.print_exc()
+        headers = [(k, v) for k, v in headers if k.lower() != b"content-length"]
+        headers.append((b"content-length", str(len(raw)).encode("latin-1")))
+        await send({"type": "http.response.start", "status": status_code, "headers": headers})
+        await send({"type": "http.response.body", "body": raw})
+
+    @staticmethod
+    async def _send_json(send, data: Any, status: int = 200) -> None:
+        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        headers = [(b"content-type", b"application/json"), (b"content-length", str(len(body)).encode("latin-1"))]
+        await send({"type": "http.response.start", "status": status, "headers": headers})
+        await send({"type": "http.response.body", "body": body})

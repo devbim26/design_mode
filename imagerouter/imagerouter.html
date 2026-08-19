@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ImageRouter — модели через API</title>
+<style>
+  :root{
+    --bg:#0c0d0f; --panel:#16181b; --panel2:#1d2024; --border:#2b2f35;
+    --text:#e8e9ea; --muted:#9aa0a6; --accent:#38BDF8; --accent-dim:#1a5f80;
+    --ok:#34d399; --err:#f87171; --free:#34d399;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font:13px/1.45 "Inter","Segoe UI",system-ui,Arial,sans-serif;
+    display:flex; flex-direction:column; min-height:0;
+  }
+  header{
+    display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+    padding:10px 14px; border-bottom:1px solid var(--border); background:var(--panel);
+  }
+  header h1{font-size:15px; margin:0; font-weight:600}
+  header h1 .bim{color:var(--accent)}
+  .spacer{flex:1}
+  .chip{
+    font-size:11px; padding:3px 9px; border:1px solid var(--border); border-radius:999px;
+    color:var(--muted); white-space:nowrap;
+  }
+  .chip.ok{color:var(--ok); border-color:var(--ok)}
+  .chip.err{color:var(--err); border-color:var(--err)}
+  .chip.link{color:var(--accent); cursor:pointer; text-decoration:none}
+  main{flex:1; display:flex; flex-direction:column; min-height:0; padding:12px 14px; gap:10px; overflow:auto}
+  section{background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:10px 12px}
+  h2{font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 8px}
+  input[type=text],input[type=password],textarea,select{
+    background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px;
+    padding:6px 8px; font:inherit; outline:none;
+  }
+  input:focus,textarea:focus,select:focus{border-color:var(--accent)}
+  textarea{width:100%; resize:vertical; min-height:64px}
+  button{
+    background:var(--accent); color:#04222f; border:none; border-radius:6px; padding:6px 14px;
+    font:inherit; font-weight:600; cursor:pointer;
+  }
+  button:hover{filter:brightness(1.1)}
+  button:disabled{opacity:.45; cursor:default}
+  button.ghost{background:transparent; color:var(--muted); border:1px solid var(--border); font-weight:400}
+  button.ghost:hover{color:var(--text)}
+  .row{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
+  .keybox{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
+  .keybox input{flex:1; min-width:220px}
+  .models-toolbar{display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px}
+  .models-toolbar input[type=text]{flex:1; min-width:160px}
+  .count{color:var(--muted); font-size:11px; white-space:nowrap}
+  #models{max-height:280px; overflow:auto; display:flex; flex-direction:column; gap:4px}
+  .model{
+    display:flex; align-items:center; gap:10px; padding:7px 10px; border:1px solid var(--border);
+    border-radius:6px; cursor:pointer; background:var(--panel2);
+  }
+  .model:hover{border-color:var(--accent-dim)}
+  .model.sel{border-color:var(--accent); background:#12232d}
+  .model .id{flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  .model .prov{color:var(--accent); font-size:11px}
+  .model .id b{color:var(--text); font-weight:600}
+  .price{color:var(--muted); font-size:11px; white-space:nowrap}
+  .price.free{color:var(--free)}
+  .badge-free{font-size:10px; color:var(--free); border:1px solid var(--free); border-radius:4px; padding:0 5px}
+  #gen-model{color:var(--accent); font-weight:600}
+  .gen-grid{display:flex; gap:8px; flex-wrap:wrap; margin-top:10px}
+  .gen-grid img{max-width:100%; height:auto; border-radius:6px; border:1px solid var(--border); cursor:pointer}
+  .msg{margin-top:8px; font-size:12px}
+  .msg.err{color:var(--err)}
+  .msg.ok{color:var(--ok)}
+  .spin{
+    width:14px; height:14px; border:2px solid var(--accent-dim); border-top-color:var(--accent);
+    border-radius:50%; display:inline-block; vertical-align:-2px; margin-right:6px;
+    animation:sp 0.8s linear infinite;
+  }
+  @keyframes sp{to{transform:rotate(360deg)}}
+  label.chk{display:flex; align-items:center; gap:5px; color:var(--muted); font-size:12px; white-space:nowrap; cursor:pointer}
+  .hint{color:var(--muted); font-size:11px}
+  .hidden{display:none !important}
+  #keysec .hint a{color:var(--accent)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Image<span class="bim">Router</span></h1>
+  <span class="chip" id="key-state">ключ не задан</span>
+  <span class="chip" id="balance" title="Баланс аккаунта ImageRouter">—</span>
+  <span class="spacer"></span>
+  <a class="chip link" href="https://imagerouter.io/api-keys" target="_blank" rel="noreferrer">получить API-ключ</a>
+  <a class="chip link" href="https://docs.imagerouter.io/" target="_blank" rel="noreferrer">документация</a>
+</header>
+<main>
+
+  <section id="keysec">
+    <h2>Подключение</h2>
+    <div class="keybox">
+      <input type="password" id="key-input" placeholder="API-ключ ImageRouter (sk-...)" autocomplete="off">
+      <button id="key-save">Сохранить</button>
+      <button id="key-remove" class="ghost">Удалить</button>
+    </div>
+    <div class="msg" id="key-msg"></div>
+    <div class="hint">Ключ хранится на сервере DevBIM (data/imagerouter.json) и не передаётся в браузер. Получить ключ: imagerouter.io/api-keys</div>
+  </section>
+
+  <section>
+    <h2>Каталог моделей</h2>
+    <div class="models-toolbar">
+      <input type="text" id="search" placeholder="Поиск: название или провайдер…">
+      <label class="chk"><input type="checkbox" id="free-only"> только бесплатные</label>
+      <select id="sort">
+        <option value="name">по названию</option>
+        <option value="provider">по провайдеру</option>
+        <option value="price">по цене</option>
+      </select>
+      <button id="refresh" class="ghost" title="Обновить список">↻</button>
+      <span class="count" id="count"></span>
+    </div>
+    <div id="models"><div class="hint">Загрузка…</div></div>
+    <div class="msg" id="models-msg"></div>
+  </section>
+
+  <section>
+    <h2>Генерация</h2>
+    <div class="row" style="margin-bottom:8px">
+      <span>Модель:</span> <span id="gen-model">не выбрана</span>
+    </div>
+    <textarea id="prompt" placeholder="Опишите изображение…"></textarea>
+    <div class="row" style="margin-top:8px">
+      <label>Размер:
+        <select id="size"><option value="auto">auto</option></select>
+      </label>
+      <label>Качество:
+        <select id="quality">
+          <option value="auto">auto</option>
+          <option value="low">low</option>
+          <option value="medium">medium</option>
+          <option value="high">high</option>
+        </select>
+      </label>
+      <span class="spacer"></span>
+      <button id="gen" disabled>Сгенерировать</button>
+    </div>
+    <div class="gen-grid" id="results"></div>
+    <div class="msg" id="gen-msg"></div>
+  </section>
+
+</main>
+<script>
+"use strict";
+var API = "/api/v1/imagerouter";
+var state = { models: [], selected: null, hasKey: false };
+
+function $(id){ return document.getElementById(id); }
+function setMsg(id, text, cls){
+  var el = $(id); el.textContent = text || ""; el.className = "msg" + (cls ? " " + cls : "");
+}
+
+function api(path, opts){
+  return fetch(API + path, opts).then(function(r){
+    return r.json().catch(function(){ return {}; }).then(function(data){
+      if (!r.ok) throw new Error((data && data.detail) || ("HTTP " + r.status));
+      return data;
+    });
+  });
+}
+
+/* ---------- ключ ---------- */
+
+function refreshStatus(){
+  return api("/status").then(function(st){
+    state.hasKey = st.has_key;
+    var el = $("key-state");
+    el.textContent = st.has_key ? ("ключ: " + st.hint) : "ключ не задан";
+    el.className = "chip " + (st.hasKey ? "ok" : "err");
+    $("key-remove").classList.toggle("hidden", !st.hasKey);
+    if (st.has_key) loadBalance(); else $("balance").textContent = "—";
+    loadModels();
+  }).catch(function(e){ setMsg("key-msg", e.message, "err"); });
+}
+
+function loadBalance(){
+  api("/credits").then(function(c){
+    var v = c && (c.remaining_credits != null ? c.remaining_credits : c.credits);
+    $("balance").textContent = (v != null ? ("баланс: " + v) : "баланс: —");
+  }).catch(function(){ $("balance").textContent = "баланс: —"; });
+}
+
+$("key-save").addEventListener("click", function(){
+  var k = $("key-input").value.trim();
+  if (!k) { setMsg("key-msg", "Введите ключ", "err"); return; }
+  setMsg("key-msg", "Проверка ключа…");
+  api("/key", {
+    method: "PUT",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ api_key: k })
+  }).then(function(){
+    $("key-input").value = "";
+    setMsg("key-msg", "Ключ сохранён и проверен", "ok");
+    refreshStatus();
+  }).catch(function(e){ setMsg("key-msg", "Ключ не принят: " + e.message, "err"); });
+});
+
+$("key-remove").addEventListener("click", function(){
+  api("/key", { method: "DELETE" }).then(function(){
+    setMsg("key-msg", "Ключ удалён", "ok");
+    refreshStatus();
+  }).catch(function(e){ setMsg("key-msg", e.message, "err"); });
+});
+
+/* ---------- каталог моделей ---------- */
+
+function loadModels(){
+  $("models").innerHTML = '<div class="hint">Загрузка…</div>';
+  api("/models?sort=name&limit=500").then(function(list){
+    state.models = Array.isArray(list) ? list : [];
+    renderModels();
+  }).catch(function(e){
+    $("models").innerHTML = "";
+    setMsg("models-msg", "Не удалось загрузить список моделей: " + e.message, "err");
+  });
+}
+
+function avgPrice(m){
+  var p = m.pricing || {};
+  var v = p.average != null ? p.average : (p.min != null ? p.min : null);
+  return v == null ? null : v;
+}
+function isFree(m){ var v = avgPrice(m); return v != null && v === 0; }
+
+function renderModels(){
+  var q = $("search").value.trim().toLowerCase();
+  var freeOnly = $("free-only").checked;
+  var sort = $("sort").value;
+  var list = state.models.filter(function(m){
+    if (freeOnly && !isFree(m)) return false;
+    if (q && m.id.toLowerCase().indexOf(q) === -1 &&
+        !(m.aliases || []).some(function(a){ return a.toLowerCase().indexOf(q) !== -1; })) return false;
+    return true;
+  });
+  list.sort(function(a, b){
+    if (sort === "provider") return a.id.localeCompare(b.id);
+    if (sort === "price") return (avgPrice(a) || 0) - (avgPrice(b) || 0);
+    var na = a.id.split("/").pop(), nb = b.id.split("/").pop();
+    return na.localeCompare(nb);
+  });
+  $("count").textContent = list.length + " из " + state.models.length;
+  setMsg("models-msg", "");
+  if (!list.length){
+    $("models").innerHTML = '<div class="hint">Ничего не найдено</div>';
+    return;
+  }
+  var box = $("models");
+  box.innerHTML = "";
+  list.forEach(function(m){
+    var el = document.createElement("div");
+    el.className = "model" + (state.selected === m.id ? " sel" : "");
+    var slash = m.id.indexOf("/");
+    var prov = slash > 0 ? m.id.slice(0, slash) : "";
+    var name = slash > 0 ? m.id.slice(slash + 1) : m.id;
+    var price = isFree(m)
+      ? '<span class="badge-free">free</span>'
+      : (avgPrice(m) != null ? '<span class="price">~$' + avgPrice(m).toFixed(4).replace(/0+$/,"").replace(/\.$/,"") + '/img</span>' : "");
+    el.innerHTML = '<span class="id">' + (prov ? '<span class="prov">' + prov + '</span>/' : '') +
+      "<b>" + name + "</b></span>" + price;
+    el.addEventListener("click", function(){ selectModel(m.id); });
+    box.appendChild(el);
+  });
+}
+
+function findModel(id){
+  return state.models.find(function(m){ return m.id === id; }) || null;
+}
+
+function selectModel(id){
+  state.selected = id;
+  renderModels();
+  var m = findModel(id);
+  $("gen-model").textContent = id;
+  $("gen").disabled = !state.hasKey;
+  var sel = $("size");
+  sel.innerHTML = "";
+  var sizes = ((m && m.parameters && m.parameters.size) || [])
+    .filter(function(s){ return s !== "auto" && s !== "custom"; });
+  ["auto"].concat(sizes).forEach(function(s){
+    var o = document.createElement("option");
+    o.value = s; o.textContent = s;
+    sel.appendChild(o);
+  });
+  setMsg("gen-msg", state.hasKey ? "" : "Чтобы генерировать, задайте API-ключ", "err");
+}
+
+$("search").addEventListener("input", renderModels);
+$("free-only").addEventListener("change", renderModels);
+$("sort").addEventListener("change", renderModels);
+$("refresh").addEventListener("click", loadModels);
+
+/* ---------- генерация ---------- */
+
+$("gen").addEventListener("click", function(){
+  if (!state.selected) return;
+  var prompt = $("prompt").value.trim();
+  if (!prompt) { setMsg("gen-msg", "Введите промпт", "err"); return; }
+  var body = { model: state.selected, prompt: prompt };
+  var size = $("size").value, quality = $("quality").value;
+  if (size && size !== "auto") body.size = size;
+  if (quality && quality !== "auto") body.quality = quality;
+  $("gen").disabled = true;
+  $("results").innerHTML = "";
+  setMsg("gen-msg", "");
+  var t0 = Date.now();
+  var tick = setInterval(function(){
+    setMsg("gen-msg", "Генерация… " + Math.round((Date.now() - t0) / 1000) + " с", "");
+  }, 500);
+  api("/generate", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body)
+  }).then(function(data){
+    clearInterval(tick);
+    $("gen").disabled = false;
+    var items = (data && data.data) || [];
+    if (!items.length) throw new Error("пустой ответ");
+    var box = $("results");
+    box.innerHTML = "";
+    items.forEach(function(it, i){
+      var src = it.url || null;
+      if (!src && it.b64_json){
+        var head = it.b64_json.slice(0, 8);
+        var mime = head.startsWith("iVBOR") ? "image/png"
+                 : head.startsWith("/9j") ? "image/jpeg"
+                 : head.startsWith("UklGR") ? "image/webp" : "image/png";
+        src = "data:" + mime + ";base64," + it.b64_json;
+      }
+      if (!src) return;
+      var img = document.createElement("img");
+      img.src = src;
+      img.title = state.selected;
+      img.addEventListener("click", function(){ window.open(src, "_blank"); });
+      box.appendChild(img);
+    });
+    setMsg("gen-msg", "Готово за " + Math.round((Date.now() - t0) / 1000) + " с", "ok");
+  }).catch(function(e){
+    clearInterval(tick);
+    $("gen").disabled = false;
+    setMsg("gen-msg", "Ошибка: " + e.message, "err");
+  });
+});
+
+refreshStatus();
+</script>
+</body>
+</html>
