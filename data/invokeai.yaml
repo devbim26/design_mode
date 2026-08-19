@@ -1,0 +1,22 @@
+# C:\InvokeAI\data\invokeai.yaml
+# Конфигурация для работы веб-интерфейса и API
+
+# Internal metadata - do not edit:
+schema_version: 4.0.2
+
+# Настройки сервера
+host: 127.0.0.1
+port: 9090
+allow_origins: []
+
+# Отключение локальных тяжелых функций для экономии RAM
+precision: float32
+device: cpu
+
+# Настройки внешних API — НЕ ПОДДЕРЖИВАЕТСЯ InvokeAI 6.2.0 (секция ниже отвергается
+# валидатором конфига: extra_forbidden). InvokeAI — генератор изображений Stable Diffusion,
+# у него нет OpenAI-совместимого remote_api. Оставлено как документация изначального замысла.
+# Ближайший реальный механизм — remote_api_tokens (Bearer-токены при скачивании моделей с URL).
+# remote_api:
+#   openai_api_key: "YOUR_OPENAI_API_KEY"
+#   openai_api_base: "https://openai.com"
