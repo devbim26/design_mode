@@ -9,6 +9,13 @@
     GET  /api/v1/imagerouter/credits    — баланс (прокси /v1/credits)
     GET  /api/v1/imagerouter/models     — список моделей (прокси /v3/models)
     POST /api/v1/imagerouter/generate   — генерация (прокси /v1/openai/images/generations)
+    POST /api/v1/imagerouter/admin-auth — проверка админского пароля (.env)
+
+Секреты читаются из .env в корне проекта (см. _load_env_file):
+    IMAGEROUTER_API_KEY — ключ ImageRouter; имеет приоритет над ключом,
+                          введённым через UI (data/imagerouter.json)
+    ADMIN_PASSWORD      — админский пароль: открывает «Менеджер моделей»
+                          (шестерёнка «Настройки» в меню)
 
 Часть 2 — ImageRouterCanvasMiddleware: модели ImageRouter в основном интерфейсе:
     GET    /api/v2/models/               — к списку добавляются модели ImageRouter
@@ -28,8 +35,10 @@ from __future__ import annotations
 import asyncio
 import base64
 import binascii
+import hmac
 import io
 import json
+import os
 import re
 import threading
 import time
@@ -80,13 +89,61 @@ IR_MODELS_CACHE_TTL = 600.0
 MAX_RUNS = 10
 
 
-# --- Хранение ключа: <INVOKEAI_ROOT>/imagerouter.json ---
+# --- Хранение ключа: .env (IMAGEROUTER_API_KEY) > data/imagerouter.json ---
+
+def _load_env_file() -> None:
+    """Читает .env проекта (KEY=VALUE) в os.environ, не переопределяя уже
+    заданные переменные. Ищется в cwd (оба .bat запускаются из корня проекта),
+    в INVOKEAI_ROOT и на уровень выше него."""
+    candidates: list[Path] = []
+    try:
+        candidates.append(Path.cwd() / ".env")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        root = Path(get_config().root_path)
+        candidates += [root / ".env", root.parent / ".env"]
+    except Exception:  # noqa: BLE001
+        pass
+    for p in candidates:
+        try:
+            if not p.is_file():
+                continue
+            for line in p.read_text(encoding="utf-8-sig").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                k, v = k.strip(), v.strip().strip('"').strip("'")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+            break
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+
+
+_ENV_LOADED = {"done": False}
+
+
+def _ensure_env() -> None:
+    if not _ENV_LOADED["done"]:
+        _load_env_file()
+        _ENV_LOADED["done"] = True
+
 
 def _key_path() -> Path:
     return Path(get_config().root_path) / "imagerouter.json"
 
 
+def _env_key() -> Optional[str]:
+    _ensure_env()
+    return (os.environ.get("IMAGEROUTER_API_KEY") or "").strip() or None
+
+
 def _load_key() -> Optional[str]:
+    key = _env_key()
+    if key:
+        return key
     p = _key_path()
     if not p.exists():
         return None
@@ -147,6 +204,7 @@ def get_status() -> dict:
     return {
         "has_key": key is not None,
         "hint": f"...{key[-4:]}" if key else None,
+        "key_source": "env" if _env_key() else ("file" if key else None),
     }
 
 
@@ -166,6 +224,36 @@ def delete_key() -> dict:
     if p.exists():
         p.unlink()
     return {"status": "deleted"}
+
+
+# --- Админский пароль (.env: ADMIN_PASSWORD) ---
+# Открывает закрытые по умолчанию разделы UI: «Менеджер моделей» под
+# шестерёнкой «Настройки» (окно пароля — devbim-admin.js во фронтенде).
+
+class AdminAuthBody(BaseModel):
+    password: str = Field(min_length=1, max_length=256)
+
+
+def _admin_password() -> Optional[str]:
+    _ensure_env()
+    return (os.environ.get("ADMIN_PASSWORD") or "").strip() or None
+
+
+@imagerouter_router.post("/admin-auth")
+def admin_auth(body: AdminAuthBody) -> dict:
+    pw = _admin_password()
+    if pw is None:
+        # пароль не настроен — защита отключена, UI не запрашивает пароль
+        return {"ok": True, "protected": False}
+    if hmac.compare_digest(body.password.encode("utf-8"), pw.encode("utf-8")):
+        return {"ok": True, "protected": True}
+    time.sleep(0.3)  # замедлить перебор
+    raise HTTPException(status_code=401, detail="Неверный пароль")
+
+
+@imagerouter_router.get("/admin-auth")
+def admin_auth_status() -> dict:
+    return {"protected": _admin_password() is not None}
 
 
 @imagerouter_router.get("/credits")

@@ -132,6 +132,23 @@ cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI"
 
 ### Где модели ImageRouter в интерфейсе
 
+- **Левая панель — только параметры API (19.08, вечер)**. Поскольку система
+  работает только через API ImageRouter, из левой панели Generate и Canvas
+  скрыты параметры, настраивающие исключительно локальные модели: аккордеоны
+  «Refiner» и «Advanced» (VAE, VAE Precision, CFG Rescale, Seamless X/Y),
+  «Compositing» (Coherence/Infill) на канвасе, блок «Concepts» (LoRA) и
+  сворачиваемые «Advanced Options» с Scheduler/Steps/CFG Scale. Осталось
+  только то, что реально уходит в API: промпт (+Reference Image), модель,
+  размер (Aspect/Width/Height → `size`), seed. «Advanced Options» внутри
+  аккордеона «Image» на канвасе оставлен — это масштабирование кадра
+  (Scale Before Processing), оно определяет кроп/размер исходника для правки.
+  Патч применяется функцией `patch_left_panel()` в `setup_imagerouter.py`.
+- **Левая вертикальная рейка вкладок (19.08, вечер)** — скрыты: вкладка
+  «Очередь» (статус генерации и так виден у кнопки Generate), колокольчик
+  уведомлений (в его поповере показывается «Что нового в DevBIM» —
+  обновления локальной сборки не актуальны; всплывающие тосты об ошибках
+  остаются) и кнопка Support Videos. Функция `patch_left_rail()` в
+  `setup_imagerouter.py`.
 - **Canvas / Generate (основной экран генерации)** — модели ImageRouter
   появляются прямо в выборе модели рядом с локальными; генерация с ними
   выполняется через API ImageRouter, результат сохраняется в галерею как

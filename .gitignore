@@ -9,6 +9,9 @@ dist_original_backup/
 data/*
 !data/invokeai.yaml
 
+# Секреты (ключ ImageRouter, админский пароль) — в репозиторий не входят
+.env
+
 # Служебные папки инструментов
 .playwright-mcp/
 __pycache__/
