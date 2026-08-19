@@ -35,10 +35,22 @@ InvokeAI не поддерживается и отвергается валид�
 
 ## Запуск
 
+Стандартный способ:
+
 ```powershell
 cd C:\InvokeAI
 $env:INVOKEAI_ROOT="C:\InvokeAI\data"
 .\venv\Scripts\invokeai-web.exe
+```
+
+Если `invokeai-web.exe` молча завершается с кодом 1 и пустым логом
+(на этой машине враппер-exe периодически блокируется защитой Windows) —
+запускайте напрямую через Python без буферизации, это надёжный вариант:
+
+```powershell
+cd C:\InvokeAI
+$env:INVOKEAI_ROOT="C:\InvokeAI\data"
+.\venv\Scripts\python.exe -u -c "from invokeai.app.run_app import run_app; run_app()"
 ```
 
 Веб-интерфейс и Swagger API: `http://127.0.0.1:9090` (`/docs`, `/api/v1/...`).
