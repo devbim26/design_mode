@@ -84,8 +84,10 @@ JS_COMPONENTS_NEW = 'components:{...JUe,ifcviewer:jn(IFCV)},onReady:t,theme:ew'
 
 # --- App-бандл: IFCE + компонент IFCV (iframe ?embed=1) + мост iframe -> холст.
 #     Je() даёт {dispatch,getState}; _c — sentImageToCanvas (меню «Send to
-#     Canvas»); $p() — менеджер холста из глобального атома; QCe — enqueue
-#     генерации холста (то же, что кнопка Generate на холсте).
+#     Canvas»); ru — атом менеджера холста (ЧИТАТЬ ru.get(), НЕ $p() —
+#     $p=()=>ie(ru) это ХУК useSyncExternalStore, вызов вне компонента
+#     роняет React #321); QCe — enqueue генерации холста (то же, что кнопка
+#     Generate на холсте).
 #     ФОКУС-РЕГИОН: только "viewer" (общий с Image Viewer) — список
 #     разрешённых регионов зашит в бандле (q2e), посторонний регион роняет
 #     рендер панели (useFocusRegion читает K2e["$"+region]).
@@ -111,7 +113,9 @@ JS_IFC_EMBED_PANEL = (
     'await Fe.focusPanel("canvas",On),'
     'await _c({imageDTO:e,withResize:!1,withInpaintMask:!1,type:"raster_layer",'
     'dispatch:n.dispatch,getState:n.getState});'
-    'if(t){const s=$p();if(!s)throw new Error("IFC: canvas manager unavailable");'
+    'if(t){let s=ru.get();'
+    'for(let i=0;i<20&&!s;i++)await new Promise(k=>setTimeout(k,100)),s=ru.get();'
+    'if(!s)throw new Error("IFC: canvas manager unavailable");'
     'await QCe(n,s,!1)}}};'
 )
 

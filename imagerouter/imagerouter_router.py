@@ -829,6 +829,22 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
                     )
                 else:
                     edit_bbox = (0, 0, init_full.width, init_full.height)
+                # Внешний API требует стороны кратно 64 (128..2048), а зона
+                # правки после кадрирования по содержимому этому не отвечает
+                # (например, снимок IFC 832px внутри композита 1024px даёт
+                # 832+2*8=840). Расширяем зону до сетки 64 — сдвигами внутри
+                # границ картинки; содержимое зоны не обрезается.
+                bx0, by0, bx1, by1 = edit_bbox
+                ax0, ay0 = (bx0 // 64) * 64, (by0 // 64) * 64
+                ax1, ay1 = ((bx1 + 63) // 64) * 64, ((by1 + 63) // 64) * 64
+                if ax1 > init_full.width:
+                    ax0 = max(0, ax0 - (ax1 - init_full.width))
+                    ax1 = init_full.width
+                if ay1 > init_full.height:
+                    ay0 = max(0, ay0 - (ay1 - init_full.height))
+                    ay1 = init_full.height
+                if (ax1 - ax0) % 64 == 0 and (ay1 - ay0) % 64 == 0:
+                    edit_bbox = (ax0, ay0, ax1, ay1)
                 init_pil = init_full.crop(edit_bbox)
                 mask_pil = mask_full.crop(edit_bbox) if mask_full is not None else None
                 size = _pick_size(mid, init_pil.width, init_pil.height)

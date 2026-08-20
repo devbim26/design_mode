@@ -677,16 +677,21 @@ async function loadServerModel(name) {
 // Снимок текущего вида на белом фоне. Синхронный render() непосредственно
 // перед захватом: без preserveDrawingBuffer буфер очищается после
 // композитинга, поэтому снимок надо делать в той же JS-задаче, что и рендер.
+// Стороны выравниваются кратно 64 в диапазоне 128..2048 (требование
+// ImageRouter к параметрам генерации; добавляются белые поля, пропорции
+// вида сохраняются).
 function renderSnapshot() {
   const r = world.renderer.three;
   r.render(world.scene.three, world.camera.three);
   const src = r.domElement;
+  const snap64 = (v) => Math.min(2048, Math.max(128, Math.ceil(v / 64) * 64));
   const c = document.createElement("canvas");
-  c.width = src.width; c.height = src.height;   // размер буфера (учитывает DPR)
+  c.width = snap64(src.width);   // размер буфера учитывает DPR панели
+  c.height = snap64(src.height);
   const ctx = c.getContext("2d");
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, c.width, c.height);
-  ctx.drawImage(src, 0, 0);
+  ctx.drawImage(src, (c.width - src.width) / 2, (c.height - src.height) / 2);
   return c;
 }
 
