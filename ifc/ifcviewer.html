@@ -108,6 +108,26 @@
   }
   @keyframes sp{to{transform:rotate(360deg)}}
   input[type=file]{display:none}
+
+  /* --- embed-режим: панель IFC на вкладке «Холст» (?embed=1) --- */
+  body.embed header, body.embed .side, body.embed footer{display:none}
+  body.embed main{grid-template-columns:1fr}
+  body.embed #navhelp{display:none}
+  #snapbar{
+    display:none; align-items:center; gap:6px; flex-wrap:wrap;
+    position:absolute; left:50%; transform:translateX(-50%); bottom:10px;
+    background:rgba(22,24,27,.92); border:1px solid var(--border); border-radius:8px;
+    padding:6px 8px; max-width:calc(100% - 20px); z-index:5;
+  }
+  body.embed #snapbar{display:flex}
+  #snapbar button{padding:4px 10px; font-size:12px; font-weight:500}
+  #snapbar select{max-width:200px; padding:4px 6px; font-size:12px}
+  #etoast{
+    display:none; position:absolute; left:50%; transform:translateX(-50%); top:10px;
+    background:rgba(22,24,27,.95); border:1px solid var(--border); border-radius:6px;
+    padding:5px 12px; font-size:12px; z-index:6; max-width:calc(100% - 20px);
+  }
+  #etoast.err{color:var(--err); border-color:var(--err)}
 </style>
 </head>
 <body>
@@ -141,6 +161,12 @@
       <div class="big">🏢</div>
       <div>Откройте IFC-файл с диска или выберите модель с сервера.<br>
       BIM-модель разбирается прямо в браузере (web-ifc).</div>
+    </div>
+    <div id="etoast"></div>
+    <div id="snapbar">
+      <select id="embed-server-list" title="Модель на сервере"><option value="">— модель —</option></select>
+      <button id="btn-snap" title="Снимок текущего вида — на холст как подложка">📸 На холст</button>
+      <button id="btn-snap-gen" title="Снимок на холст и сразу запустить генерацию">✨ Сгенерировать</button>
     </div>
     <div id="navhelp">ЛКМ — вращение · колесо — зум · ПКМ — панорама · клик — выбор элемента</div>
   </section>
@@ -211,6 +237,7 @@ let model = null;          // FragmentsModel
 let modelId = "";          // id в fragments.list
 let selection = new Set(); // выделенные localId
 let elementIds = new Set();// все localId модели (для счётчика)
+let loadedModelName = null;// имя последней загруженной модели (синхронизация embed-панели)
 
 const ACCENT = new Color(0x38bdf8);
 const highlightDef = { color: ACCENT, opacity: 0.75, transparent: true, renderedFaces: 1 };
@@ -283,6 +310,7 @@ async function loadIfc(bytes, name) {
 
   const secs = ((performance.now() - t0) / 1000).toFixed(1);
   const n = countElements();
+  loadedModelName = name;
   $("stat-model").textContent = name;
   $("stat-model").className = "chip ok";
   $("empty").style.display = "none";
@@ -350,6 +378,7 @@ window.__ifc = {
     const mouse = new Vector2(x, y);
     return fragments.raycast({ camera: world.camera.three, mouse, dom });
   },
+  capture: () => renderSnapshot().toDataURL("image/png"),
 };
 
 async function buildTree() {
@@ -606,6 +635,7 @@ $("server-list").addEventListener("change", async (e) => {
     if (!r.ok) throw new Error("HTTP " + r.status);
     const buf = await r.arrayBuffer();
     await loadIfc(new Uint8Array(buf), name);
+    rememberModel(name);   // embed-панель на холсте подхватит автоматически
   } catch (err) {
     setStatus("Не удалось загрузить: " + err.message, true);
   } finally {
@@ -614,6 +644,133 @@ $("server-list").addEventListener("change", async (e) => {
 });
 
 refreshServerList();
+
+// =====================================================================
+// embed-режим: панель «IFC Viewer» на вкладке «Холст» (?embed=1)
+// =====================================================================
+const EMBED = new URLSearchParams(location.search).get("embed") === "1";
+if (EMBED) document.body.classList.add("embed");
+
+const LAST_MODEL_KEY = "devbim:ifc:lastModel";
+
+function rememberModel(name) {
+  try { localStorage.setItem(LAST_MODEL_KEY, name); } catch { /* приватный режим и т.п. */ }
+}
+
+function embedToast(msg, isErr, ms = 2600) {
+  if (!EMBED) return;
+  const t = $("etoast");
+  t.textContent = msg;
+  t.className = isErr ? "err" : "";
+  t.style.display = "block";
+  clearTimeout(t._tm);
+  t._tm = setTimeout(() => { t.style.display = "none"; }, ms);
+}
+
+async function loadServerModel(name) {
+  const r = await fetch("/api/v1/ifc/file/" + encodeURIComponent(name));
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  const buf = await r.arrayBuffer();
+  await loadIfc(new Uint8Array(buf), name);
+}
+
+// Снимок текущего вида на белом фоне. Синхронный render() непосредственно
+// перед захватом: без preserveDrawingBuffer буфер очищается после
+// композитинга, поэтому снимок надо делать в той же JS-задаче, что и рендер.
+function renderSnapshot() {
+  const r = world.renderer.three;
+  r.render(world.scene.three, world.camera.three);
+  const src = r.domElement;
+  const c = document.createElement("canvas");
+  c.width = src.width; c.height = src.height;   // размер буфера (учитывает DPR)
+  const ctx = c.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, c.width, c.height);
+  ctx.drawImage(src, 0, 0);
+  return c;
+}
+
+async function uploadSnapshot(canvas) {
+  const blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
+  const fd = new FormData();
+  fd.append("file", blob, "ifc-snapshot.png");
+  // NB: POST /api/v1/images/ в 6.2 — «create upload entry» (JSON width/height);
+  // multipart-загрузка файла живёт на /api/v1/images/upload
+  const r = await fetch(
+    "/api/v1/images/upload?image_category=general&is_intermediate=false",
+    { method: "POST", body: fd },
+  );
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return await r.json(); // ImageDTO
+}
+
+async function sendSnapshot({ generate = false } = {}) {
+  if (!model) { embedToast("Сначала загрузите модель", true); return; }
+  const api = window.parent && window.parent.__devbimIfc;
+  if (!api) { embedToast("Мост к холсту недоступен — перезагрузите страницу", true, 5000); return; }
+  const btn = generate ? $("btn-snap-gen") : $("btn-snap");
+  btn.disabled = true;
+  try {
+    embedToast("Снимок…", false, 60000);
+    const dto = await uploadSnapshot(renderSnapshot());
+    await api.toCanvas(dto, generate);
+    embedToast(generate ? "Снимок отправлен в генерацию" : "Снимок передан на холст");
+  } catch (e) {
+    console.error(e);
+    embedToast("Ошибка: " + (e?.message || e), true, 6000);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+if (EMBED) {
+  $("btn-snap").addEventListener("click", () => sendSnapshot());
+  $("btn-snap-gen").addEventListener("click", () => sendSnapshot({ generate: true }));
+
+  // список моделей с сервера в плавающей панели
+  (async () => {
+    const sel = $("embed-server-list");
+    try {
+      const r = await fetch("/api/v1/ifc/list");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const d = await r.json();
+      const names = d.models || d || [];
+      sel.innerHTML = '<option value="">— модель —</option>' +
+        names.map((n) => `<option value="${escapeHtml(n.name ?? n)}">${escapeHtml(n.name ?? n)}${n.size ? " · " + fmtSize(n.size) : ""}</option>`).join("");
+    } catch {
+      sel.innerHTML = '<option value="">— сервер: нет моделей —</option>';
+    }
+  })();
+
+  $("embed-server-list").addEventListener("change", async (e) => {
+    const name = e.target.value;
+    if (!name) return;
+    try {
+      embedToast("Загрузка " + name + "…", false, 60000);
+      await loadServerModel(name);
+      rememberModel(name);
+      embedToast("Модель загружена");
+    } catch (err) {
+      embedToast("Не удалось загрузить: " + err.message, true, 6000);
+    } finally {
+      e.target.value = "";
+    }
+  });
+
+  // живая синхронизация: вкладка IFC загрузила модель — подхватываем
+  window.addEventListener("storage", (e) => {
+    if (e.key !== LAST_MODEL_KEY || !e.newValue) return;
+    if (e.newValue === loadedModelName) return;
+    loadServerModel(e.newValue).catch((err) => {
+      console.warn("sync:", err);
+      embedToast("Синхронизация: не удалось загрузить " + e.newValue, true, 5000);
+    });
+  });
+
+  // автозагрузка последней модели с вкладки IFC
+  const last = (() => { try { return localStorage.getItem(LAST_MODEL_KEY); } catch { return null; } })();
+  if (last) loadServerModel(last).catch(console.error);
+}
 </script>
 </body>
 </html>
