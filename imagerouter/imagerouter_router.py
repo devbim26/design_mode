@@ -461,6 +461,22 @@ def _supports_image_input(mid: str) -> bool:
     return "image" in inputs
 
 
+def _is_echo(init_pil: Any, result_pil: Any) -> bool:
+    """Модель вернула вход без правки (эхо): средняя пиксельная разница
+    после нормализации размера почти нулевая. Так ведут себя модели, у
+    которых в каталоге заявлен вход-картинка, но правку они не выполняют
+    (замечено 20.08 на onomaai/illustrious-xl: две «генерации» побайтово
+    совпадали со входом). Порог 3.0 отсекает шум перекодирования, реальные
+    правки дают разницу на порядок больше."""
+    import numpy as np
+
+    a = init_pil.convert("RGB")
+    b = result_pil.convert("RGB")
+    if b.size != a.size:
+        b = b.resize(a.size)
+    return float(np.abs(np.asarray(a, np.int16) - np.asarray(b, np.int16)).mean()) <= 3.0
+
+
 def _mask_edit_alpha(mask_pil: Any) -> Any:
     """Альфа-маска в OpenAI-семантике: 0 (прозрачное) = зона правки.
 
@@ -818,33 +834,51 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
                 alpha_full = init_full.convert("RGBA").getchannel("A")
                 content = alpha_full.point(lambda v: 255 if v > 8 else 0).getbbox()
                 zone_bbox = zone_full.point(lambda v: 255 if v >= 128 else 0).getbbox() if zone_full is not None else None
-                boxes = [b for b in (content, zone_bbox) if b]
-                if boxes:
-                    pad = 8
-                    edit_bbox = (
-                        max(0, min(b[0] for b in boxes) - pad),
-                        max(0, min(b[1] for b in boxes) - pad),
-                        min(init_full.width, max(b[2] for b in boxes) + pad),
-                        min(init_full.height, max(b[3] for b in boxes) + pad),
-                    )
+                if zone_bbox is None:
+                    # Маска не нарисована (слоя нет или выделение пустое).
+                    # ГРАБЛЯ (20.08): с пустой зоной кроп делался только по
+                    # содержимому, модель правила его, но _apply_edit_mask
+                    # выбрасывала результат — пользователь получал исходник
+                    # назад. Вместо этого правим картинку ЦЕЛИКОМ: прозрачные
+                    # поля холста заливаем белым (по промпту «добавь окружение»
+                    # модель дорисует их) и паддим до сетки 64.
+                    zone_full = None
+                    mask_full = None
+                    src = init_full.convert("RGBA")
+                    w64 = min(2048, max(128, (src.width + 63) // 64 * 64))
+                    h64 = min(2048, max(128, (src.height + 63) // 64 * 64))
+                    flat = Image.new("RGBA", (w64, h64), (255, 255, 255, 255))
+                    flat.alpha_composite(src, ((w64 - src.width) // 2, (h64 - src.height) // 2))
+                    init_full = flat
+                    edit_bbox = (0, 0, w64, h64)
                 else:
-                    edit_bbox = (0, 0, init_full.width, init_full.height)
-                # Внешний API требует стороны кратно 64 (128..2048), а зона
-                # правки после кадрирования по содержимому этому не отвечает
-                # (например, снимок IFC 832px внутри композита 1024px даёт
-                # 832+2*8=840). Расширяем зону до сетки 64 — сдвигами внутри
-                # границ картинки; содержимое зоны не обрезается.
-                bx0, by0, bx1, by1 = edit_bbox
-                ax0, ay0 = (bx0 // 64) * 64, (by0 // 64) * 64
-                ax1, ay1 = ((bx1 + 63) // 64) * 64, ((by1 + 63) // 64) * 64
-                if ax1 > init_full.width:
-                    ax0 = max(0, ax0 - (ax1 - init_full.width))
-                    ax1 = init_full.width
-                if ay1 > init_full.height:
-                    ay0 = max(0, ay0 - (ay1 - init_full.height))
-                    ay1 = init_full.height
-                if (ax1 - ax0) % 64 == 0 and (ay1 - ay0) % 64 == 0:
-                    edit_bbox = (ax0, ay0, ax1, ay1)
+                    boxes = [b for b in (content, zone_bbox) if b]
+                    if boxes:
+                        pad = 8
+                        edit_bbox = (
+                            max(0, min(b[0] for b in boxes) - pad),
+                            max(0, min(b[1] for b in boxes) - pad),
+                            min(init_full.width, max(b[2] for b in boxes) + pad),
+                            min(init_full.height, max(b[3] for b in boxes) + pad),
+                        )
+                    else:
+                        edit_bbox = (0, 0, init_full.width, init_full.height)
+                    # Внешний API требует стороны кратно 64 (128..2048), а зона
+                    # правки после кадрирования по содержимому этому не отвечает
+                    # (например, снимок IFC 832px внутри композита 1024px даёт
+                    # 832+2*8=840). Расширяем зону до сетки 64 — сдвигами внутри
+                    # границ картинки; содержимое зоны не обрезается.
+                    bx0, by0, bx1, by1 = edit_bbox
+                    ax0, ay0 = (bx0 // 64) * 64, (by0 // 64) * 64
+                    ax1, ay1 = ((bx1 + 63) // 64) * 64, ((by1 + 63) // 64) * 64
+                    if ax1 > init_full.width:
+                        ax0 = max(0, ax0 - (ax1 - init_full.width))
+                        ax1 = init_full.width
+                    if ay1 > init_full.height:
+                        ay0 = max(0, ay0 - (ay1 - init_full.height))
+                        ay1 = init_full.height
+                    if (ax1 - ax0) % 64 == 0 and (ay1 - ay0) % 64 == 0:
+                        edit_bbox = (ax0, ay0, ax1, ay1)
                 init_pil = init_full.crop(edit_bbox)
                 mask_pil = mask_full.crop(edit_bbox) if mask_full is not None else None
                 size = _pick_size(mid, init_pil.width, init_pil.height)
@@ -930,6 +964,15 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
                 pil = _item_to_pil(item)
                 if pil is None:
                     continue
+                if use_edits and init_pil is not None and _is_echo(init_pil, pil):
+                    raise _IRClientError(
+                        f"Модель «{mid}» вернула исходное изображение без правки — "
+                        "она числится с входом-картинкой, но редактирование не выполняет. "
+                        "Выберите модель правки: google/nano-banana:free, "
+                        "openai/gpt-image-2:free, qwen/qwen-image, "
+                        "black-forest-labs/flux-kontext-dev.",
+                        400,
+                    )
                 if is_edit and zone_full is not None:
                     pil = _apply_edit_mask(init_full, zone_full, pil, edit_bbox)
                 metadata = json.dumps(
