@@ -7,6 +7,10 @@
 Первый запуск создаёт бэкап: dist_original_backup/ рядом со скриптом.
 Восстановление: скопировать содержимое бэкапа обратно в dist.
 
+Также деплоит брендовый баннер над интерфейсом (devbim_banner.js ->
+dist/devbim-banner.js + <script> в index.html): логотип-ссылка на страницу
+регистрации (заглушка) и слоган, следящий за языком интерфейса.
+
 Пути определяются относительно расположения скрипта (проект переносим).
 Запуск: venv\Scripts\python.exe rebrand_devbim.py
 """
@@ -200,6 +204,29 @@ def patch_backend() -> int:
             total += 1
     return total
 
+def deploy_banner() -> bool:
+    """Баннер «DevBIM — Design» над интерфейсом (devbim_banner.js):
+    кликабельный логотип -> страница регистрации (заглушка), слоган справа,
+    язык слогана следует за языком интерфейса приложения."""
+    src = BASE / "devbim_banner.js"
+    if not src.exists():
+        print(f"ОШИБКА: не найден {src}")
+        sys.exit(1)
+    shutil.copy2(src, DIST / "devbim-banner.js")
+    f = DIST / "index.html"
+    s = f.read_text(encoding="utf-8")
+    if "devbim-banner.js" in s:
+        return False
+    if "</head>" not in s:
+        print("ОШИБКА: в index.html нет </head>")
+        sys.exit(1)
+    bak = f.with_suffix(".html.banner-bak")
+    if not bak.exists():
+        shutil.copy2(f, bak)
+    tag = '  <script src="/devbim-banner.js" defer></script>\n</head>'
+    f.write_text(s.replace("</head>", tag, 1), encoding="utf-8")
+    return True
+
 def main() -> None:
     if not DIST.exists():
         print(f"dist не найден: {DIST}")
@@ -212,6 +239,7 @@ def main() -> None:
     print("Локалей обновлено:", patch_locales())
     print("Логотипов заменено:", patch_images())
     print("Файлов бэкенда изменено:", patch_backend())
+    print("Баннер DevBIM подключён:", deploy_banner())
     # Контроль: что осталось из брендовых упоминаний (ожидаются только технические)
     leftover = []
     for f in list(DIST.glob("assets/*.js")) + list(DIST.glob("locales/*.json")):

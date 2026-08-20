@@ -74,6 +74,14 @@
     align-items:center; justify-content:center; color:var(--muted); text-align:center; padding:20px;
   }
   #viewport .empty .big{font-size:38px}
+  #viewport .devbim-logo{
+    position:absolute; left:0.75rem; bottom:0.75rem; z-index:1;
+    display:flex; align-items:center; gap:7px;
+    font-size:13.5px; font-weight:700; letter-spacing:.3px; color:var(--text);
+    opacity:.88; pointer-events:none; user-select:none; white-space:nowrap;
+  }
+  #viewport .devbim-logo .bim{color:var(--accent)}
+  #viewport .devbim-logo .sub{color:var(--muted); font-weight:400}
   #loadbar{position:absolute; left:0; right:0; top:0; height:3px; background:#12232d; display:none}
   #loadbar i{display:block; height:100%; width:0; background:var(--accent); transition:width .3s}
   #toolbar{
@@ -208,6 +216,21 @@ world.scene.setup();
 world.scene.three.background = null;               // прозрачный фон -> CSS-фон вьюпорта
 
 world.renderer = new SimpleRenderer(components, $("viewport"));
+world.renderer.showLogo = false;                     // убрать водяной знак That Open
+
+// водяной знак DevBIM — Design на его месте
+{
+  const logo = document.createElement("div");
+  logo.className = "devbim-logo";
+  logo.setAttribute("aria-label", "DevBIM — Design");
+  logo.innerHTML = `
+    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+      <path d="M12 2 21 7v10l-9 5-9-5V7l9-5z" stroke="#38BDF8" stroke-width="1.7" stroke-linejoin="round"/>
+      <path d="M12 12 21 7M12 12v10M12 12 3 7" stroke="#38BDF8" stroke-width="1.7" stroke-linejoin="round"/>
+    </svg>
+    <span class="word">Dev<span class="bim">BIM</span> <span class="sub">— Design</span></span>`;
+  $("viewport").appendChild(logo);
+}
 world.camera = new OrthoPerspectiveCamera(components);
 world.camera.projection.set("Perspective");
 
