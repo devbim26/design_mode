@@ -196,6 +196,7 @@ class GenerateBody(BaseModel):
     prompt: str = Field(min_length=1, max_length=20000)
     size: Optional[str] = None
     quality: Optional[str] = None
+    output_format: Optional[str] = Field(default=None, pattern="^(webp|jpeg|png)$")
 
 
 @imagerouter_router.get("/status")
@@ -286,6 +287,8 @@ def generate(body: GenerateBody) -> Any:
         payload["size"] = body.size
     if body.quality:
         payload["quality"] = body.quality
+    if body.output_format:
+        payload["output_format"] = body.output_format
     resp = requests.post(GENERATIONS_URL, headers=_auth_headers(), json=payload, timeout=TIMEOUT_GENERATE)
     return _upstream_json(resp)
 

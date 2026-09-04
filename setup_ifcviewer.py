@@ -15,8 +15,10 @@
        панель «IFC Viewer» (iframe /ifcviewer.html?embed=1 — вьювер без
        боковых панелей), рядом с «Image Viewer»; компонент IFCV экспортирует
        мост window.__devbimIfc.toCanvas(imageDTO, generate) — снимок модели
-       кладётся на холст подложкой (sentImageToCanvas) и, опционально,
-       сразу запускает генерацию холста (enqueue);
+       кладётся на холст подложкой (sentImageToCanvas), вместе с ним
+       создаётся выделенный слой «Маска перерисовки» и включается кисть
+       (как у кнопки «Редактировать» в Image Viewer) и, опционально,
+       сразу запускается генерация холста (enqueue);
      - index-бандл: 'ifc' добавляется в zod-enum activeTab, чтобы сохранённая
        вкладка пережила перезагрузку страницы.
 
@@ -83,17 +85,37 @@ JS_COMPONENTS_OLD = 'components:JUe,onReady:t,theme:ew'
 JS_COMPONENTS_NEW = 'components:{...JUe,ifcviewer:jn(IFCV)},onReady:t,theme:ew'
 
 # --- App-бандл: IFCE + компонент IFCV (iframe ?embed=1) + мост iframe -> холст.
-#     Je() даёт {dispatch,getState}; _c — sentImageToCanvas (меню «Send to
-#     Canvas»); ru — атом менеджера холста (ЧИТАТЬ ru.get(), НЕ $p() —
-#     $p=()=>ie(ru) это ХУК useSyncExternalStore, вызов вне компонента
-#     роняет React #321); QCe — enqueue генерации холста (то же, что кнопка
-#     Generate на холсте).
+#     Je() даёт {dispatch,getState}; _c — sentImageToCanvas (та же функция,
+#     что за кнопкой «Редактировать»/Edit в Image Viewer); ru — атом
+#     менеджера холста (ЧИТАТЬ ru.get(), НЕ $p() — $p=()=>ie(ru) это ХУК
+#     useSyncExternalStore, вызов вне компонента роняет React #321); QCe —
+#     enqueue генерации холста (то же, что кнопка Generate на холсте).
+#     «На холст» повторяет кнопку «Редактировать» (Edit) из Image Viewer
+#     (хук Ize в бандле): withInpaintMask:!0 — вместе со снимком создаётся
+#     ВЫДЕЛЕННЫЙ слой «Маска перерисовки» (inpaintMaskAdded), после передачи
+#     включается кисть (tool.$tool.set("brush")) — рисование по этому слою
+#     даёт маску со штриховкой (наклонные полоски). Пустая (не нарисованная)
+#     маска генерацию не ломает: посредник при пустом выделении правит
+#     картинку целиком.
 #     ФОКУС-РЕГИОН: только "viewer" (общий с Image Viewer) — список
 #     разрешённых регионов зашит в бандле (q2e), посторонний регион роняет
 #     рендер панели (useFocusRegion читает K2e["$"+region]).
 #     TAB-КОМПОНЕНТ: t$ — тот же, что у панели Image Viewer на холсте
 #     (карта tabComponents вкладки canvas — QUe — знает только launchpad/
 #     viewer/workspace; посторонний id роняет addPanel). ---
+JS_BRIDGE_V2 = (
+    'window.__devbimIfc={async toCanvas(e,t){'
+    'const n=window.__devbimIfcCtx;'
+    'if(!n)throw new Error("IFC: canvas context unavailable");'
+    'await Fe.focusPanel("canvas",On),'
+    'await _c({imageDTO:e,withResize:!1,withInpaintMask:!0,type:"raster_layer",'
+    'dispatch:n.dispatch,getState:n.getState});'
+    'let s=ru.get();'
+    'for(let i=0;i<20&&!s;i++)await new Promise(k=>setTimeout(k,100)),s=ru.get();'
+    'if(!s)throw new Error("IFC: canvas manager unavailable");'
+    'try{s.tool.$tool.set("brush")}catch(a){}'
+    'if(t)await QCe(n,s,!1)}};'
+)
 JS_IFC_EMBED_PANEL = (
     'const IFCE=(e,t)=>{try{'
     'const p=[...t.panels];'
@@ -107,6 +129,11 @@ JS_IFC_EMBED_PANEL = (
     'return o.jsx(yf,{tab:"canvas",children:o.jsx("iframe",{src:"/ifcviewer.html?embed=1",'
     'title:"IFC Viewer",style:{width:"100%",height:"100%",border:"none"}})});});'
     'IFCV.displayName="IFCViewerPanel";'
+) + JS_BRIDGE_V2
+
+# Мост первой версии (withInpaintMask:!1, инструмент не переключался) —
+# нужен для миграции уже пропатченных бандлов на поведение «Редактировать».
+JS_BRIDGE_V1 = (
     'window.__devbimIfc={async toCanvas(e,t){'
     'const n=window.__devbimIfcCtx;'
     'if(!n)throw new Error("IFC: canvas context unavailable");'
@@ -194,7 +221,14 @@ def patch_app_bundle() -> bool:
 
     # 2) панель «IFC Viewer» на вкладке «Холст» + мост к холсту
     if "__devbimIfc" in s:
-        print("App-бандл: панель IFC на холсте уже на месте, пропуск")
+        if JS_BRIDGE_V2 in s:
+            print("App-бандл: панель IFC на холсте уже на месте, пропуск")
+        elif JS_BRIDGE_V1 in s:
+            s = s.replace(JS_BRIDGE_V1, JS_BRIDGE_V2, 1)
+            print("App-бандл: мост IFC->холст обновлён (withInpaintMask + кисть маски)")
+        else:
+            print("ОШИБКА: мост __devbimIfc неизвестной версии — патч не применён")
+            sys.exit(1)
     else:
         for old, new, title in (
             (JS_ONREADY_OLD, JS_ONREADY_NEW, "добавление панели «IFC Viewer» после регистрации dockview"),

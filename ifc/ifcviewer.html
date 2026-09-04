@@ -742,7 +742,9 @@ async function sendSnapshot({ generate = false } = {}) {
     embedToast("Снимок…", false, 60000);
     const dto = await uploadSnapshot(renderSnapshot());
     await api.toCanvas(dto, generate);
-    embedToast(generate ? "Снимок отправлен в генерацию" : "Снимок передан на холст");
+    embedToast(generate
+      ? "Снимок отправлен в генерацию"
+      : "Снимок передан на холст — кистью выделите «Маску перерисовки» (штриховка)");
   } catch (e) {
     console.error(e);
     embedToast("Ошибка: " + (e?.message || e), true, 6000);

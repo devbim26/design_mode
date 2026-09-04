@@ -67,6 +67,7 @@
   .price{color:var(--muted); font-size:11px; white-space:nowrap}
   .price.free{color:var(--free)}
   .badge-free{font-size:10px; color:var(--free); border:1px solid var(--free); border-radius:4px; padding:0 5px}
+  .badge-edit{font-size:10px; color:var(--accent); border:1px solid var(--accent); border-radius:4px; padding:0 5px; white-space:nowrap}
   #gen-model{color:var(--accent); font-weight:600}
   .gen-grid{display:flex; gap:8px; flex-wrap:wrap; margin-top:10px}
   .gen-grid img{max-width:100%; height:auto; border-radius:6px; border:1px solid var(--border); cursor:pointer}
@@ -135,11 +136,18 @@
         <select id="size"><option value="auto">auto</option></select>
       </label>
       <label>Качество:
-        <select id="quality">
+        <select id="quality" disabled title="Поддерживается только моделями с меткой quality">
           <option value="auto">auto</option>
           <option value="low">low</option>
           <option value="medium">medium</option>
           <option value="high">high</option>
+        </select>
+      </label>
+      <label>Формат:
+        <select id="output-format">
+          <option value="webp">webp</option>
+          <option value="jpeg">jpeg</option>
+          <option value="png">png</option>
         </select>
       </label>
       <span class="spacer"></span>
@@ -231,6 +239,15 @@ function avgPrice(m){
   return v == null ? null : v;
 }
 function isFree(m){ var v = avgPrice(m); return v != null && v === 0; }
+// «edit» — модель принимает изображение на вход (image-to-image / правка)
+function isEditable(m){
+  var inputs = ((m.architecture || {}).input_modalities) || [];
+  return inputs.indexOf("image") !== -1;
+}
+// поддержка параметров конкретной моделью (каталог /v3/models)
+function supportsParam(m, p){
+  return ((m && m.supported_parameters) || []).indexOf(p) !== -1;
+}
 
 function renderModels(){
   var q = $("search").value.trim().toLowerCase();
@@ -265,8 +282,9 @@ function renderModels(){
     var price = isFree(m)
       ? '<span class="badge-free">free</span>'
       : (avgPrice(m) != null ? '<span class="price">~$' + avgPrice(m).toFixed(4).replace(/0+$/,"").replace(/\.$/,"") + '/img</span>' : "");
+    var badges = isEditable(m) ? '<span class="badge-edit" title="Модель принимает изображение на вход (image-to-image / правка)">edit</span>' : "";
     el.innerHTML = '<span class="id">' + (prov ? '<span class="prov">' + prov + '</span>/' : '') +
-      "<b>" + name + "</b></span>" + price;
+      "<b>" + name + "</b></span>" + badges + price;
     el.addEventListener("click", function(){ selectModel(m.id); });
     box.appendChild(el);
   });
@@ -291,6 +309,11 @@ function selectModel(id){
     o.value = s; o.textContent = s;
     sel.appendChild(o);
   });
+  // качество доступно только моделям с параметром quality в каталоге
+  var q = $("quality");
+  q.value = "auto";
+  q.disabled = !supportsParam(m, "quality");
+  q.title = q.disabled ? "Эта модель не поддерживает параметр quality" : "";
   setMsg("gen-msg", state.hasKey ? "" : "Чтобы генерировать, задайте API-ключ", "err");
 }
 
@@ -306,9 +329,10 @@ $("gen").addEventListener("click", function(){
   var prompt = $("prompt").value.trim();
   if (!prompt) { setMsg("gen-msg", "Введите промпт", "err"); return; }
   var body = { model: state.selected, prompt: prompt };
-  var size = $("size").value, quality = $("quality").value;
+  var size = $("size").value, quality = $("quality").value, format = $("output-format").value;
   if (size && size !== "auto") body.size = size;
-  if (quality && quality !== "auto") body.quality = quality;
+  if (quality && quality !== "auto" && !$("quality").disabled) body.quality = quality;
+  if (format) body.output_format = format;
   $("gen").disabled = true;
   $("results").innerHTML = "";
   setMsg("gen-msg", "");
