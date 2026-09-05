@@ -57,13 +57,13 @@
     root.id = ID;
     btnMask = document.createElement("button");
     btnMask.type = "button";
-    btnMask.title = "Рисовать маской для правки (полосатая кисть)";
-    btnMask.innerHTML = ICON_MASK + "<span>Маска</span>";
+    btnMask.title = "Paint with the inpaint mask (striped brush)";
+    btnMask.innerHTML = ICON_MASK + "<span>Mask</span>";
     btnMask.onclick = function () { activate("inpaint_mask"); };
     btnLayer = document.createElement("button");
     btnLayer.type = "button";
-    btnLayer.title = "Рисовать цветом по картинке";
-    btnLayer.innerHTML = ICON_LAYER + "<span>Слой</span>";
+    btnLayer.title = "Paint with color on the image";
+    btnLayer.innerHTML = ICON_LAYER + "<span>Layer</span>";
     btnLayer.onclick = function () { activate("raster_layer"); };
     root.appendChild(btnMask);
     root.appendChild(btnLayer);
