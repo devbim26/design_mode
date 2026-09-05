@@ -317,7 +317,7 @@ def patch_canvas_control_layer() -> bool:
     f = targets[0]
     s = f.read_text(encoding="utf-8")
     if JS_ADD_LAYER_CONTROL_OLD not in s:
-        if 'e("controlLayers.controlLayer")' not in s:
+        if JS_ADD_LAYER_CONTROL_NEW in s:
             print("Пункт «Слой управления» уже скрыт, пропуск")
             return False
         print("ОШИБКА: не найден фрагмент меню слоёв (частичная правка?)")
@@ -583,16 +583,19 @@ def patch_index_html() -> bool:
 
 
 def main() -> None:
-    for p in (SRC / "imagerouter_router.py", SRC / "imagerouter.html", SRC / "devbim_admin.js", DIST, API_APP.parent):
+    for p in (SRC / "imagerouter_router.py", SRC / "imagerouter.html", SRC / "devbim_admin.js",
+              MASK_TOGGLE_SRC, DIST, API_APP.parent):
         if not p.exists():
             print("Не найдено:", p)
             sys.exit(1)
     ensure_env_file()
     deploy_files()
+    deploy_mask_toggle()
     patch_api_app()
     patch_js()
     patch_left_panel()
     patch_canvas_control_layer()
+    patch_canvas_bridge()
     patch_left_rail()
     patch_generate_button()
     patch_admin_gate()
