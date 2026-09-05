@@ -282,7 +282,12 @@ invokeai==6.2.0` их нужно запускать повторно в поря
     `dispatch({type:"canvas/entitySelected",payload:{entityIdentifier:{id,type}}})`
     (самый свежий = последний в `entities`), нет →
     `stateApi.addInpaintMask({isSelected:true})` / `addRasterLayer`. Тесты:
-    `tests/test_mask_toggle.py`. ГРАБЛЯ (исправлено заодно): проверка
+    `tests/test_mask_toggle.py`. ГРАБЛЯ (05.09, вечер): canvas-слайс обёрнут
+    в redux-undo (`[Ah.name]:x7(Ah.reducer,...)`, x7 = undoable) — живое
+    состояние в `state.canvas.PRESENT`, а не в `state.canvas`; первый вариант
+    виджета читал `.canvas.inpaintMasks` → undefined → клик умирал молча и
+    подсветка не работала. Хелпер `canvasState(store)` в виджете разворачивает.
+    ГРАБЛЯ (исправлено заодно): проверка
     идемпотентности `patch_canvas_control_layer` (п. 15) искала
     `e("controlLayers.controlLayer")` — эта строка живёт и в других
     компонентах, из-за чего повторный запуск setup падал с «не найден

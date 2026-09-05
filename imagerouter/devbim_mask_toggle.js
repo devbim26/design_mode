@@ -42,6 +42,12 @@
     }
   }
 
+  // Canvas-слайс обёрнут в redux-undo: актуальное состояние в .present.
+  function canvasState(store) {
+    var c = store.getState().canvas;
+    return c && c.present ? c.present : c;
+  }
+
   function render() {
     if (root) return;
     var st = document.createElement("style");
@@ -68,7 +74,7 @@
     var m = manager();
     if (!m) return;
     var store = m.stateApi.store;
-    var cs = store.getState().canvas;
+    var cs = canvasState(store);
     var list = type === "inpaint_mask" ? cs.inpaintMasks.entities : cs.rasterLayers.entities;
     if (list.length > 0) {
       var last = list[list.length - 1];
@@ -92,7 +98,7 @@
       return;
     }
     if (!root) return;
-    var sel = m.stateApi.store.getState().canvas.selectedEntityIdentifier;
+    var sel = canvasState(m.stateApi.store).selectedEntityIdentifier;
     var t = sel && sel.type;
     btnMask.classList.toggle("active", t === "inpaint_mask");
     btnLayer.classList.toggle("active", t === "raster_layer");
