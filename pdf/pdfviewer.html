@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PDF-вьювер — DevBIM</title>
+<title>PDF Viewer — DevBIM</title>
 <style>
   :root{
     --bg:#0c0d0f; --panel:#16181b; --panel2:#1d2024; --border:#2b2f35;
@@ -167,22 +167,22 @@
 <body>
 <header>
   <h1>PDF<span class="bim">Viewer</span></h1>
-  <button id="open-file">Открыть файл…</button>
+  <button id="open-file">Open File…</button>
   <input type="file" id="file-input" accept=".pdf,application/pdf">
-  <button id="upload-server" class="ghost" title="Сохранить текущий документ на сервер" style="display:none">⬆ На сервер</button>
-  <select id="server-list" title="Документы на сервере"><option value="">— с сервера —</option></select>
-  <button id="refresh-list" class="ghost" title="Обновить список документов на сервере">↻</button>
+  <button id="upload-server" class="ghost" title="Save the current document to the server" style="display:none">⬆ Upload</button>
+  <select id="server-list" title="Documents on the server"><option value="">— from server —</option></select>
+  <button id="refresh-list" class="ghost" title="Refresh the server document list">↻</button>
   <span class="spacer"></span>
-  <span class="chip" id="stat-doc">документ не загружен</span>
+  <span class="chip" id="stat-doc">no document loaded</span>
 </header>
 
 <main>
   <section class="side">
     <div class="side-tabs">
-      <button id="tab-thumbs" class="active">Страницы</button>
-      <button id="tab-outline">Оглавление</button>
+      <button id="tab-thumbs" class="active">Pages</button>
+      <button id="tab-outline">Contents</button>
     </div>
-    <div id="thumbs"><div class="placeholder" style="color:var(--muted);font-size:12px;padding:8px 2px">Загрузите документ…</div></div>
+    <div id="thumbs"><div class="placeholder" style="color:var(--muted);font-size:12px;padding:8px 2px">Load a document…</div></div>
     <div id="outline"></div>
   </section>
 
@@ -190,8 +190,8 @@
     <div id="loadbar"><i></i></div>
     <div class="empty" id="empty">
       <div class="big">📄</div>
-      <div>Откройте PDF-файл с диска или выберите документ с сервера.<br>
-      Выделите фрагмент рамкой — и отправьте его на холст или в ассеты.</div>
+      <div>Open a PDF file from disk or pick a document from the server.<br>
+      Drag a frame to select a fragment, then send it to the canvas or assets.</div>
     </div>
     <div id="scroller" style="display:none">
       <div id="page-wrap">
@@ -200,25 +200,25 @@
       </div>
     </div>
     <div id="toolbar" style="display:none">
-      <button id="btn-zoom-out" class="ghost" title="Уменьшить">−</button>
-      <button id="btn-zoom-label" class="ghost" title="Масштаб 100%">100%</button>
-      <button id="btn-zoom-in" class="ghost" title="Увеличить">+</button>
-      <button id="btn-fit-width" class="ghost" title="Вписать по ширине">↔ Ширина</button>
-      <button id="btn-fit-page" class="ghost" title="Вписать страницу целиком">⛶ Вписать</button>
-      <button id="btn-rotate" class="ghost" title="Повернуть на 90°">↻</button>
+      <button id="btn-zoom-out" class="ghost" title="Zoom out">−</button>
+      <button id="btn-zoom-label" class="ghost" title="Zoom 100%">100%</button>
+      <button id="btn-zoom-in" class="ghost" title="Zoom in">+</button>
+      <button id="btn-fit-width" class="ghost" title="Fit width">↔ Width</button>
+      <button id="btn-fit-page" class="ghost" title="Fit the whole page">⛶ Fit</button>
+      <button id="btn-rotate" class="ghost" title="Rotate 90°">↻</button>
     </div>
     <div id="pagenav" style="display:none">
-      <button id="btn-prev" class="ghost" title="Предыдущая страница">‹</button>
+      <button id="btn-prev" class="ghost" title="Previous page">‹</button>
       <input id="page-input" type="number" min="1" value="1">
       <span class="total" id="page-total">/ 1</span>
-      <button id="btn-next" class="ghost" title="Следующая страница">›</button>
+      <button id="btn-next" class="ghost" title="Next page">›</button>
     </div>
     <div id="actionbar">
-      <span class="info">Фрагмент: <span class="out" id="sel-out">—</span></span>
-      <button id="btn-to-canvas" title="Положить фрагмент на холст подложкой (со слоем маски перерисовки)">🖼 На холст</button>
-      <button id="btn-save-assets" class="ghost" style="color:var(--ok);border-color:var(--ok)" title="Сохранить фрагмент в галерею (ассеты)">💾 В ассеты</button>
+      <span class="info">Fragment: <span class="out" id="sel-out">—</span></span>
+      <button id="btn-to-canvas" title="Place the fragment on the canvas as a base layer (with an inpaint mask layer)">🖼 To Canvas</button>
+      <button id="btn-save-assets" class="ghost" style="color:var(--ok);border-color:var(--ok)" title="Save the fragment to the gallery (Assets tab)">💾 To Assets</button>
     </div>
-    <div id="navhelp">ЛКМ-рамка — выделить фрагмент · ESC — сброс · Ctrl+колесо — зум</div>
+    <div id="navhelp">Drag — select fragment · ESC — reset · Ctrl+wheel — zoom</div>
     <div class="devbim-logo">
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <path d="M12 2 21 7v10l-9 5-9-5V7l9-5z" stroke="#38BDF8" stroke-width="1.7" stroke-linejoin="round"/>
@@ -230,7 +230,7 @@
 </main>
 
 <footer>
-  <span id="status">Готов</span>
+  <span id="status">Ready</span>
   <span class="spacer"></span>
   <span id="info"></span>
 </footer>
@@ -263,9 +263,9 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 }
 function fmtSize(b) {
-  if (b > 1024 * 1024) return (b / 1024 / 1024).toFixed(1) + " МБ";
-  if (b > 1024) return (b / 1024).toFixed(0) + " КБ";
-  return b + " Б";
+  if (b > 1024 * 1024) return (b / 1024 / 1024).toFixed(1) + " MB";
+  if (b > 1024) return (b / 1024).toFixed(0) + " KB";
+  return b + " B";
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -289,15 +289,15 @@ const io = "IntersectionObserver" in window ? new IntersectionObserver(onThumbVi
 // ============================== загрузка документа ==============================
 async function openPdf(data, name, { server = false, file = null } = {}) {
   closeDoc(false);
-  setStatus("Открытие " + name + "…");
+  setStatus("Opening " + name + "…");
   setProgress(0.15);
   const task = pdfjsLib.getDocument({ data, isEvalSupported: false });
   let pwTries = 0;
   task.onPassword = (updatePw, reason) => {
     const wrong = reason === pdfjsLib.PasswordResponses.INCORRECT_PASSWORD;
-    if (wrong && ++pwTries >= 3) throw new Error("Неверный пароль документа");
-    const pw = prompt(wrong ? "Неверный пароль. Пароль PDF-документа:" : "Документ защищён паролем. Введите пароль:");
-    if (pw === null) throw new Error("Документ защищён паролем");
+    if (wrong && ++pwTries >= 3) throw new Error("Wrong document password");
+    const pw = prompt(wrong ? "Wrong password. PDF document password:" : "The document is password-protected. Enter the password:");
+    if (pw === null) throw new Error("Document is password-protected");
     updatePw(pw);
   };
   try {
@@ -305,7 +305,7 @@ async function openPdf(data, name, { server = false, file = null } = {}) {
   } catch (e) {
     console.error(e);
     setProgress(null);
-    setStatus("Не удалось открыть PDF: " + (e?.message || e), true);
+    setStatus("Failed to open PDF: " + (e?.message || e), true);
     return false;
   }
   docName = name;
@@ -322,7 +322,7 @@ async function openPdf(data, name, { server = false, file = null } = {}) {
   $("pagenav").style.display = "flex";
   $("upload-server").style.display = server || !file ? "none" : "";
   const chip = $("stat-doc");
-  chip.textContent = `${name} · ${pdf.numPages} стр.`;
+  chip.textContent = `${name} · ${pdf.numPages} pages`;
   chip.className = "chip ok";
   $("page-total").textContent = "/ " + pdf.numPages;
   setProgress(0.55);
@@ -331,7 +331,7 @@ async function openPdf(data, name, { server = false, file = null } = {}) {
   if (server) { try { localStorage.setItem(LAST_DOC_KEY, name); } catch {} }
   await renderCurrentPage();
   setProgress(null);
-  setStatus(`Документ открыт: ${name}, страниц: ${pdf.numPages}`);
+  setStatus(`Document opened: ${name}, pages: ${pdf.numPages}`);
   return true;
 }
 
@@ -343,7 +343,7 @@ function closeDoc(keepList) {
   selection = null; thumbCache.clear(); outlineItems = [];
   io?.disconnect?.();
   if (!keepList) {
-    $("thumbs").innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px 2px">Загрузите документ…</div>';
+    $("thumbs").innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px 2px">Load a document…</div>';
     $("outline").innerHTML = "";
     $("tab-outline").style.display = "";
     switchSide("thumbs");
@@ -351,7 +351,7 @@ function closeDoc(keepList) {
 }
 
 async function loadServerDoc(name, { page = 1 } = {}) {
-  setStatus("Загрузка " + name + " с сервера…");
+  setStatus("Loading " + name + " from server…");
   const r = await fetch("/api/v1/pdf/file/" + encodeURIComponent(name));
   if (!r.ok) throw new Error("HTTP " + r.status);
   const buf = await r.arrayBuffer();
@@ -391,7 +391,7 @@ async function renderCurrentPage({ keepScroll = false } = {}) {
   const ctx = canvas.getContext("2d");
   ctx.fillStyle = "#ffffff";
   ctx.fillRect(0, 0, canvas.width, canvas.height);
-  setStatus(`Страница ${pageNum} / ${pdf.numPages}…`);
+  setStatus(`Page ${pageNum} / ${pdf.numPages}…`);
   renderTask = page.render({
     canvasContext: ctx,
     viewport: vp,
@@ -412,8 +412,8 @@ async function renderCurrentPage({ keepScroll = false } = {}) {
   $("btn-zoom-label").textContent = Math.round(scale * 100) + "%";
   $("page-input").value = pageNum;
   markCurrentThumb();
-  $("info").textContent = `${docName ?? ""} · стр. ${pageNum}/${pdf.numPages} · ${Math.round(scale * 100)}%`;
-  setStatus(`Страница ${pageNum} / ${pdf.numPages}`);
+  $("info").textContent = `${docName ?? ""} · p. ${pageNum}/${pdf.numPages} · ${Math.round(scale * 100)}%`;
+  setStatus(`Page ${pageNum} / ${pdf.numPages}`);
   try { localStorage.setItem(LAST_PAGE_KEY, String(pageNum)); } catch {}
 }
 
@@ -421,7 +421,7 @@ let zoomTimer = null;
 function scheduleRender(opts = {}) {
   clearTimeout(zoomTimer);
   zoomTimer = setTimeout(() => renderCurrentPage(opts).catch((e) => {
-    console.error(e); setStatus("Ошибка рендера: " + (e?.message || e), true);
+    console.error(e); setStatus("Render error: " + (e?.message || e), true);
   }), 120);
 }
 
@@ -434,7 +434,7 @@ async function gotoPage(n) {
   markCurrentThumb();
   const t = thumbFor(n); // прокрутить миниатюру к виду
   t?.scrollIntoView({ block: "nearest" });
-  await renderCurrentPage().catch((e) => { setStatus("Ошибка рендера: " + (e?.message || e), true); });
+  await renderCurrentPage().catch((e) => { setStatus("Render error: " + (e?.message || e), true); });
 }
 
 // зум: factor вокруг точки (clientX, clientY) либо центра вьюпорта
@@ -480,7 +480,7 @@ function buildThumbs() {
     t.className = "thumb" + (n === pageNum ? " cur" : "");
     t.dataset.page = n;
     t.innerHTML = `<div class="ph">…</div><span class="num">${n}</span>`;
-    t.title = "Страница " + n;
+    t.title = "Page " + n;
     t.addEventListener("click", () => gotoPage(n));
     grid.appendChild(t);
     io?.observe(t);
@@ -725,25 +725,25 @@ async function uploadImage(blob, name, category = "general") {
 }
 
 async function sendFragment({ toCanvas = false } = {}) {
-  if (!selection || !pdf) { setStatus("Сначала выделите фрагмент рамкой", true); return; }
+  if (!selection || !pdf) { setStatus("Select a fragment first (drag a frame)", true); return; }
   const btn = toCanvas ? $("btn-to-canvas") : $("btn-save-assets");
   btn.disabled = true;
   try {
-    setStatus("Готовка фрагмента…");
+    setStatus("Preparing fragment…");
     const { blob, name } = await cropSelection();
     if (toCanvas) {
       const dto = await uploadImage(blob, name, "general");
       const api = window.parent && window.parent.__devbimIfc;
-      if (!api?.toCanvas) throw new Error("мост к холсту недоступен (перезагрузите страницу)");
+      if (!api?.toCanvas) throw new Error("canvas bridge unavailable (reload the page)");
       await api.toCanvas(dto, false);
-      setStatus(`Фрагмент стр. ${pageNum} передан на холст — кистью выделите «Маску перерисовки»`);
+      setStatus(`Page ${pageNum} fragment placed on canvas — brush an inpaint mask, then Generate`);
     } else {
       const dto = await uploadImage(blob, name, "user");
-      setStatus(`Фрагмент стр. ${pageNum} сохранён во вкладке «Assets» галереи (${name})`);
+      setStatus(`Page ${pageNum} fragment saved to the gallery "Assets" tab (${name})`);
     }
   } catch (e) {
     console.error(e);
-    setStatus("Ошибка: " + (e?.message || e), true);
+    setStatus("Error: " + (e?.message || e), true);
   } finally {
     btn.disabled = false;
   }
@@ -757,10 +757,10 @@ async function refreshServerList() {
     if (!r.ok) throw new Error("HTTP " + r.status);
     const d = await r.json();
     const docs = d.docs || [];
-    sel.innerHTML = '<option value="">— с сервера —</option>' +
+    sel.innerHTML = '<option value="">— from server —</option>' +
       docs.map((n) => `<option value="${escapeHtml(n.name)}">${escapeHtml(n.name)}${n.size ? " · " + fmtSize(n.size) : ""}</option>`).join("");
   } catch {
-    sel.innerHTML = '<option value="">— сервер: нет документов —</option>';
+    sel.innerHTML = '<option value="">— server: no documents —</option>';
   }
 }
 
@@ -769,7 +769,7 @@ async function uploadToServer() {
   const btn = $("upload-server");
   btn.disabled = true;
   try {
-    setStatus("Сохранение на сервер…");
+    setStatus("Uploading to server…");
     const fd = new FormData();
     fd.append("file", docFile, docName);
     const r = await fetch("/api/v1/pdf/upload", { method: "POST", body: fd });
@@ -779,9 +779,9 @@ async function uploadToServer() {
     $("upload-server").style.display = "none";
     try { localStorage.setItem(LAST_DOC_KEY, d.name || docName); } catch {}
     await refreshServerList();
-    setStatus("Сохранено на сервере: " + (d.name || docName));
+    setStatus("Saved to server: " + (d.name || docName));
   } catch (e) {
-    setStatus("Не удалось сохранить на сервер: " + (e?.message || e), true);
+    setStatus("Upload to server failed: " + (e?.message || e), true);
   } finally {
     btn.disabled = false;
   }
@@ -792,7 +792,7 @@ $("open-file").addEventListener("click", () => $("file-input").click());
 $("file-input").addEventListener("change", async (e) => {
   const f = e.target.files?.[0];
   if (!f) return;
-  if (!/\.pdf$/i.test(f.name)) { setStatus("Нужен файл .pdf", true); e.target.value = ""; return; }
+  if (!/\.pdf$/i.test(f.name)) { setStatus("A .pdf file is required", true); e.target.value = ""; return; }
   const buf = await f.arrayBuffer();
   await openPdf(new Uint8Array(buf), f.name, { file: f });
   e.target.value = "";
@@ -805,7 +805,7 @@ $("server-list").addEventListener("change", async (e) => {
   try {
     await loadServerDoc(name);
   } catch (err) {
-    setStatus("Не удалось загрузить: " + err.message, true);
+    setStatus("Failed to load: " + err.message, true);
   } finally {
     e.target.value = "";
   }
@@ -840,7 +840,7 @@ $("scroller").addEventListener("wheel", (e) => {
   if (!e.ctrlKey || !pdf) return;
   e.preventDefault();
   zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX, e.clientY)
-    .catch((err) => setStatus("Ошибка зума: " + err.message, true));
+    .catch((err) => setStatus("Zoom error: " + err.message, true));
 }, { passive: false });
 
 window.addEventListener("keydown", (e) => {
