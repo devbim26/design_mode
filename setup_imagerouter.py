@@ -52,6 +52,14 @@ API_APP = SP / "invokeai" / "app" / "api_app.py"
 INDEX_HTML = DIST / "index.html"
 ADMIN_JS_DST = DIST / "devbim-admin.js"
 
+MASK_TOGGLE_SRC = SRC / "devbim_mask_toggle.js"
+MASK_TOGGLE_NAME = "devbim-mask-toggle.js"
+
+# Якорь тот же, что у setup_ifcviewer.py (JS_APPCONTENT_ANCHOR): вставка
+# префиксом, якорь сохраняется для IFC-патча при любом порядке запуска.
+JS_CANVAS_BRIDGE_ANCHOR = "const cue=u.memo("
+JS_CANVAS_BRIDGE = "window.__devbimCanvasBridge={getManager:()=>ru.get()};"
+
 # Новый компонент InstallModels: одна вкладка ImageRouter с iframe.
 # __NAME__ — имя минифицированного компонента из оригинального бандла.
 JS_NEW_COMPONENT = (
@@ -87,6 +95,36 @@ def deploy_files() -> None:
     print("Роутер развернут:", ROUTER_DST)
     print("Страница развернута:", DIST / "imagerouter.html")
     print("Скрипт админдоступа развернут:", ADMIN_JS_DST)
+
+
+def deploy_mask_toggle(dist: Path | None = None) -> bool:
+    """Деплой тумблера «Маска / Слой»: копия в dist/ + script в index.html."""
+    dist = dist or DIST
+    dst = dist / MASK_TOGGLE_NAME
+    index = dist / "index.html"
+    if not MASK_TOGGLE_SRC.exists():
+        print("ОШИБКА: нет источника", MASK_TOGGLE_SRC)
+        sys.exit(1)
+    if not index.exists():
+        print("ОШИБКА: нет index.html в", dist)
+        sys.exit(1)
+    shutil.copy2(MASK_TOGGLE_SRC, dst)
+    s = index.read_text(encoding="utf-8")
+    if MASK_TOGGLE_NAME in s:
+        print("index.html уже подключает", MASK_TOGGLE_NAME + ", пропуск")
+        print("Тумблер развернут:", dst)
+        return False
+    if "</head>" not in s:
+        print("ОШИБКА: в index.html нет </head>")
+        sys.exit(1)
+    bak = index.with_suffix(".html.masktoggle-bak")
+    if not bak.exists():
+        shutil.copy2(index, bak)
+    tag = f'  <script src="/{MASK_TOGGLE_NAME}" defer></script>\n</head>'
+    index.write_text(s.replace("</head>", tag, 1), encoding="utf-8")
+    print("index.html подключает", MASK_TOGGLE_NAME + f" (бэкап: {bak.name})")
+    print("Тумблер развернут:", dst)
+    return True
 
 
 def ensure_env_file() -> None:
@@ -293,6 +331,36 @@ def patch_canvas_control_layer() -> bool:
         shutil.copy2(f, bak)
     f.write_text(s, encoding="utf-8")
     print(f"Пункт «Слой управления» (ControlNet) убран из меню слоёв: {f.name} (бэкап: {bak.name})")
+    return True
+
+
+def patch_canvas_bridge(bundle: Path | None = None) -> bool:
+    """Мост менеджера канваса для тумблера «Маска/Слой» (devbim_mask_toggle.js)."""
+    if bundle is None:
+        targets = [
+            f for f in DIST.glob("assets/*.js")
+            if 'displayName="TabContent"' in f.read_text(encoding="utf-8")
+        ]
+        if len(targets) != 1:
+            print(f"ОШИБКА: App-бандл (TabContent) найден {len(targets)} раз (ожидался 1)")
+            sys.exit(1)
+        bundle = targets[0]
+    s = bundle.read_text(encoding="utf-8")
+    if "__devbimCanvasBridge" in s:
+        print("Мост канваса уже установлен, пропуск")
+        return False
+    if s.count(JS_CANVAS_BRIDGE_ANCHOR) != 1:
+        print(f"ОШИБКА: якорь моста найден {s.count(JS_CANVAS_BRIDGE_ANCHOR)} раз (ожидался 1)")
+        sys.exit(1)
+    if ",ru=" not in s:
+        print("ОШИБКА: в бандле нет ru (стор менеджера) — структура изменилась")
+        sys.exit(1)
+    bak = bundle.with_suffix(bundle.suffix + ".imagerouter-bak")
+    if not bak.exists():
+        shutil.copy2(bundle, bak)
+    s = s.replace(JS_CANVAS_BRIDGE_ANCHOR, JS_CANVAS_BRIDGE + JS_CANVAS_BRIDGE_ANCHOR, 1)
+    bundle.write_text(s, encoding="utf-8")
+    print(f"Мост канваса установлен: {bundle.name} (бэкап: {bak.name})")
     return True
 
 
