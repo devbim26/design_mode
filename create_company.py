@@ -2,7 +2,7 @@
 """Создание экземпляра DevBIM Image Studio для компании-лицензиата.
 
 python create_company.py --name "ООО «Стройпроект»" --code stroyproekt \
-       [--valid-until 2027-09-05] [--password пароль] [--yes]
+       [--valid-until 2027-09-05] [--password пароль]
 
 Создаёт companies/<код>/ (.env, data/invokeai.yaml, CREDENTIALS.txt),
 записывает компанию в companies.json. Запуск сервера:
@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from datetime import date
 from pathlib import Path
 
 import company_manager as cm
@@ -63,15 +64,17 @@ IMAGEROUTER_API_KEY={ir_key}
 
 def create_company(code: str, name: str, valid_until: str | None = None,
                    password: str | None = None,
-                   admin_password: str | None = None,
-                   yes: bool = False) -> dict:
+                   admin_password: str | None = None) -> dict:
     if not cm.valid_code(code):
         _die(f"код компании «{code}»: только строчные латиница/цифры/дефис, 2-32 символа")
     if cm.find_row(code):
         _die(f"компания с кодом «{code}» уже существует")
 
-    if valid_until and not re.match(r"^\d{4}-\d{2}-\d{2}$", valid_until):
-        _die("valid-until должен быть в формате ГГГГ-ММ-ДД")
+    if valid_until:
+        try:
+            date.fromisoformat(valid_until)
+        except ValueError:
+            _die(f"valid-until «{valid_until}» — не дата; формат ГГГГ-ММ-ДД (например 2027-09-05)")
 
     password = password or cm.gen_password()
     admin_password = admin_password or cm.gen_password()
@@ -80,7 +83,9 @@ def create_company(code: str, name: str, valid_until: str | None = None,
     port = cm.next_port(rows)
 
     cdir = COMPANIES_DIR / code
-    (cdir / "data").mkdir(parents=True, exist_ok=True)
+    if cdir.exists():
+        _die(f"каталог {cdir} уже существует (компания без записи в реестре?) — удалите его или восстановите companies.json")
+    (cdir / "data").mkdir(parents=True)
 
     # invokeai.yaml: копия базового с заменой порта
     src_yaml = BASE / "data" / "invokeai.yaml"
@@ -135,10 +140,10 @@ def main() -> None:
     ap.add_argument("--valid-until", default=None, help="срок лицензии ГГГГ-ММ-ДД")
     ap.add_argument("--password", default=None, help="пароль входа (иначе генерируется)")
     ap.add_argument("--admin-password", default=None)
-    ap.add_argument("--yes", action="store_true", help="без вопросов")
-    create_company(ap.parse_args().code, ap.parse_args().name,
-                   ap.parse_args().valid_until, ap.parse_args().password,
-                   ap.parse_args().admin_password, ap.parse_args().yes)
+    args = ap.parse_args()
+    create_company(code=args.code, name=args.name,
+                   valid_until=args.valid_until, password=args.password,
+                   admin_password=args.admin_password)
 
 
 if __name__ == "__main__":

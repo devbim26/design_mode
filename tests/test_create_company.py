@@ -48,6 +48,25 @@ except SystemExit as e:
 row2 = cc.create_company(code="beta", name="ООО «Б»")
 assert row2["port"] != row["port"]
 
+# существующий каталог без записи в реестре -> отказ (перезапись запрещена)
 shutil.rmtree(cm.COMPANIES_DIR, ignore_errors=True)
 cm.REGISTRY_PATH.unlink()
+(cm.COMPANIES_DIR / "acme").mkdir(parents=True)
+try:
+    cc.create_company(code="acme", name="ООО «А»")
+    raise SystemExit("перезапись существующего каталога не отработана")
+except SystemExit as e:
+    assert "уже существует" in str(e), str(e)
+shutil.rmtree(cm.COMPANIES_DIR, ignore_errors=True)
+
+# некорректная дата -> отказ
+try:
+    cc.create_company(code="gamma", name="ООО «Г»", valid_until="2027-13-45")
+    raise SystemExit("валидация даты не отработана")
+except SystemExit as e:
+    assert "ГГГГ-ММ-ДД" in str(e), str(e)
+
+shutil.rmtree(cm.COMPANIES_DIR, ignore_errors=True)
+if cm.REGISTRY_PATH.exists():
+    cm.REGISTRY_PATH.unlink()
 print("OK")
