@@ -485,6 +485,27 @@ invokeai==6.2.0` их нужно запускать повторно в поря
     `__devbimCanvasBridge` из п.16 (тот же якорь, тоже префикс).
     Порядок после force-reinstall: rebrand → imagerouter → ifcviewer →
     **pdfviewer** (гейт: без `__devbimIfc` в бандле откажется) → siteauth.
+    + ПАНЕЛЬ «PDF Viewer» НА ХОЛСТЕ (05.09, вечер, вслед за запросом
+    пользователя): в главную dockview-область рядом с «Image Viewer»/
+    «IFC Viewer» добавляется третья панель (iframe ?embed=1 — без
+    шапки/сайдбара/фута, плавающие тулбар/навигация/селектор документов
+    `#embedbar`, статусы — тостом `#etoast`). Реализация — как IFCE/IFCV
+    у IFC: `PDFP(e,t)` вызывается в onReady goe ПОСЛЕ регистрации
+    (fromJSON не зовёт колбэк дефолтного layout — покрыты оба пути),
+    `pdfviewer:jn(PDFV)` в карте компонентов, focusRegion "viewer",
+    tabComponent t$, position `within` группы viewer-панели. PDFV, как
+    PDFE и IFCV, захватывает Je() в `__devbimIfcCtx` — активной бывает
+    одна панель dockview (неактивные демонтируются), за глобаль не
+    спорят. ГРАБЛИ (ожидаемое поведение, не баг): после «To Canvas»
+    мост делает focusPanel("canvas") — активной становится панель
+    редактора, PDF-панель демонтируется (iframe detach) — как у IFC;
+    документ/страница восстанавливаются автозагрузкой при возврате на
+    панель. Embed-синхронизация: storage-событие по lastDoc — вкладка
+    «PDF» открыла другой документ, панель перезагружает его (как IFC).
+    Layout с панелью сохраняется и переживает F5. Якоря патча (после
+    ifcviewer): onReady `({api:n})=>{eWe(e,n),IFCE(e,n)}` → `+PDFP(e,n)`,
+    компоненты `components:{...JUe,ifcviewer:jn(IFCV)}` → `+pdfviewer:
+    jn(PDFV)`; идемпотентность — по наличию `PDFP(e,n)` в onReady.
     Тесты: `tests/test_pdf_router.py`; генератор тестового PDF с
     оглавлением — `tests/make_test_pdf.py`. Отладка: `window.__pdf`
     в iframe (doc/page/selection/gotoPage).

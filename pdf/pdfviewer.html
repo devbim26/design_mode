@@ -159,9 +159,23 @@
   }
   @keyframes sp{to{transform:rotate(360deg)}}
 
-  /* --- embed-режим (?embed=1, на будущее) --- */
+  /* --- embed-режим: панель PDF на вкладке «Холст» (?embed=1) --- */
   body.embed header, body.embed .side, body.embed footer, body.embed #navhelp{display:none}
   body.embed main{grid-template-columns:1fr}
+  #embedbar{
+    display:none; align-items:center; gap:6px;
+    position:absolute; right:10px; top:10px; z-index:5;
+    background:rgba(22,24,27,.92); border:1px solid var(--border); border-radius:8px;
+    padding:4px 8px; max-width:calc(50% - 20px);
+  }
+  body.embed #embedbar{display:flex}
+  #embedbar select{max-width:240px; padding:4px 6px; font-size:12px}
+  #etoast{
+    display:none; position:absolute; left:50%; transform:translateX(-50%); top:52px;
+    background:rgba(22,24,27,.95); border:1px solid var(--border); border-radius:6px;
+    padding:5px 12px; font-size:12px; z-index:8; max-width:calc(100% - 20px);
+  }
+  #etoast.err{color:var(--err); border-color:var(--err)}
 </style>
 </head>
 <body>
@@ -219,6 +233,10 @@
       <button id="btn-save-assets" class="ghost" style="color:var(--ok);border-color:var(--ok)" title="Save the fragment to the gallery (Assets tab)">💾 To Assets</button>
     </div>
     <div id="navhelp">Drag — select fragment · ESC — reset · Ctrl+wheel — zoom</div>
+    <div id="embedbar">
+      <select id="embed-server-list" title="Document"><option value="">— document —</option></select>
+    </div>
+    <div id="etoast"></div>
     <div class="devbim-logo">
       <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
         <path d="M12 2 21 7v10l-9 5-9-5V7l9-5z" stroke="#38BDF8" stroke-width="1.7" stroke-linejoin="round"/>
@@ -241,6 +259,22 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf/pdf.worker.min.mjs";
 
 const $ = (id) => document.getElementById(id);
 const DPR = Math.min(window.devicePixelRatio || 1, 2);
+
+// embed-режим: панель «PDF Viewer» на вкладке «Холст» (?embed=1) —
+// без шапки/сайдбара/фута; документы — через плавающий селектор и
+// автозагрузку последнего, статусы дублируются тостом
+const EMBED = new URLSearchParams(location.search).get("embed") === "1";
+if (EMBED) document.body.classList.add("embed");
+
+function embedToast(msg, isErr, ms = 2400) {
+  if (!EMBED) return;
+  const t = $("etoast");
+  t.textContent = msg;
+  t.className = isErr ? "err" : "";
+  t.style.display = "block";
+  clearTimeout(t._tm);
+  t._tm = setTimeout(() => { t.style.display = "none"; }, ms);
+}
 const THUMB_W = 104;               // ширина миниатюры, px
 const THUMB_CACHE_MAX = 400;       // максимум закешированных миниатюр
 const CROP_TARGET_PX = 2048;       // целевая длинная сторона фрагмента
@@ -252,6 +286,7 @@ function setStatus(msg, isErr) {
   const s = $("status");
   s.className = isErr ? "err" : "";
   s.textContent = msg;
+  if (EMBED) embedToast(msg, isErr, isErr ? 6000 : 2000);
 }
 function setProgress(p) { // p: 0..1 | null
   const bar = $("loadbar");
@@ -863,13 +898,10 @@ new ResizeObserver(() => {
 }).observe($("scroller"));
 
 // ============================== init ==============================
-const EMBED = new URLSearchParams(location.search).get("embed") === "1";
-if (EMBED) document.body.classList.add("embed");
-
 refreshServerList();
 
-// автозагрузка последнего серверного документа + страницы (вкладка
-// размонтируется при переключении — состояние iframe не живёт)
+// автозагрузка последнего серверного документа + страницы (вкладка/панель
+// размонтируются при переключении — состояние iframe не живёт)
 (async () => {
   let last = null, lastPage = 1;
   try {
@@ -881,6 +913,46 @@ refreshServerList();
     try { localStorage.removeItem(LAST_DOC_KEY); } catch {}
   });
 })();
+
+// --- embed-режим: селектор документов + живая синхронизация с вкладкой PDF ---
+if (EMBED) {
+  (async () => {
+    const sel = $("embed-server-list");
+    try {
+      const r = await fetch("/api/v1/pdf/list");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const d = await r.json();
+      const docs = d.docs || [];
+      sel.innerHTML = '<option value="">— document —</option>' +
+        docs.map((n) => `<option value="${escapeHtml(n.name)}">${escapeHtml(n.name)}${n.size ? " · " + fmtSize(n.size) : ""}</option>`).join("");
+    } catch {
+      sel.innerHTML = '<option value="">— server: no documents —</option>';
+    }
+  })();
+
+  $("embed-server-list").addEventListener("change", async (e) => {
+    const name = e.target.value;
+    if (!name) return;
+    try {
+      await loadServerDoc(name);
+    } catch (err) {
+      setStatus("Failed to load: " + err.message, true);
+    } finally {
+      e.target.value = "";
+    }
+  });
+
+  // вкладка «PDF» открыла другой документ — подхватываем (storage-событие
+  // приходит только в ДРУГИХ окнах того же origin, здесь это и нужно)
+  window.addEventListener("storage", (e) => {
+    if (e.key !== LAST_DOC_KEY || !e.newValue) return;
+    if (e.newValue === docName) return;
+    loadServerDoc(e.newValue).catch((err) => {
+      console.warn("sync:", err);
+      setStatus("Sync: failed to load " + e.newValue, true);
+    });
+  });
+}
 
 // отладка из консоли: window.__pdf.doc / __pdf.page
 window.__pdf = {
