@@ -376,6 +376,37 @@ invokeai==6.2.0` их нужно запускать повторно в поря
   4) UI-мелочь: локальный select «с сервера» не обновляется сам после
      upload из другой вкладки — уже есть кнопка ↻ (обновить список).
 
+15. **Мультикомпанность: экземпляр сервера на компанию** (05.09.2026).
+    Продажа по компаниям: каждой — отдельный процесс InvokeAI со своим
+    портом (9100+), паролем и корнем `companies/<код>/data` (галерея,
+    IFC-файлы, БД изолированы автоматически; venv и патчи общие).
+    Спека/план: `docs/superpowers/specs|plans/2026-09-05-company-instances*`.
+    - Скрипты: `create_company.py` (--name/--code/--valid-until/--password;
+      создаёт `.env`, `data/invokeai.yaml` с портом, `CREDENTIALS.txt`,
+      запись в `companies.json`; защита от перезаписи существующего
+      каталога), `start_company.bat <код>` (cwd=companies/<код>,
+      INVOKEAI_ROOT=.../data, chcp 65001, лог companies/<код>/server.log),
+      `stop_company.py` (psutil по порту; AccessDenied → нужен админ),
+      `list_companies.py`; библиотека `company_manager.py`.
+    - `siteauth/site_auth.py`: +`SITE_VALID_UNTIL` (ГГГГ-ММ-ДД) — при
+      просрочке все запросы (http+ws) закрываются страницей «Лицензия
+      истекла» (200); дата входит в токен куки sha256(соль+пароль+дата).
+      ГРАБЛЯ (исправлено): `_load_env_file` кэширует значения в
+      os.environ — из-за этого правка .env не подхватывалась без
+      перезапуска; теперь `_env_value(key)` перечитывает .env-файл на
+      каждом вызове (порядок кандидатов INVOKEAI_ROOT → parent → cwd,
+      файл — источник истины, пустое значение = бессрочно). Пароль по
+      умолчанию «devbim», fallback os.environ при отсутствии файлов.
+    - IFC per-company: `_store_dir()` = `get_config().root_path/ifc` —
+      у каждой компании своя папка, создаётся при первой загрузке;
+      перенос моделей = копирование файлов.
+    - Тесты (plain asserts, печать OK): `tests/test_site_auth.py`,
+      `test_company_manager.py`, `test_create_company.py`.
+    - Проверка компании: create → `start_company.bat <код>` (первый старт
+      ~1 мин — инициализация БД) → `curl http://127.0.0.1:<порт>/auth/login`
+      → stop. Секреты (`companies/*`, `companies.json`, `.env`) в git
+      не входят; в git только `companies/.gitkeep`.
+
 ## Проверка после изменений
 
 ```powershell
