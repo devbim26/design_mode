@@ -265,6 +265,32 @@ invokeai==6.2.0` их нужно запускать повторно в поря
    модернизация под облачную генерацию. Проверка после патча: node-import
    App-бандла — только `document is not defined`.
 
+16. **Тумблер «Маска / Слой» на холсте** (05.09, вечер). Пилюля над нижней
+    панелью холста: подсвечивает слой, которым рисует кисть (Маска =
+    inpaint_mask, полосатая кисть; Слой = raster_layer, цвет), и переключает
+    его одним кликом. Реализация: мост в App-бандле
+    `window.__devbimCanvasBridge={getManager:()=>ru.get()}` (вставка перед
+    якорем `const cue=u.memo(` — тот же якорь, что у IFC-патча; вставка
+    префиксом, якорь сохраняется) + виджет `imagerouter/devbim_mask_toggle.js`
+    → `dist/devbim-mask-toggle.js` + script в index.html. Всё — в
+    `setup_imagerouter.py`: `patch_canvas_bridge()` (бандл ищется по
+    `displayName="TabContent"`), `deploy_mask_toggle()` (бэкап
+    `index.html.masktoggle-bak`). Виджет: тик 500 мс ждёт мост и
+    `__devbimGetTab()`, показывается только на вкладке canvas; подсветка —
+    через `store.subscribe` (store = `manager.stateApi.store`), состояние
+    `state.canvas.selectedEntityIdentifier.type`; клик: слой есть →
+    `dispatch({type:"canvas/entitySelected",payload:{entityIdentifier:{id,type}}})`
+    (самый свежий = последний в `entities`), нет →
+    `stateApi.addInpaintMask({isSelected:true})` / `addRasterLayer`. Тесты:
+    `tests/test_mask_toggle.py`. ГРАБЛЯ (исправлено заодно): проверка
+    идемпотентности `patch_canvas_control_layer` (п. 15) искала
+    `e("controlLayers.controlLayer")` — эта строка живёт и в других
+    компонентах, из-за чего повторный запуск setup падал с «не найден
+    фрагмент»; теперь проверка по NEW-фрагменту, как у остальных патчей.
+    Правка вида/позиции — правкой `imagerouter/devbim_mask_toggle.js` +
+    повторный `setup_imagerouter.py` (как баннер). Откат: `*.imagerouter-bak`,
+    `index.html.masktoggle-bak`, удалить `dist/devbim-mask-toggle.js`.
+
 ## Ключевые технические детали (грабли, на которые уже наступили)
 
 - **URL фронтенд строит из openapi operationId** (не литералы в JS).
@@ -376,7 +402,7 @@ invokeai==6.2.0` их нужно запускать повторно в поря
   4) UI-мелочь: локальный select «с сервера» не обновляется сам после
      upload из другой вкладки — уже есть кнопка ↻ (обновить список).
 
-15. **Мультикомпанность: экземпляр сервера на компанию** (05.09.2026).
+17. **Мультикомпанность: экземпляр сервера на компанию** (05.09.2026).
     Продажа по компаниям: каждой — отдельный процесс InvokeAI со своим
     портом (9100+), паролем и корнем `companies/<код>/data` (галерея,
     IFC-файлы, БД изолированы автоматически; venv и патчи общие).
@@ -413,6 +439,7 @@ invokeai==6.2.0` их нужно запускать повторно в поря
 cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
 .\venv\Scripts\python.exe .\setup_imagerouter.py        # применить патчи
 .\venv\Scripts\python.exe .\setup_ifcviewer.py          # вкладка IFC (идемпотентно)
+.\venv\Scripts\python.exe .\tests\test_mask_toggle.py   # тумблер Маска/Слой
 # проверить, что index-бандл парсится (после патчей навигации!):
 node -e "import('file:///C:/Users/Lenovo/Desktop/проект SOFT_2/Дизайн/InvokeAI/InvokeAI/venv/Lib/site-packages/invokeai/frontend/web/dist/assets/index-BFW2ubNY.js').catch(e=>console.log(e.message))"
 # перезапустить сервер (_restart_server.ps1), затем:
