@@ -11,8 +11,13 @@ devbim_auth нет/она неверна, любой HTTP-запрос реди�
   GET  /auth/logout  — сброс куки, назад на форму
 
 Пароль: .env в корне проекта, ключ SITE_PASSWORD. По умолчанию «devbim».
-Кука — sha256(соль + пароль): смена пароля в .env мгновенно инвалидирует
-все выданные куки, сервер перезапускать не нужно.
+Кука — sha256(соль + пароль + "|" + valid_until): смена пароля или даты
+лицензии в .env мгновенно инвалидирует все выданные куки, сервер
+перезапускать не нужно.
+
+Срок лицензии: .env, ключ SITE_VALID_UNTIL (ГГГГ-ММ-ДД). Если дата
+наступила — сайт отдаёт страницу «Лицензия истекла» (403), логин
+невозможен, вебсокеты закрываются. Без ключа лицензия бессрочная.
 """
 
 from __future__ import annotations
@@ -27,6 +32,24 @@ LOGIN_PATH = "/auth/login"
 LOGOUT_PATH = "/auth/logout"
 TOKEN_SALT = "devbim-site-auth-v1:"
 COOKIE_MAX_AGE = 30 * 24 * 3600  # 30 дней
+
+
+def _valid_until() -> str | None:
+    _load_env_file()
+    v = (os.environ.get("SITE_VALID_UNTIL") or "").strip()
+    return v or None
+
+
+def _expired() -> bool:
+    v = _valid_until()
+    if not v:
+        return False
+    from datetime import date
+    try:
+        y, m, d = (int(x) for x in v.split("-"))
+        return date.today() > date(y, m, d)
+    except ValueError:
+        return False  # кривая дата трактуется как бессрочная + лог в консоль
 
 
 # --- .env проекта (KEY=VALUE), не переопределяя уже выставленные переменные ---
@@ -59,7 +82,9 @@ def _site_password() -> str:
 
 
 def _token(password: str) -> str:
-    return hashlib.sha256((TOKEN_SALT + password).encode("utf-8")).hexdigest()
+    return hashlib.sha256(
+        (TOKEN_SALT + password + "|" + (_valid_until() or "")).encode("utf-8")
+    ).hexdigest()
 
 
 def _cookie_from_scope(scope) -> str:
@@ -74,6 +99,36 @@ def _cookie_from_scope(scope) -> str:
 
 def _authorized(scope) -> bool:
     return _cookie_from_scope(scope) == _token(_site_password())
+
+
+_EXPIRED_HTML = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<title>Лицензия истекла — DevBIM Image Studio</title>
+<style>
+  body { font-family: 'Segoe UI', system-ui, sans-serif; background: #0B0C0E;
+         color: #E6EAF2; min-height: 100vh; display: flex; align-items: center;
+         justify-content: center; }
+  .card { background: #14161A; border: 1px solid #23262D; border-radius: 14px;
+          padding: 40px 36px; width: 400px; text-align: center;
+          box-shadow: 0 12px 40px rgba(0,0,0,.5); }
+  .logo { font-size: 24px; font-weight: 700; margin-bottom: 16px; }
+  .logo .bim { color: #38BDF8; }
+  h1 { font-size: 18px; margin-bottom: 10px; }
+  p { color: #A7B0C0; font-size: 14px; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo"><span class="dev">Dev</span><span class="bim">BIM</span></div>
+    <h1>Срок лицензии истёк</h1>
+    <p>Доступ к Image Studio приостановлен.<br>
+       Для продления лицензии свяжитесь с нами:<br>
+       <a href="https://devbim.com" style="color:#38BDF8">devbim.com</a></p>
+  </div>
+</body>
+</html>"""
 
 
 _LOGIN_HTML = """<!DOCTYPE html>
@@ -177,7 +232,7 @@ class SiteAuthMiddleware:
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "websocket":
-            if _authorized(scope):
+            if _authorized(scope) and not _expired():
                 await self.app(scope, receive, send)
             else:
                 # закрыть неавторизованный вебсокет (socket.io переподключится после логина)
@@ -190,6 +245,10 @@ class SiteAuthMiddleware:
             return
 
         path = scope.get("path", "")
+
+        if _expired():
+            await _send_html(send, 200, _EXPIRED_HTML.encode("utf-8"))
+            return
 
         if path == LOGOUT_PATH:
             await _redirect(send, LOGIN_PATH, clear_cookie=True)
