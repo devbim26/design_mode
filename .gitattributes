@@ -1,0 +1,5 @@
+# Бинарные файлы — без нормализации концов строк (autocrlf ломает их)
+*.pdf binary
+*.png binary
+*.wasm binary
+*.mjs text eol=lf

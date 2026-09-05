@@ -1,0 +1,894 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDF-вьювер — DevBIM</title>
+<style>
+  :root{
+    --bg:#0c0d0f; --panel:#16181b; --panel2:#1d2024; --border:#2b2f35;
+    --text:#e8e9ea; --muted:#9aa0a6; --accent:#38BDF8; --accent-dim:#1a5f80;
+    --ok:#34d399; --err:#f87171;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font:13px/1.45 "Inter","Segoe UI",system-ui,Arial,sans-serif;
+    display:flex; flex-direction:column; overflow:hidden;
+  }
+  header{
+    display:flex; align-items:center; gap:8px; flex-wrap:wrap;
+    padding:8px 12px; border-bottom:1px solid var(--border); background:var(--panel);
+    flex:0 0 auto;
+  }
+  header h1{font-size:15px; margin:0 8px 0 0; font-weight:600; white-space:nowrap}
+  header h1 .bim{color:var(--accent)}
+  button{
+    background:var(--accent); color:#04222f; border:none; border-radius:6px; padding:5px 12px;
+    font:inherit; font-weight:600; cursor:pointer; white-space:nowrap;
+  }
+  button:hover{filter:brightness(1.1)}
+  button:disabled{opacity:.45; cursor:default}
+  button.ghost{background:transparent; color:var(--muted); border:1px solid var(--border); font-weight:400}
+  button.ghost:hover{color:var(--text)}
+  button.active{background:#12232d; color:var(--accent); border-color:var(--accent)}
+  select{
+    background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px;
+    padding:5px 8px; font:inherit; outline:none; max-width:280px;
+  }
+  select:focus{border-color:var(--accent)}
+  .spacer{flex:1}
+  .chip{font-size:11px; padding:3px 9px; border:1px solid var(--border); border-radius:999px;
+    color:var(--muted); white-space:nowrap}
+  .chip.err{color:var(--err); border-color:var(--err)}
+  .chip.ok{color:var(--ok); border-color:var(--ok)}
+  input[type=file]{display:none}
+
+  main{flex:1; display:grid; grid-template-columns:230px 1fr; min-height:0; gap:0}
+  .side{
+    background:var(--panel); border-right:1px solid var(--border); display:flex;
+    flex-direction:column; min-height:0;
+  }
+  .side-tabs{display:flex; flex:0 0 auto; border-bottom:1px solid var(--border)}
+  .side-tabs button{
+    flex:1; border-radius:0; background:transparent; color:var(--muted); font-weight:500;
+    padding:7px 4px; border:none; border-bottom:2px solid transparent;
+  }
+  .side-tabs button.active{color:var(--accent); border-bottom-color:var(--accent)}
+  #thumbs,#outline{flex:1; overflow:auto; padding:8px}
+  #outline{display:none; padding:6px 4px; user-select:none}
+
+  #thumbs .grid{display:grid; grid-template-columns:1fr 1fr; gap:8px}
+  .thumb{
+    border:1px solid var(--border); border-radius:5px; overflow:hidden; cursor:pointer;
+    background:var(--bg); text-align:center; position:relative;
+  }
+  .thumb:hover{border-color:var(--muted)}
+  .thumb.cur{border-color:var(--accent); box-shadow:0 0 0 1px var(--accent)}
+  .thumb canvas{display:block; width:100%; height:auto}
+  .thumb .num{
+    position:absolute; right:3px; bottom:3px; font-size:10px; color:var(--text);
+    background:rgba(12,13,15,.8); border-radius:4px; padding:1px 5px;
+  }
+  .thumb .ph{height:150px; display:flex; align-items:center; justify-content:center; color:var(--muted)}
+
+  .onode{padding:3px 8px; border-radius:5px; cursor:pointer; white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis; color:var(--text)}
+  .onode:hover{background:var(--panel2)}
+  .onode.cur{background:#12232d; color:var(--accent)}
+  .okids{margin-left:12px; border-left:1px solid var(--border)}
+
+  #viewport{position:relative; min-width:0; min-height:0; background:var(--bg)}
+  #viewport .empty{
+    position:absolute; inset:0; display:flex; flex-direction:column; gap:10px;
+    align-items:center; justify-content:center; color:var(--muted); text-align:center; padding:20px;
+  }
+  #viewport .empty .big{font-size:38px}
+  #viewport .devbim-logo{
+    position:absolute; left:0.75rem; bottom:0.75rem; z-index:1;
+    display:flex; align-items:center; gap:7px;
+    font-size:13.5px; font-weight:700; letter-spacing:.3px; color:var(--text);
+    opacity:.88; pointer-events:none; user-select:none; white-space:nowrap;
+  }
+  #viewport .devbim-logo .bim{color:var(--accent)}
+  #viewport .devbim-logo .sub{color:var(--muted); font-weight:400}
+  #loadbar{position:absolute; left:0; right:0; top:0; height:3px; background:#12232d; display:none; z-index:7}
+  #loadbar i{display:block; height:100%; width:0; background:var(--accent); transition:width .3s}
+
+  #scroller{
+    position:absolute; inset:0; overflow:auto; display:flex; align-items:flex-start;
+    justify-content:safe center; padding:24px;
+  }
+  #page-wrap{position:relative; flex:0 0 auto; box-shadow:0 2px 18px rgba(0,0,0,.5)}
+  #page-canvas{display:block; background:#fff}
+  #sel-layer{position:absolute; inset:0; overflow:hidden; cursor:crosshair; touch-action:none}
+  #sel-rect{
+    position:absolute; display:none; border:1.5px solid var(--accent);
+    background:rgba(56,189,248,.14); box-shadow:0 0 0 9999px rgba(0,0,0,.35);
+  }
+  #sel-rect .size{
+    position:absolute; left:0; top:-22px; font-size:11px; color:#04222f; background:var(--accent);
+    border-radius:4px; padding:1px 6px; white-space:nowrap;
+  }
+
+  #toolbar{
+    position:absolute; left:10px; top:10px; display:flex; gap:6px; flex-wrap:wrap;
+    max-width:calc(100% - 20px); z-index:5;
+  }
+  #toolbar button{padding:4px 10px; font-size:12px; font-weight:500}
+  #pagenav{
+    position:absolute; left:50%; transform:translateX(-50%); top:10px; display:flex;
+    gap:6px; align-items:center; z-index:5; background:rgba(22,24,27,.92);
+    border:1px solid var(--border); border-radius:8px; padding:4px 8px;
+  }
+  #pagenav button{padding:2px 10px; font-size:13px; font-weight:500}
+  #pagenav input{
+    width:52px; background:var(--bg); color:var(--text); border:1px solid var(--border);
+    border-radius:5px; padding:3px 6px; font:inherit; text-align:center; outline:none;
+  }
+  #pagenav input:focus{border-color:var(--accent)}
+  #pagenav .total{color:var(--muted); font-size:12px; white-space:nowrap}
+
+  #actionbar{
+    display:none; align-items:center; gap:8px; flex-wrap:wrap;
+    position:absolute; left:50%; transform:translateX(-50%); bottom:14px;
+    background:rgba(22,24,27,.95); border:1px solid var(--border); border-radius:10px;
+    padding:8px 10px; max-width:calc(100% - 20px); z-index:6;
+    box-shadow:0 4px 22px rgba(0,0,0,.55);
+  }
+  #actionbar .info{font-size:12px; color:var(--muted); white-space:nowrap}
+  #actionbar .out{color:var(--accent); font-weight:600}
+  #actionbar button{font-size:12.5px}
+
+  #navhelp{
+    position:absolute; right:10px; bottom:10px; font-size:11px; color:var(--muted);
+    background:rgba(12,13,15,.75); border:1px solid var(--border); border-radius:6px; padding:4px 9px;
+    z-index:4; pointer-events:none;
+  }
+
+  footer{
+    flex:0 0 auto; display:flex; gap:10px; align-items:center; padding:5px 12px;
+    border-top:1px solid var(--border); background:var(--panel); font-size:11.5px; color:var(--muted);
+  }
+  footer .err{color:var(--err)}
+  .spin{
+    width:12px; height:12px; border:2px solid var(--accent-dim); border-top-color:var(--accent);
+    border-radius:50%; display:inline-block; vertical-align:-2px; margin-right:6px;
+    animation:sp 0.8s linear infinite;
+  }
+  @keyframes sp{to{transform:rotate(360deg)}}
+
+  /* --- embed-режим (?embed=1, на будущее) --- */
+  body.embed header, body.embed .side, body.embed footer, body.embed #navhelp{display:none}
+  body.embed main{grid-template-columns:1fr}
+</style>
+</head>
+<body>
+<header>
+  <h1>PDF<span class="bim">Viewer</span></h1>
+  <button id="open-file">Открыть файл…</button>
+  <input type="file" id="file-input" accept=".pdf,application/pdf">
+  <button id="upload-server" class="ghost" title="Сохранить текущий документ на сервер" style="display:none">⬆ На сервер</button>
+  <select id="server-list" title="Документы на сервере"><option value="">— с сервера —</option></select>
+  <button id="refresh-list" class="ghost" title="Обновить список документов на сервере">↻</button>
+  <span class="spacer"></span>
+  <span class="chip" id="stat-doc">документ не загружен</span>
+</header>
+
+<main>
+  <section class="side">
+    <div class="side-tabs">
+      <button id="tab-thumbs" class="active">Страницы</button>
+      <button id="tab-outline">Оглавление</button>
+    </div>
+    <div id="thumbs"><div class="placeholder" style="color:var(--muted);font-size:12px;padding:8px 2px">Загрузите документ…</div></div>
+    <div id="outline"></div>
+  </section>
+
+  <section id="viewport">
+    <div id="loadbar"><i></i></div>
+    <div class="empty" id="empty">
+      <div class="big">📄</div>
+      <div>Откройте PDF-файл с диска или выберите документ с сервера.<br>
+      Выделите фрагмент рамкой — и отправьте его на холст или в ассеты.</div>
+    </div>
+    <div id="scroller" style="display:none">
+      <div id="page-wrap">
+        <canvas id="page-canvas"></canvas>
+        <div id="sel-layer"><div id="sel-rect"><span class="size"></span></div></div>
+      </div>
+    </div>
+    <div id="toolbar" style="display:none">
+      <button id="btn-zoom-out" class="ghost" title="Уменьшить">−</button>
+      <button id="btn-zoom-label" class="ghost" title="Масштаб 100%">100%</button>
+      <button id="btn-zoom-in" class="ghost" title="Увеличить">+</button>
+      <button id="btn-fit-width" class="ghost" title="Вписать по ширине">↔ Ширина</button>
+      <button id="btn-fit-page" class="ghost" title="Вписать страницу целиком">⛶ Вписать</button>
+      <button id="btn-rotate" class="ghost" title="Повернуть на 90°">↻</button>
+    </div>
+    <div id="pagenav" style="display:none">
+      <button id="btn-prev" class="ghost" title="Предыдущая страница">‹</button>
+      <input id="page-input" type="number" min="1" value="1">
+      <span class="total" id="page-total">/ 1</span>
+      <button id="btn-next" class="ghost" title="Следующая страница">›</button>
+    </div>
+    <div id="actionbar">
+      <span class="info">Фрагмент: <span class="out" id="sel-out">—</span></span>
+      <button id="btn-to-canvas" title="Положить фрагмент на холст подложкой (со слоем маски перерисовки)">🖼 На холст</button>
+      <button id="btn-save-assets" class="ghost" style="color:var(--ok);border-color:var(--ok)" title="Сохранить фрагмент в галерею (ассеты)">💾 В ассеты</button>
+    </div>
+    <div id="navhelp">ЛКМ-рамка — выделить фрагмент · ESC — сброс · Ctrl+колесо — зум</div>
+    <div class="devbim-logo">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M12 2 21 7v10l-9 5-9-5V7l9-5z" stroke="#38BDF8" stroke-width="1.7" stroke-linejoin="round"/>
+        <path d="M12 12 21 7M12 12v10M12 12 3 7" stroke="#38BDF8" stroke-width="1.7" stroke-linejoin="round"/>
+      </svg>
+      <span class="word">Dev<span class="bim">BIM</span> <span class="sub">— Design</span></span>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <span id="status">Готов</span>
+  <span class="spacer"></span>
+  <span id="info"></span>
+</footer>
+
+<script type="module">
+import * as pdfjsLib from "/pdf/pdf.min.mjs";
+pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf/pdf.worker.min.mjs";
+
+const $ = (id) => document.getElementById(id);
+const DPR = Math.min(window.devicePixelRatio || 1, 2);
+const THUMB_W = 104;               // ширина миниатюры, px
+const THUMB_CACHE_MAX = 400;       // максимум закешированных миниатюр
+const CROP_TARGET_PX = 2048;       // целевая длинная сторона фрагмента
+const CROP_MAX_PAGE_PIXELS = 16e6; // лимит полного offscreen-рендера, пикселей
+const LAST_DOC_KEY = "devbim:pdf:lastDoc";
+const LAST_PAGE_KEY = "devbim:pdf:lastPage";
+
+function setStatus(msg, isErr) {
+  const s = $("status");
+  s.className = isErr ? "err" : "";
+  s.textContent = msg;
+}
+function setProgress(p) { // p: 0..1 | null
+  const bar = $("loadbar");
+  if (p === null) { bar.style.display = "none"; bar.firstElementChild.style.width = "0"; return; }
+  bar.style.display = "block";
+  bar.firstElementChild.style.width = Math.round(p * 100) + "%";
+}
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+function fmtSize(b) {
+  if (b > 1024 * 1024) return (b / 1024 / 1024).toFixed(1) + " МБ";
+  if (b > 1024) return (b / 1024).toFixed(0) + " КБ";
+  return b + " Б";
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ============================== состояние ==============================
+let pdf = null;          // PDFDocumentProxy
+let docName = null;      // имя текущего документа
+let docFile = null;      // File — только для документов с диска (для «⬆ На сервер»)
+let fromServer = false;
+let pageNum = 1;
+let scale = 1;           // CSS px на PDF-единицу
+let fitMode = "width";   // "width" | "page" | null (null — ручной зум)
+let rotation = 0;        // 0/90/180/270
+let renderTask = null;   // активный рендер страницы (для отмены)
+let renderSeq = 0;       // защита от гонок рендера
+let selection = null;    // {x,y,w,h} в CSS px канваса
+let selOutSize = null;   // [w,h] размер фрагмента на выходе, px
+let thumbCache = new Map();
+let outlineItems = [];   // [{el, page}]
+const io = "IntersectionObserver" in window ? new IntersectionObserver(onThumbVisible, { root: $("thumbs"), rootMargin: "300px" }) : null;
+
+// ============================== загрузка документа ==============================
+async function openPdf(data, name, { server = false, file = null } = {}) {
+  closeDoc(false);
+  setStatus("Открытие " + name + "…");
+  setProgress(0.15);
+  const task = pdfjsLib.getDocument({ data, isEvalSupported: false });
+  let pwTries = 0;
+  task.onPassword = (updatePw, reason) => {
+    const wrong = reason === pdfjsLib.PasswordResponses.INCORRECT_PASSWORD;
+    if (wrong && ++pwTries >= 3) throw new Error("Неверный пароль документа");
+    const pw = prompt(wrong ? "Неверный пароль. Пароль PDF-документа:" : "Документ защищён паролем. Введите пароль:");
+    if (pw === null) throw new Error("Документ защищён паролем");
+    updatePw(pw);
+  };
+  try {
+    pdf = await task.promise;
+  } catch (e) {
+    console.error(e);
+    setProgress(null);
+    setStatus("Не удалось открыть PDF: " + (e?.message || e), true);
+    return false;
+  }
+  docName = name;
+  docFile = file;
+  fromServer = server;
+  pageNum = 1;
+  rotation = 0;
+  selection = null;
+  fitMode = "width";
+  updateSelUi();
+  $("empty").style.display = "none";
+  $("scroller").style.display = "flex";
+  $("toolbar").style.display = "flex";
+  $("pagenav").style.display = "flex";
+  $("upload-server").style.display = server || !file ? "none" : "";
+  const chip = $("stat-doc");
+  chip.textContent = `${name} · ${pdf.numPages} стр.`;
+  chip.className = "chip ok";
+  $("page-total").textContent = "/ " + pdf.numPages;
+  setProgress(0.55);
+  buildThumbs();
+  await buildOutline();
+  if (server) { try { localStorage.setItem(LAST_DOC_KEY, name); } catch {} }
+  await renderCurrentPage();
+  setProgress(null);
+  setStatus(`Документ открыт: ${name}, страниц: ${pdf.numPages}`);
+  return true;
+}
+
+function closeDoc(keepList) {
+  try { renderTask?.cancel(); } catch {}
+  renderTask = null;
+  try { pdf?.destroy(); } catch {}
+  pdf = null; docName = null; docFile = null; fromServer = false;
+  selection = null; thumbCache.clear(); outlineItems = [];
+  io?.disconnect?.();
+  if (!keepList) {
+    $("thumbs").innerHTML = '<div style="color:var(--muted);font-size:12px;padding:8px 2px">Загрузите документ…</div>';
+    $("outline").innerHTML = "";
+    $("tab-outline").style.display = "";
+    switchSide("thumbs");
+  }
+}
+
+async function loadServerDoc(name, { page = 1 } = {}) {
+  setStatus("Загрузка " + name + " с сервера…");
+  const r = await fetch("/api/v1/pdf/file/" + encodeURIComponent(name));
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  const buf = await r.arrayBuffer();
+  const ok = await openPdf(new Uint8Array(buf), name, { server: true });
+  if (ok && page > 1 && page <= pdf.numPages) await gotoPage(page);
+}
+
+// ============================== рендер страницы ==============================
+async function baseViewport() {
+  const page = await pdf.getPage(pageNum);
+  return { page, vp1: page.getViewport({ scale: 1, rotation }) };
+}
+
+function computeFitScale(vp1, mode) {
+  const availW = $("scroller").clientWidth - 48;
+  const availH = $("scroller").clientHeight - 48;
+  const s = availW / vp1.width;
+  return mode === "page" ? Math.min(s, availH / vp1.height) : s;
+}
+
+async function renderCurrentPage({ keepScroll = false } = {}) {
+  if (!pdf) return;
+  const mySeq = ++renderSeq;
+  try { renderTask?.cancel(); } catch {}
+  const { page, vp1 } = await baseViewport();
+  if (mySeq !== renderSeq) return;
+  if (fitMode) scale = computeFitScale(vp1, fitMode);
+  const vp = page.getViewport({ scale, rotation });
+  const canvas = $("page-canvas");
+  canvas.width = Math.floor(vp.width * DPR);
+  canvas.height = Math.floor(vp.height * DPR);
+  canvas.style.width = Math.floor(vp.width) + "px";
+  canvas.style.height = Math.floor(vp.height) + "px";
+  const wrap = $("page-wrap");
+  const prevLeft = $("scroller").scrollLeft - (wrap.offsetLeft || 0);
+  const prevTop = $("scroller").scrollTop - (wrap.offsetTop || 0);
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  setStatus(`Страница ${pageNum} / ${pdf.numPages}…`);
+  renderTask = page.render({
+    canvasContext: ctx,
+    viewport: vp,
+    transform: DPR !== 1 ? [DPR, 0, 0, DPR, 0, 0] : null,
+  });
+  try {
+    await renderTask.promise;
+  } catch (e) {
+    if (e?.name === "RenderingCancelledException" || mySeq !== renderSeq) return;
+    throw e;
+  } finally {
+    renderTask = null;
+  }
+  if (keepScroll) {
+    $("scroller").scrollLeft = prevLeft + (wrap.offsetLeft || 0);
+    $("scroller").scrollTop = prevTop + (wrap.offsetTop || 0);
+  }
+  $("btn-zoom-label").textContent = Math.round(scale * 100) + "%";
+  $("page-input").value = pageNum;
+  markCurrentThumb();
+  $("info").textContent = `${docName ?? ""} · стр. ${pageNum}/${pdf.numPages} · ${Math.round(scale * 100)}%`;
+  setStatus(`Страница ${pageNum} / ${pdf.numPages}`);
+  try { localStorage.setItem(LAST_PAGE_KEY, String(pageNum)); } catch {}
+}
+
+let zoomTimer = null;
+function scheduleRender(opts = {}) {
+  clearTimeout(zoomTimer);
+  zoomTimer = setTimeout(() => renderCurrentPage(opts).catch((e) => {
+    console.error(e); setStatus("Ошибка рендера: " + (e?.message || e), true);
+  }), 120);
+}
+
+async function gotoPage(n) {
+  if (!pdf) return;
+  n = Math.min(Math.max(1, Math.round(n) || 1), pdf.numPages);
+  if (n === pageNum) { $("page-input").value = n; return; }
+  pageNum = n;
+  clearSelection();
+  markCurrentThumb();
+  const t = thumbFor(n); // прокрутить миниатюру к виду
+  t?.scrollIntoView({ block: "nearest" });
+  await renderCurrentPage().catch((e) => { setStatus("Ошибка рендера: " + (e?.message || e), true); });
+}
+
+// зум: factor вокруг точки (clientX, clientY) либо центра вьюпорта
+async function zoomAt(factor, cx, cy) {
+  if (!pdf) return;
+  const { vp1 } = await baseViewport();
+  const crect = $("page-canvas").getBoundingClientRect();
+  const srect = $("scroller").getBoundingClientRect();
+  if (cx == null) { cx = srect.left + srect.width / 2; cy = srect.top + srect.height / 2; }
+  const px = cx - crect.left, py = cy - crect.top;
+  const ux = px / scale, uy = py / scale;
+  fitMode = null;
+  scale = Math.min(8, Math.max(0.15, scale * factor));
+  clearSelection();
+  await renderCurrentPage();
+  const wrap = $("page-wrap");
+  $("scroller").scrollLeft = wrap.offsetLeft + ux * scale - (cx - srect.left);
+  $("scroller").scrollTop = wrap.offsetTop + uy * scale - (cy - srect.top);
+}
+
+async function setFit(mode) {
+  if (!pdf) return;
+  fitMode = mode;
+  clearSelection();
+  await renderCurrentPage();
+}
+
+async function rotate() {
+  if (!pdf) return;
+  rotation = (rotation + 90) % 360;
+  clearSelection();
+  await renderCurrentPage();
+}
+
+// ============================== миниатюры ==============================
+function buildThumbs() {
+  const box = $("thumbs");
+  box.innerHTML = "";
+  const grid = document.createElement("div");
+  grid.className = "grid";
+  for (let n = 1; n <= pdf.numPages; n++) {
+    const t = document.createElement("div");
+    t.className = "thumb" + (n === pageNum ? " cur" : "");
+    t.dataset.page = n;
+    t.innerHTML = `<div class="ph">…</div><span class="num">${n}</span>`;
+    t.title = "Страница " + n;
+    t.addEventListener("click", () => gotoPage(n));
+    grid.appendChild(t);
+    io?.observe(t);
+  }
+  box.appendChild(grid);
+  // без IntersectionObserver рендерим первые 30 лениво по скроллу
+  if (!io && !box.dataset.scrollHook) {
+    box.dataset.scrollHook = "1";
+    box.addEventListener("scroll", () => onThumbVisible(), { passive: true });
+  }
+}
+
+function thumbFor(n) {
+  return $("thumbs").querySelector(`.thumb[data-page="${n}"]`);
+}
+
+function markCurrentThumb() {
+  $("thumbs").querySelectorAll(".thumb.cur").forEach((x) => x.classList.remove("cur"));
+  thumbFor(pageNum)?.classList.add("cur");
+}
+
+function onThumbVisible(entries) {
+  const items = entries
+    ? entries.filter((e) => e.isIntersecting).map((e) => e.target)
+    : [...$("thumbs").querySelectorAll(".thumb")].slice(0, 30);
+  for (const t of items) renderThumb(Number(t.dataset.page));
+}
+
+const thumbRendering = new Set();
+async function renderThumb(n) {
+  const t = thumbFor(n);
+  if (!t || t.dataset.done || !pdf || thumbRendering.has(n)) return;
+  thumbRendering.add(n);
+  try {
+    const page = await pdf.getPage(n);
+    if (t.dataset.done || !pdf) return;
+    const vp1 = page.getViewport({ scale: 1, rotation: 0 });
+    const s = THUMB_W / vp1.width;
+    const vp = page.getViewport({ scale: s, rotation: 0 });
+    let canvas = thumbCache.get(n);
+    if (!canvas) {
+      canvas = document.createElement("canvas");
+      canvas.width = Math.floor(vp.width);
+      canvas.height = Math.floor(vp.height);
+      const ctx = canvas.getContext("2d");
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvasContext: ctx, viewport: vp }).promise;
+      thumbCache.set(n, canvas);
+      if (thumbCache.size > THUMB_CACHE_MAX) {
+        const first = thumbCache.keys().next().value;
+        thumbCache.delete(first);
+      }
+    }
+    const ph = t.querySelector(".ph");
+    ph?.replaceWith(canvas.cloneNode());
+    // клон канваса пуст — переносим содержимое
+    const placed = t.querySelector("canvas");
+    if (placed) placed.getContext("2d").drawImage(canvas, 0, 0);
+    t.dataset.done = "1";
+  } catch (e) {
+    console.warn("thumb", n, e);
+  } finally {
+    thumbRendering.delete(n);
+  }
+}
+
+// ============================== оглавление ==============================
+async function buildOutline() {
+  const box = $("outline");
+  box.innerHTML = "";
+  let ol = null;
+  try { ol = await pdf.getOutline(); } catch (e) { console.warn("getOutline:", e); }
+  if (!ol?.length) {
+    $("tab-outline").style.display = "none";
+    return;
+  }
+  $("tab-outline").style.display = "";
+  const renderList = (items, depth) => {
+    const wrap = document.createElement("div");
+    if (depth) wrap.className = "okids";
+    for (const it of items) {
+      const row = document.createElement("div");
+      row.className = "onode";
+      row.textContent = it.title || "—";
+      row.title = it.title || "";
+      if (it.dest != null) {
+        row.addEventListener("click", async () => {
+          try {
+            const p = await destToPage(it.dest);
+            if (p) {
+              outlineItems.forEach((x) => x.el.classList.remove("cur"));
+              row.classList.add("cur");
+              await gotoPage(p);
+            }
+          } catch (e) { console.warn("dest:", e); }
+        });
+        outlineItems.push({ el: row, getDest: () => it.dest });
+      }
+      wrap.appendChild(row);
+      if (it.items?.length) wrap.appendChild(renderList(it.items, depth + 1));
+    }
+    return wrap;
+  };
+  box.appendChild(renderList(ol, 0));
+}
+
+async function destToPage(dest) {
+  let d = dest;
+  if (typeof d === "string") d = await pdf.getDestination(d);
+  if (!Array.isArray(d)) return null;
+  const idx = await pdf.getPageIndex(d[0]);
+  return idx + 1;
+}
+
+// ============================== рамка выделения ==============================
+const selLayer = $("sel-layer");
+const selRect = $("sel-rect");
+let dragging = null;
+
+function setRect(x, y, w, h) {
+  selRect.style.left = x + "px";
+  selRect.style.top = y + "px";
+  selRect.style.width = w + "px";
+  selRect.style.height = h + "px";
+  selRect.style.display = "block";
+}
+function setSelSizeLabel(w, h) {
+  selRect.firstElementChild.textContent = `${Math.round(w)} × ${Math.round(h)}`;
+}
+
+function pointInLayer(e) {
+  const r = selLayer.getBoundingClientRect();
+  return {
+    x: Math.min(Math.max(e.clientX - r.left, 0), r.width),
+    y: Math.min(Math.max(e.clientY - r.top, 0), r.height),
+  };
+}
+
+selLayer.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  selLayer.setPointerCapture(e.pointerId);
+  const p = pointInLayer(e);
+  dragging = { x0: p.x, y0: p.y };
+  clearSelection();
+  selRect.style.display = "block";
+  setSelSizeLabel(0, 0);
+});
+
+selLayer.addEventListener("pointermove", (e) => {
+  if (!dragging) return;
+  const p = pointInLayer(e);
+  const x = Math.min(dragging.x0, p.x), y = Math.min(dragging.y0, p.y);
+  const w = Math.abs(p.x - dragging.x0), h = Math.abs(p.y - dragging.y0);
+  setRect(x, y, w, h);
+  setSelSizeLabel(w, h);
+});
+
+selLayer.addEventListener("pointerup", (e) => {
+  if (!dragging) return;
+  const p = pointInLayer(e);
+  const x = Math.min(dragging.x0, p.x), y = Math.min(dragging.y0, p.y);
+  const w = Math.abs(p.x - dragging.x0), h = Math.abs(p.y - dragging.y0);
+  dragging = null;
+  if (w < 8 || h < 8) { clearSelection(); return; } // клик = сброс
+  selection = { x, y, w, h };
+  updateSelUi();
+});
+
+function clearSelection(hideRect = true) {
+  selection = null;
+  selOutSize = null;
+  if (hideRect) selRect.style.display = "none";
+  updateSelUi();
+}
+
+async function updateSelUi() {
+  const bar = $("actionbar");
+  if (!selection) { bar.style.display = "none"; return; }
+  const out = await cropOutputSize();
+  selOutSize = out;
+  $("sel-out").textContent = `${out[0]} × ${out[1]} px`;
+  bar.style.display = "flex";
+}
+
+// размер фрагмента на выходе без рендера (тот же расчёт, что в cropSelection)
+async function cropOutputSize() {
+  const { vp1 } = await baseViewport();
+  const selU = { w: selection.w / scale, h: selection.h / scale };
+  let s = CROP_TARGET_PX / Math.max(selU.w, selU.h);
+  const sArea = Math.sqrt(CROP_MAX_PAGE_PIXELS / (vp1.width * vp1.height));
+  s = Math.min(s, sArea, 12);
+  return [Math.max(1, Math.round(selU.w * s)), Math.max(1, Math.round(selU.h * s))];
+}
+
+// ============================== фрагмент -> картинка ==============================
+async function cropSelection() {
+  const { page, vp1 } = await baseViewport();
+  const selU = {
+    x: selection.x / scale, y: selection.y / scale,
+    w: selection.w / scale, h: selection.h / scale,
+  };
+  let s = CROP_TARGET_PX / Math.max(selU.w, selU.h);
+  const sArea = Math.sqrt(CROP_MAX_PAGE_PIXELS / (vp1.width * vp1.height));
+  s = Math.min(s, sArea, 12);
+  const vp = page.getViewport({ scale: s, rotation });
+  const full = document.createElement("canvas");
+  full.width = Math.floor(vp.width);
+  full.height = Math.floor(vp.height);
+  const ctx = full.getContext("2d");
+  ctx.fillStyle = "#ffffff"; // прозрачные места PDF — белые
+  ctx.fillRect(0, 0, full.width, full.height);
+  await page.render({ canvasContext: ctx, viewport: vp }).promise;
+  const crop = document.createElement("canvas");
+  crop.width = Math.max(1, Math.round(selU.w * s));
+  crop.height = Math.max(1, Math.round(selU.h * s));
+  const cctx = crop.getContext("2d");
+  cctx.drawImage(
+    full,
+    selU.x * s, selU.y * s, crop.width, crop.height,
+    0, 0, crop.width, crop.height,
+  );
+  const blob = await new Promise((res) => crop.toBlob(res, "image/png"));
+  return { blob, name: `pdf-p${pageNum}.png`, width: crop.width, height: crop.height };
+}
+
+async function uploadImage(blob, name, category = "general") {
+  const fd = new FormData();
+  fd.append("file", blob, name);
+  // NB: POST /api/v1/images/ в 6.2 — «create upload entry» (JSON width/height);
+  // multipart-загрузка файла живёт на /api/v1/images/upload.
+  // category=user попадает во вкладку «Assets» галереи (она фильтрует
+  // categories=control|mask|user|other); general — в «Изображения».
+  // «На холст» оставляем general — проверенный путь IFC-снимков.
+  const r = await fetch(
+    `/api/v1/images/upload?image_category=${category}&is_intermediate=false`,
+    { method: "POST", body: fd },
+  );
+  if (!r.ok) throw new Error("HTTP " + r.status);
+  return await r.json(); // ImageDTO
+}
+
+async function sendFragment({ toCanvas = false } = {}) {
+  if (!selection || !pdf) { setStatus("Сначала выделите фрагмент рамкой", true); return; }
+  const btn = toCanvas ? $("btn-to-canvas") : $("btn-save-assets");
+  btn.disabled = true;
+  try {
+    setStatus("Готовка фрагмента…");
+    const { blob, name } = await cropSelection();
+    if (toCanvas) {
+      const dto = await uploadImage(blob, name, "general");
+      const api = window.parent && window.parent.__devbimIfc;
+      if (!api?.toCanvas) throw new Error("мост к холсту недоступен (перезагрузите страницу)");
+      await api.toCanvas(dto, false);
+      setStatus(`Фрагмент стр. ${pageNum} передан на холст — кистью выделите «Маску перерисовки»`);
+    } else {
+      const dto = await uploadImage(blob, name, "user");
+      setStatus(`Фрагмент стр. ${pageNum} сохранён во вкладке «Assets» галереи (${name})`);
+    }
+  } catch (e) {
+    console.error(e);
+    setStatus("Ошибка: " + (e?.message || e), true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ============================== сервер: список / загрузка ==============================
+async function refreshServerList() {
+  const sel = $("server-list");
+  try {
+    const r = await fetch("/api/v1/pdf/list");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const d = await r.json();
+    const docs = d.docs || [];
+    sel.innerHTML = '<option value="">— с сервера —</option>' +
+      docs.map((n) => `<option value="${escapeHtml(n.name)}">${escapeHtml(n.name)}${n.size ? " · " + fmtSize(n.size) : ""}</option>`).join("");
+  } catch {
+    sel.innerHTML = '<option value="">— сервер: нет документов —</option>';
+  }
+}
+
+async function uploadToServer() {
+  if (!docFile) return;
+  const btn = $("upload-server");
+  btn.disabled = true;
+  try {
+    setStatus("Сохранение на сервер…");
+    const fd = new FormData();
+    fd.append("file", docFile, docName);
+    const r = await fetch("/api/v1/pdf/upload", { method: "POST", body: fd });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || "HTTP " + r.status);
+    fromServer = true;
+    $("upload-server").style.display = "none";
+    try { localStorage.setItem(LAST_DOC_KEY, d.name || docName); } catch {}
+    await refreshServerList();
+    setStatus("Сохранено на сервере: " + (d.name || docName));
+  } catch (e) {
+    setStatus("Не удалось сохранить на сервер: " + (e?.message || e), true);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// ============================== события UI ==============================
+$("open-file").addEventListener("click", () => $("file-input").click());
+$("file-input").addEventListener("change", async (e) => {
+  const f = e.target.files?.[0];
+  if (!f) return;
+  if (!/\.pdf$/i.test(f.name)) { setStatus("Нужен файл .pdf", true); e.target.value = ""; return; }
+  const buf = await f.arrayBuffer();
+  await openPdf(new Uint8Array(buf), f.name, { file: f });
+  e.target.value = "";
+});
+
+$("refresh-list").addEventListener("click", refreshServerList);
+$("server-list").addEventListener("change", async (e) => {
+  const name = e.target.value;
+  if (!name) return;
+  try {
+    await loadServerDoc(name);
+  } catch (err) {
+    setStatus("Не удалось загрузить: " + err.message, true);
+  } finally {
+    e.target.value = "";
+  }
+});
+$("upload-server").addEventListener("click", uploadToServer);
+
+$("btn-prev").addEventListener("click", () => gotoPage(pageNum - 1));
+$("btn-next").addEventListener("click", () => gotoPage(pageNum + 1));
+$("page-input").addEventListener("change", (e) => gotoPage(Number(e.target.value)));
+
+$("btn-zoom-out").addEventListener("click", () => zoomAt(1 / 1.25));
+$("btn-zoom-in").addEventListener("click", () => zoomAt(1.25));
+$("btn-zoom-label").addEventListener("click", () => zoomAt(1 / scale)); // точно 100%
+$("btn-fit-width").addEventListener("click", () => setFit("width"));
+$("btn-fit-page").addEventListener("click", () => setFit("page"));
+$("btn-rotate").addEventListener("click", rotate);
+
+$("btn-to-canvas").addEventListener("click", () => sendFragment({ toCanvas: true }));
+$("btn-save-assets").addEventListener("click", () => sendFragment({ toCanvas: false }));
+
+$("tab-thumbs").addEventListener("click", () => switchSide("thumbs"));
+$("tab-outline").addEventListener("click", () => switchSide("outline"));
+function switchSide(which) {
+  $("tab-thumbs").classList.toggle("active", which === "thumbs");
+  $("tab-outline").classList.toggle("active", which === "outline");
+  $("thumbs").style.display = which === "thumbs" ? "block" : "none";
+  $("outline").style.display = which === "outline" ? "block" : "none";
+}
+
+// Ctrl+колесо — зум; колесо без Ctrl — штатный скролл
+$("scroller").addEventListener("wheel", (e) => {
+  if (!e.ctrlKey || !pdf) return;
+  e.preventDefault();
+  zoomAt(e.deltaY < 0 ? 1.15 : 1 / 1.15, e.clientX, e.clientY)
+    .catch((err) => setStatus("Ошибка зума: " + err.message, true));
+}, { passive: false });
+
+window.addEventListener("keydown", (e) => {
+  const tag = document.activeElement?.tagName;
+  if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+  if (e.key === "Escape") { clearSelection(); return; }
+  if (!pdf) return;
+  if (e.key === "PageDown" || e.key === "ArrowRight") gotoPage(pageNum + 1);
+  else if (e.key === "PageUp" || e.key === "ArrowLeft") gotoPage(pageNum - 1);
+  else if (e.key === "+" || e.key === "=") zoomAt(1.25);
+  else if (e.key === "-") zoomAt(1 / 1.25);
+});
+
+// пересчёт «вписать» при изменении размера панели
+let resizeTimer = null;
+new ResizeObserver(() => {
+  if (!fitMode || !pdf) return;
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => scheduleRender({ keepScroll: true }), 150);
+}).observe($("scroller"));
+
+// ============================== init ==============================
+const EMBED = new URLSearchParams(location.search).get("embed") === "1";
+if (EMBED) document.body.classList.add("embed");
+
+refreshServerList();
+
+// автозагрузка последнего серверного документа + страницы (вкладка
+// размонтируется при переключении — состояние iframe не живёт)
+(async () => {
+  let last = null, lastPage = 1;
+  try {
+    last = localStorage.getItem(LAST_DOC_KEY);
+    lastPage = Number(localStorage.getItem(LAST_PAGE_KEY)) || 1;
+  } catch {}
+  if (last) loadServerDoc(last, { page: lastPage }).catch((e) => {
+    console.warn("restore:", e);
+    try { localStorage.removeItem(LAST_DOC_KEY); } catch {}
+  });
+})();
+
+// отладка из консоли: window.__pdf.doc / __pdf.page
+window.__pdf = {
+  get doc() { return pdf; },
+  get page() { return pageNum; },
+  get selection() { return selection; },
+  gotoPage, openPdf, clearSelection,
+};
+</script>
+</body>
+</html>

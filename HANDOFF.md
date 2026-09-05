@@ -433,12 +433,56 @@ invokeai==6.2.0` их нужно запускать повторно в поря
       → stop. Секреты (`companies/*`, `companies.json`, `.env`) в git
       не входят; в git только `companies/.gitkeep`.
 
+18. **PDF-вьювер: вкладка «PDF», фрагменты страниц → холст/ассеты**
+    (05.09, ветка `feature/pdf-viewer`, проверено вживую Playwright-ом).
+    Поток: загрузка PDF (диск / сервер; хранение `data/pdf/` per-company,
+    лимит 500 МБ; API `/api/v1/pdf/list|upload|file/{name}` DELETE,
+    роутер `pdf/pdf_router.py` — копия паттерна ifc_router) → поиск
+    страницы (миниатюры с ленивым рендером IntersectionObserver,
+    оглавление `getOutline` + `destToPage`, поле номера, ←/→/PageUp/
+    PageDown, зум −/+/Ctrl+колесо/100%, «Ширина»/«Вписать», поворот)
+    → рамка фрагмента (ЛКМ-drag по странице, затемнение вне рамки
+    box-shadow-трюком, ESC/клик — сброс, новая заменяет прежнюю) →
+    «🖼 На холст» / «💾 В ассеты». Рендер PDF.js 5.4.149, ассеты
+    `pdf/assets/` → `dist/pdf/` (mjs отдаётся как application/javascript
+    на этой машине — воркер работает; проверять после переноса).
+    Кроп: offscreen-рендер страницы под целевую длинную сторону фрагмента
+    2048 px (лимит полной страницы 16 Мп, абсолютный cap масштаба ×12,
+    белый фон) → PNG → `POST /api/v1/images/upload`.
+    «На холст» = мост `__devbimIfc.toCanvas(dto,false)` (категория
+    general, поведение «Редактировать»: подложка + слой «Маска
+    перерисовки» + кисть). «В ассеты» = `image_category=user`: вкладка
+    «Assets» галереи фильтрует categories=control|mask|user|other,
+    а general попал бы в «Изображения» (грабля найдена снапшотом сети).
+    ГРАБЛЯ (главная): `window.__devbimIfcCtx` выставляет только панель
+    IFCV на холсте — с вкладки PDF мост падал «canvas context
+    unavailable» (у IFC не проявлялось: его кнопки «На холст» живут
+    только в embed-панели, т.е. на холсте). Решение: PDFE (компонент
+    вкладки PDF в App-бандле) сам захватывает `Je()` в `__devbimIfcCtx`
+    при монтировании; вкладки pdf/canvas не активны одновременно — за
+    глобаль не спорят (cleanup старой вкладки до effect новой).
+    Миграция уже патченных бандлов: `JS_PDF_PANEL_V1` → `V2` повторным
+    запуском `setup_pdfviewer.py` (идемпотентно). Прочее: iframe вкладки
+    размонтируется при переключении — последний серверный документ +
+    страница восстанавливаются из localStorage
+    (`devbim:pdf:lastDoc`/`lastPage`); иконка вкладки `vx` («документ»,
+    function-декларация в App-бандле — тот же приём, что `RA` у IFC);
+    `pdf` добавлен в zod-enum activeTab (index-бандл); патч вставляется
+    префиксом перед якорем `const cue=u.memo(` — совместим с мостом
+    `__devbimCanvasBridge` из п.16 (тот же якорь, тоже префикс).
+    Порядок после force-reinstall: rebrand → imagerouter → ifcviewer →
+    **pdfviewer** (гейт: без `__devbimIfc` в бандле откажется) → siteauth.
+    Тесты: `tests/test_pdf_router.py`; генератор тестового PDF с
+    оглавлением — `tests/make_test_pdf.py`. Отладка: `window.__pdf`
+    в iframe (doc/page/selection/gotoPage).
+
 ## Проверка после изменений
 
 ```powershell
 cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
 .\venv\Scripts\python.exe .\setup_imagerouter.py        # применить патчи
 .\venv\Scripts\python.exe .\setup_ifcviewer.py          # вкладка IFC (идемпотентно)
+.\venv\Scripts\python.exe .\setup_pdfviewer.py          # вкладка PDF (идемпотентно)
 .\venv\Scripts\python.exe .\tests\test_mask_toggle.py   # тумблер Маска/Слой
 # проверить, что index-бандл парсится (после патчей навигации!):
 node -e "import('file:///C:/Users/Lenovo/Desktop/проект SOFT_2/Дизайн/InvokeAI/InvokeAI/venv/Lib/site-packages/invokeai/frontend/web/dist/assets/index-BFW2ubNY.js').catch(e=>console.log(e.message))"

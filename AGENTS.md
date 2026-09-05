@@ -5,11 +5,12 @@
 ## Что это
 
 Локальный InvokeAI 6.2.0 (CPU) с ребрендингом DevBIM, облачной генерацией
-ImageRouter, IFC-вьювером, гейтом сайта по паролю и мультитенантностью
-«экземпляр на компанию». Скрипты патчат пакет в `venv/Lib/site-packages/
-invokeai/` — после `pip install --force-reinstall invokeai==6.2.0`
-применять в порядке: `rebrand_devbim.py` → `setup_imagerouter.py` →
-`setup_ifcviewer.py` → `setup_site_auth.py`. Все — идемпотентны.
+ImageRouter, IFC-вьювером, PDF-вьювером, гейтом сайта по паролю и
+мультитенантностью «экземпляр на компанию». Скрипты патчат пакет в
+`venv/Lib/site-packages/invokeai/` — после
+`pip install --force-reinstall invokeai==6.2.0` применять в порядке:
+`rebrand_devbim.py` → `setup_imagerouter.py` → `setup_ifcviewer.py` →
+`setup_pdfviewer.py` → `setup_site_auth.py`. Все — идемпотентны.
 
 ## Где что
 
@@ -17,6 +18,7 @@ invokeai/` — после `pip install --force-reinstall invokeai==6.2.0`
   SITE_VALID_UNTIL — срок лицензии). Деплой: `setup_site_auth.py`.
 - `imagerouter/` — посредник облачной генерации (перехват enqueue_batch).
 - `ifc/` — IFC-вьювер и его роутер.
+- `pdf/` — PDF-вьювер (вкладка «PDF») и его роутер.
 - `company_manager.py`, `create_company.py`, `start_company.bat`,
   `stop_company.py`, `list_companies.py` — компании-лицензиаты
   (экземпляр на компанию, порты 9100+).
