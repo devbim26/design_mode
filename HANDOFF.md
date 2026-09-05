@@ -252,6 +252,18 @@ invokeai==6.2.0` их нужно запускать повторно в поря
    wrapper — `!important`, чтобы перебить inline-стиль chakra).
    Правки регенерируют раздачу перезапуском `rebrand_devbim.py`
    (баннер) / `setup_ifcviewer.py` (вьювер) без пересборки бандлов.
+15. **Control Layer (ControlNet) убран из меню слоёв** (05.09). Генерация
+   полностью облачная (ImageRouter / nano-banana), ControlNet-моделей нет
+   и сервер их не поднимет — пункт «Слой управления» в меню «+» панели
+   Control Layers (компонент `EntityListGlobalActionBarAddLayerMenu`,
+   App-бандл) удалялся из рендера: `patch_canvas_control_layer()` в
+   `setup_imagerouter.py` (замена убирает `ve`-пункт с
+   `controlLayers.controlLayer`, оставляет raster layer; идемпотентно,
+   бэкап тот же `*.imagerouter-bak`). Существующие control-слои в
+   сохранённых канвасах продолжают отображаться (удалить вручную, если
+   попадутся). Вкладка Upscaling СОЗНАТЕЛЬНО не тронута — планируется
+   модернизация под облачную генерацию. Проверка после патча: node-import
+   App-бандла — только `document is not defined`.
 
 ## Ключевые технические детали (грабли, на которые уже наступили)
 

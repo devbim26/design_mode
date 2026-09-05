@@ -248,6 +248,55 @@ def patch_left_panel() -> bool:
 
 
 # ----------------------------------------------------------------------------
+# Скрытие Control Layer (ControlNet) в меню добавления слоёв канваса.
+# ControlNet-модели в облачной схеме не используются (генерация только через
+# ImageRouter API), пункт «Слой управления» из меню «+» (EntityListGlobal-
+# ActionBarAddLayerMenu) убирается. Вкладка Upscaling СОЗНАТЕЛЬНО не тронута —
+# планируется её модернизация под облачную генерацию.
+# ----------------------------------------------------------------------------
+
+# Меню «Добавить слой»: убрать пункт «Слой управления», оставить растровый
+JS_ADD_LAYER_CONTROL_OLD = (
+    'children:[o.jsx(ve,{icon:o.jsx(an,{}),onClick:r,isDisabled:!c,'
+    'children:e("controlLayers.controlLayer")}),'
+    'o.jsx(ve,{icon:o.jsx(an,{}),onClick:a,children:e("controlLayers.rasterLayer")})]'
+)
+JS_ADD_LAYER_CONTROL_NEW = (
+    'children:[o.jsx(ve,{icon:o.jsx(an,{}),onClick:a,'
+    'children:e("controlLayers.rasterLayer")})]'
+)
+
+
+def patch_canvas_control_layer() -> bool:
+    """Убирает пункт «Слой управления» (ControlNet) из меню добавления слоёв."""
+    targets = [
+        f for f in DIST.glob("assets/*.js")
+        if "control-layers-add-layer-menu-button" in f.read_text(encoding="utf-8")
+    ]
+    if len(targets) != 1:
+        print(f"ОШИБКА: бандл с меню добавления слоёв найден {len(targets)} раз (ожидался 1)")
+        sys.exit(1)
+    f = targets[0]
+    s = f.read_text(encoding="utf-8")
+    if JS_ADD_LAYER_CONTROL_OLD not in s:
+        if 'e("controlLayers.controlLayer")' not in s:
+            print("Пункт «Слой управления» уже скрыт, пропуск")
+            return False
+        print("ОШИБКА: не найден фрагмент меню слоёв (частичная правка?)")
+        sys.exit(1)
+    if s.count(JS_ADD_LAYER_CONTROL_OLD) != 1:
+        print(f"ОШИБКА: фрагмент меню слоёв найден {s.count(JS_ADD_LAYER_CONTROL_OLD)} раз (ожидался 1)")
+        sys.exit(1)
+    s = s.replace(JS_ADD_LAYER_CONTROL_OLD, JS_ADD_LAYER_CONTROL_NEW, 1)
+    bak = f.with_suffix(f.suffix + ".imagerouter-bak")
+    if not bak.exists():
+        shutil.copy2(f, bak)
+    f.write_text(s, encoding="utf-8")
+    print(f"Пункт «Слой управления» (ControlNet) убран из меню слоёв: {f.name} (бэкап: {bak.name})")
+    return True
+
+
+# ----------------------------------------------------------------------------
 # Скрытие кнопок в левой вертикальной рейке (VerticalNavBar):
 #   - вкладка «Очередь» (queue) — статус очереди и так виден у кнопки Generate;
 #   - колокольчик Notifications — в его поповере «Что нового в DevBIM»
@@ -475,6 +524,7 @@ def main() -> None:
     patch_api_app()
     patch_js()
     patch_left_panel()
+    patch_canvas_control_layer()
     patch_left_rail()
     patch_generate_button()
     patch_admin_gate()
