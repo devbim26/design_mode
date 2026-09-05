@@ -16,7 +16,7 @@ devbim_auth нет/она неверна, любой HTTP-запрос реди�
 перезапускать не нужно.
 
 Срок лицензии: .env, ключ SITE_VALID_UNTIL (ГГГГ-ММ-ДД). Если дата
-наступила — сайт отдаёт страницу «Лицензия истекла» (403), логин
+наступила — сайт отдаёт страницу «Лицензия истекла» (200), логин
 невозможен, вебсокеты закрываются. Без ключа лицензия бессрочная.
 """
 
@@ -36,7 +36,10 @@ COOKIE_MAX_AGE = 30 * 24 * 3600  # 30 дней
 
 def _valid_until() -> str | None:
     _load_env_file()
-    v = (os.environ.get("SITE_VALID_UNTIL") or "").strip()
+    v = _env_value("SITE_VALID_UNTIL")
+    if v is None:
+        v = os.environ.get("SITE_VALID_UNTIL") or ""
+    v = v.strip()
     return v or None
 
 
@@ -49,17 +52,23 @@ def _expired() -> bool:
         y, m, d = (int(x) for x in v.split("-"))
         return date.today() > date(y, m, d)
     except ValueError:
-        return False  # кривая дата трактуется как бессрочная + лог в консоль
+        return False  # кривая дата трактуется как бессрочная
 
 
 # --- .env проекта (KEY=VALUE), не переопределяя уже выставленные переменные ---
-def _load_env_file() -> None:
-    candidates = [Path.cwd() / ".env"]
+def _env_candidates() -> list[Path]:
+    # INVOKEAI_ROOT (каталог данных компании) и его родитель — раньше cwd:
+    # при запуске из start_company.bat cwd и root.parent совпадают,
+    # порядок важен только чтобы .env компании выигрывал у случайного cwd.
     root = os.environ.get("INVOKEAI_ROOT")
     if root:
         r = Path(root)
-        candidates += [r / ".env", r.parent / ".env"]
-    for env_path in candidates:
+        return [r / ".env", r.parent / ".env", Path.cwd() / ".env"]
+    return [Path.cwd() / ".env"]
+
+
+def _load_env_file() -> None:
+    for env_path in _env_candidates():
         try:
             if not env_path.is_file():
                 continue
@@ -76,9 +85,39 @@ def _load_env_file() -> None:
             continue
 
 
+def _env_value(key: str) -> str | None:
+    """Значение ключа из .env-ФАЙЛА — перечитывается на каждом вызове.
+
+    Файл — источник истины: если ключ найден в первом подходящем .env,
+    возвращается его значение (даже пустое — «KEY=» даёт ""). Если ключ
+    ни в одном файле-кандидате не найден — None (вызывающий делает
+    fallback на os.environ). Нужно, чтобы правка SITE_PASSWORD /
+    SITE_VALID_UNTIL в .env подхватывалась без перезапуска сервера
+    (os.environ кэширует значения после первого _load_env_file).
+    """
+    for env_path in _env_candidates():
+        try:
+            if not env_path.is_file():
+                continue
+            for line in env_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                if k.strip() == key:
+                    return v.strip().strip('"').strip("'").strip()
+            # файл есть, но ключа в нём нет — проверяем следующих кандидатов
+        except Exception:
+            continue
+    return None
+
+
 def _site_password() -> str:
     _load_env_file()
-    return (os.environ.get("SITE_PASSWORD") or "").strip() or "devbim"
+    v = _env_value("SITE_PASSWORD")
+    if v is None:
+        v = os.environ.get("SITE_PASSWORD") or ""
+    return v.strip() or "devbim"
 
 
 def _token(password: str) -> str:
