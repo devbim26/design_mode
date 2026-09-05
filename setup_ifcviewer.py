@@ -255,8 +255,20 @@ def patch_app_bundle() -> bool:
 def patch_index_bundle() -> bool:
     """'ifc' в zod-enum activeTab — иначе перезагрузка со вкладкой IFC
     сбрасывает настройки UI (parse storage падает)."""
-    targets = [f for f in DIST.glob("assets/*.js") if JS_ENUM_OLD in f.read_text(encoding="utf-8")]
-    already = [f for f in DIST.glob("assets/*.js") if JS_ENUM_NEW in f.read_text(encoding="utf-8")]
+    # после патчей других вкладок (pdf) enum может содержать дополнительные
+    # записи ПОСЛЕ "ifc" — «уже пропатчено» определяем regex-ом по наличию
+    # "ifc" в актуальном enum, а не по точному NEW-фрагменту
+    enum_re = re.compile(r'ct\(\["generate","canvas","upscaling","workflows","models","queue"(?:,"[a-z]+")*\]\)')
+    targets: list[Path] = []
+    already: list[Path] = []
+    for f in DIST.glob("assets/*.js"):
+        s = f.read_text(encoding="utf-8")
+        if JS_ENUM_OLD in s:
+            targets.append(f)
+        else:
+            m = enum_re.search(s)
+            if m and '"ifc"' in m.group(0):
+                already.append(f)
     if already and not targets:
         print("index-бандл уже пропатчен (enum activeTab), пропуск")
         return False

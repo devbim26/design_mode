@@ -172,9 +172,9 @@
     </div>
     <div id="etoast"></div>
     <div id="snapbar">
-      <select id="embed-server-list" title="Модель на сервере"><option value="">— модель —</option></select>
-      <button id="btn-snap" title="Снимок текущего вида — на холст как подложка">📸 На холст</button>
-      <button id="btn-snap-gen" title="Снимок на холст и сразу запустить генерацию">✨ Сгенерировать</button>
+      <select id="embed-server-list" title="Model"><option value="">— model —</option></select>
+      <button id="btn-snap" title="Place the snapshot on the canvas as a base layer (with an inpaint mask layer)">📸 To Canvas</button>
+      <button id="btn-snap-assets" class="ghost" style="color:var(--ok);border-color:var(--ok)" title="Save the snapshot to the gallery (Assets tab)">💾 To Assets</button>
     </div>
     <div id="navhelp">ЛКМ — вращение · колесо — зум · ПКМ — панорама · клик — выбор элемента</div>
   </section>
@@ -697,12 +697,15 @@ async function loadServerModel(name) {
   await loadIfc(new Uint8Array(buf), name);
 }
 
-// Снимок текущего вида на белом фоне. Синхронный render() непосредственно
-// перед захватом: без preserveDrawingBuffer буфер очищается после
-// композитинга, поэтому снимок надо делать в той же JS-задаче, что и рендер.
-// Стороны выравниваются кратно 64 в диапазоне 128..2048 (требование
-// ImageRouter к параметрам генерации; добавляются белые поля, пропорции
-// вида сохраняются).
+// Снимок текущего вида на ПРОЗРАЧНОМ фоне (альфа-канал). SimpleRenderer
+// создаёт WebGL-контекст с alpha:true, а фон сцены — null, поэтому там, где
+// нет геометрии, пиксели прозрачны: генерация получает модель без фона и
+// дорисовывает окружение сама. Синхронный render() непосредственно перед
+// захватом: без preserveDrawingBuffer буфер очищается после композитинга,
+// поэтому снимок надо делать в той же JS-задаче, что и рендер. Стороны
+// выравниваются кратно 64 в диапазоне 128..2048 (требование ImageRouter к
+// параметрам генерации; добавляются прозрачные поля, пропорции вида
+// сохраняются).
 function renderSnapshot() {
   const r = world.renderer.three;
   r.render(world.scene.three, world.camera.three);
@@ -712,50 +715,57 @@ function renderSnapshot() {
   c.width = snap64(src.width);   // размер буфера учитывает DPR панели
   c.height = snap64(src.height);
   const ctx = c.getContext("2d");
-  ctx.fillStyle = "#ffffff";
-  ctx.fillRect(0, 0, c.width, c.height);
   ctx.drawImage(src, (c.width - src.width) / 2, (c.height - src.height) / 2);
   return c;
 }
 
-async function uploadSnapshot(canvas) {
+async function uploadImage(canvas, name, category = "general") {
   const blob = await new Promise((res) => canvas.toBlob(res, "image/png"));
   const fd = new FormData();
-  fd.append("file", blob, "ifc-snapshot.png");
+  fd.append("file", blob, name);
   // NB: POST /api/v1/images/ в 6.2 — «create upload entry» (JSON width/height);
-  // multipart-загрузка файла живёт на /api/v1/images/upload
+  // multipart-загрузка файла живёт на /api/v1/images/upload.
+  // category=user попадает во вкладку «Assets» галереи (она фильтрует
+  // categories=control|mask|user|other); general — в «Изображения».
+  // «To Canvas» оставляем general — проверенный путь IFC-снимков.
   const r = await fetch(
-    "/api/v1/images/upload?image_category=general&is_intermediate=false",
+    `/api/v1/images/upload?image_category=${category}&is_intermediate=false`,
     { method: "POST", body: fd },
   );
   if (!r.ok) throw new Error("HTTP " + r.status);
   return await r.json(); // ImageDTO
 }
 
-async function sendSnapshot({ generate = false } = {}) {
-  if (!model) { embedToast("Сначала загрузите модель", true); return; }
-  const api = window.parent && window.parent.__devbimIfc;
-  if (!api) { embedToast("Мост к холсту недоступен — перезагрузите страницу", true, 5000); return; }
-  const btn = generate ? $("btn-snap-gen") : $("btn-snap");
+async function sendSnapshot({ toCanvas = true } = {}) {
+  if (!model) { embedToast("Load a model first", true); return; }
+  let api = null;
+  if (toCanvas) {
+    api = window.parent && window.parent.__devbimIfc;
+    if (!api) { embedToast("canvas bridge unavailable (reload the page)", true, 5000); return; }
+  }
+  const btn = toCanvas ? $("btn-snap") : $("btn-snap-assets");
   btn.disabled = true;
   try {
-    embedToast("Снимок…", false, 60000);
-    const dto = await uploadSnapshot(renderSnapshot());
-    await api.toCanvas(dto, generate);
-    embedToast(generate
-      ? "Снимок отправлен в генерацию"
-      : "Снимок передан на холст — кистью выделите «Маску перерисовки» (штриховка)");
+    embedToast("Snapshot…", false, 60000);
+    const name = "ifc-snapshot.png";
+    const dto = await uploadImage(renderSnapshot(), name, toCanvas ? "general" : "user");
+    if (toCanvas) {
+      await api.toCanvas(dto, false);
+      embedToast("Snapshot placed on canvas — brush an inpaint mask, then Generate");
+    } else {
+      embedToast(`Snapshot saved to the gallery "Assets" tab (${name})`);
+    }
   } catch (e) {
     console.error(e);
-    embedToast("Ошибка: " + (e?.message || e), true, 6000);
+    embedToast("Error: " + (e?.message || e), true, 6000);
   } finally {
     btn.disabled = false;
   }
 }
 
 if (EMBED) {
-  $("btn-snap").addEventListener("click", () => sendSnapshot());
-  $("btn-snap-gen").addEventListener("click", () => sendSnapshot({ generate: true }));
+  $("btn-snap").addEventListener("click", () => sendSnapshot({ toCanvas: true }));
+  $("btn-snap-assets").addEventListener("click", () => sendSnapshot({ toCanvas: false }));
 
   // список моделей с сервера в плавающей панели
   (async () => {
@@ -765,10 +775,10 @@ if (EMBED) {
       if (!r.ok) throw new Error("HTTP " + r.status);
       const d = await r.json();
       const names = d.models || d || [];
-      sel.innerHTML = '<option value="">— модель —</option>' +
+      sel.innerHTML = '<option value="">— model —</option>' +
         names.map((n) => `<option value="${escapeHtml(n.name ?? n)}">${escapeHtml(n.name ?? n)}${n.size ? " · " + fmtSize(n.size) : ""}</option>`).join("");
     } catch {
-      sel.innerHTML = '<option value="">— сервер: нет моделей —</option>';
+      sel.innerHTML = '<option value="">— server: no models —</option>';
     }
   })();
 
@@ -776,12 +786,12 @@ if (EMBED) {
     const name = e.target.value;
     if (!name) return;
     try {
-      embedToast("Загрузка " + name + "…", false, 60000);
+      embedToast("Loading " + name + "…", false, 60000);
       await loadServerModel(name);
       rememberModel(name);
-      embedToast("Модель загружена");
+      embedToast("Model loaded");
     } catch (err) {
-      embedToast("Не удалось загрузить: " + err.message, true, 6000);
+      embedToast("Failed to load: " + err.message, true, 6000);
     } finally {
       e.target.value = "";
     }
@@ -793,7 +803,7 @@ if (EMBED) {
     if (e.newValue === loadedModelName) return;
     loadServerModel(e.newValue).catch((err) => {
       console.warn("sync:", err);
-      embedToast("Синхронизация: не удалось загрузить " + e.newValue, true, 5000);
+      embedToast("Sync: failed to load " + e.newValue, true, 5000);
     });
   });
 
