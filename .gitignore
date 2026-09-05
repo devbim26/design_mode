@@ -22,10 +22,14 @@ ifc_assets/package.json
 ifc_assets/package-lock.json
 ifc_assets/entry.mjs
 
-# Компании-лицензиаты: данные и секреты
+# Компании-лицензиаты: данные и секреты каждой компании
 companies/*
 !companies/.gitkeep
 companies.json
+
+# Логи (в т.ч. перенесённые из корня)
+logs/
+
+# Мусор тестовых прогонов
 data_test_companies.json
 data_test_companies/
-logs/
