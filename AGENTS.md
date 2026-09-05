@@ -10,7 +10,8 @@ ImageRouter, IFC-вьювером, PDF-вьювером, гейтом сайта
 `venv/Lib/site-packages/invokeai/` — после
 `pip install --force-reinstall invokeai==6.2.0` применять в порядке:
 `rebrand_devbim.py` → `setup_imagerouter.py` → `setup_ifcviewer.py` →
-`setup_pdfviewer.py` → `setup_site_auth.py`. Все — идемпотентны.
+`setup_pdfviewer.py` → `setup_site_auth.py` → `setup_style_presets.py`.
+Все — идемпотентны.
 
 ## Где что
 

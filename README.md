@@ -74,6 +74,9 @@
 | `devbim_banner.js` | Исходник брендового баннера над интерфейсом (деплоит ребрендинг) |
 | `setup_imagerouter.py` | Скрипт интеграции ImageRouter (см. «ImageRouter») |
 | `imagerouter/` | Исходники интеграции: прокси-роутер, страница вкладки, админ-гейт |
+| `setup_style_presets.py` | Профессиональные style-пресеты: фасады / интерьеры / генплан (см. «Style-пресеты») |
+| `style_preset_images/` | Превью пресетов 256 px — источник, деплоится setup-скриптом в venv |
+| `make_style_previews.py` | Генерация превью пресетов через ImageRouter (демо-сюжеты) |
 | `setup_ifcviewer.py` | Скрипт вкладки «IFC» — 3D-просмотр BIM-моделей (см. «IFC-вьювер») |
 | `ifc/` | Исходники вьювера: страница, роутер, ассеты @thatopen + web-ifc |
 | `start_devbim.bat` | Запуск сервера (сам находит `data\`, пишет лог в консоль) |
@@ -190,6 +193,50 @@ cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI"
 Локальные модели Stable Diffusion не устанавливались (облегчённый режим):
 для генерации используется ImageRouter (см. следующий раздел) — либо
 добавьте локальную модель стандартно: `/api/v1/models/install`.
+
+## Style-пресеты (промты по умолчанию)
+
+Стоковые шаблоны InvokeAI (Photography, Anime, …) заменены набором для трёх
+сценариев выпуска альбомов проектной документации. Пресет дополняет промпт
+пользователя (подставляется вместо `{prompt}`) профессиональной
+архвиз-обвязкой: камера, свет, материалы, окружение, качество. Названия и
+тексты — на английском (русскоязычная адаптация интерфейса запланирована
+отдельно; когда появится — переименовать `PRESETS` и превью). Свой промпт
+пользователь пишет на любом языке. Скриншот: `docs/style-presets-ui-en.png`.
+
+- **Facades** (4): Neutral Daylight · Golden Hour · Blue Hour (Evening) ·
+  Frontal (Album Sheet — вид «в упор», без перспективы)
+- **Interiors** (3): Daylight · Evening Light · Public Space
+- **Master Plan** (3): Aerial (Top-Down, надир) · Bird's Eye (45°) ·
+  Orthographic (Album Sheet — плоский вид, без теней и перспективы)
+
+У каждого пресета есть превью-картинка (256 px, генерируется через
+ImageRouter по демо-сюжету): сначала `make_style_previews.py` кладёт PNG
+в `style_preset_images/` (имя файла = имя пресета), затем setup-скрипт
+копирует их в пакет — для default-пресетов InvokeAI ищет превью **по имени
+пресета** в `default_style_preset_images/`. Поэтому имена пресетов обязаны
+быть корректными именами файлов Windows (без `/ \ : * ? " < > |` — было
+наступлено на «(3/4)»); при переименовании пресетов setup сам вычищает из
+пакета устаревшие PNG. Перегенерация одного/всех:
+`make_style_previews.py [--only-missing]`; основная модель — платная
+`Tongyi-MAI/Z-Image-Turbo` (~0.0016 кредита/картинка; у `:free`-моделей
+лимит 3 запроса/сутки исчерпывается мгновенно).
+
+InvokeAI при каждом старте удаляет пресеты `type='default'` и заново сеет
+их из `venv/.../style_preset_records/default_style_presets.json`, поэтому
+правки только в БД живут до перезапуска. Скрипт правит и seed-файл, и живую
+БД — работающий сервер подхватывает без перезапуска (в UI — F5). Оригинал
+сохранён рядом как `default_style_presets.json.orig`.
+
+```powershell
+.\venv\Scripts\python.exe setup_style_presets.py            # применить
+.\venv\Scripts\python.exe setup_style_presets.py --restore  # вернуть стоковые
+.\venv\Scripts\python.exe tests\test_style_presets.py       # проверка
+```
+
+Пресеты правятся в списке `PRESETS` в `setup_style_presets.py`; seed-файл
+пишется ASCII-эскейпами (`ensure_ascii`): InvokeAI читает его `open()` без
+encoding, и без этого кириллица названий падает на cp1251 вне PYTHONUTF8=1.
 
 ## ImageRouter
 

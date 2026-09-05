@@ -301,7 +301,40 @@ invokeai==6.2.0` их нужно запускать повторно в поря
     Правка вида/позиции — правкой `imagerouter/devbim_mask_toggle.js` +
     повторный `setup_imagerouter.py` (как баннер). Откат: `*.imagerouter-bak`,
     `index.html.masktoggle-bak`, удалить `dist/devbim-mask-toggle.js`.
-
+19. **Профессиональные style-пресеты** (промты по умолчанию, сессия от
+    05.09.2026): стоковый набор InvokeAI заменён десятью пресетами под
+    альбомы проектной документации — Facades (Neutral Daylight / Golden
+    Hour / Blue Hour / Frontal — Album Sheet), Interiors (Daylight /
+    Evening Light / Public Space), Master Plan (Aerial Top-Down / Bird's
+    Eye 45° / Orthographic — Album Sheet). НАЗВАНИЯ на английском по
+    решению пользователя (05.09, вечер); русская адаптация интерфейса
+    запланирована позже — тогда переименовать PRESETS в
+    `setup_style_presets.py` + переименовать PNG в `style_preset_images/`
+    и перезапустить setup (устаревшие PNG из пакета он вычищает сам).
+    ГРАБЛЯ: пресеты `type='default'` при каждом старте сервера
+    пересеиваются из
+    `venv/.../style_preset_records/default_style_presets.json` — править
+    надо seed-файл (+ живая БД), чем и занимается идемпотентный
+    `setup_style_presets.py` (откат: `--restore`, бэкап `.orig` рядом).
+    Вторая грабля: InvokeAI читает seed-файл `open()` без encoding —
+    файл обязан быть ASCII (`ensure_ascii=True`), иначе кириллица названий
+    валит старт сервера на cp1251 вне PYTHONUTF8=1. Живая БД
+    синхронизируется скриптом на лету (WAL, busy_timeout), серверный
+    сервис пресетов читает таблицу на каждый запрос — перезапуск не нужен,
+    в UI достаточно F5 (RTK-кэш вкладки живёт до перезагрузки страницы —
+    «в списке английские стоковые названия» = просто несвежая вкладка).
+    Тест: `tests/test_style_presets.py`.
+    Превью (маленькие PNG 256 px): для default-пресетов InvokeAI ищет
+    картинку ПО ИМЕНИ пресета в
+    `.../style_preset_images/default_style_preset_images/{name}.png`
+    (не по id в data/!). ГРАБЛЯ: имя пресета обязано быть корректным
+    именем файла Windows — название со слэшем «(3/4)» молча ломало
+    сохранение превью; тест теперь ловит такие имена. Генерация превью:
+    `make_style_previews.py` (демо-сюжет подставляется вместо {prompt},
+    модель Tongyi-MAI/Z-Image-Turbo ~0.0016 кредита/шт; :free-модели
+    непригодны — 3 запроса/сутки исчерпываются сразу, проверено 05.09).
+    Источник превью — `style_preset_images/` (в git), деплой в venv —
+    setup-скриптом. Скриншот UI: `docs/style-presets-ui-en.png`.
 ## Ключевые технические детали (грабли, на которые уже наступили)
 
 - **URL фронтенд строит из openapi operationId** (не литералы в JS).
