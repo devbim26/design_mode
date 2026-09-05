@@ -276,7 +276,11 @@ invokeai==6.2.0` их нужно запускать повторно в поря
     `setup_imagerouter.py`: `patch_canvas_bridge()` (бандл ищется по
     `displayName="TabContent"`), `deploy_mask_toggle()` (бэкап
     `index.html.masktoggle-bak`). Виджет: тик 500 мс ждёт мост и
-    `__devbimGetTab()`, показывается только на вкладке canvas; подсветка —
+    `__devbimGetTab()`, показывается только на вкладке canvas И когда в
+    dockview активна сама панель холста (`document.querySelector(
+    '.konvajs-content')` — Launchpad/Image Viewer/IFC Viewer демонтируют
+    рабочую область холста; текст вкладок не годится — локализация);
+    подсветка —
     через `store.subscribe` (store = `manager.stateApi.store`), состояние
     `state.canvas.selectedEntityIdentifier.type`; клик: слой есть →
     `dispatch({type:"canvas/entitySelected",payload:{entityIdentifier:{id,type}}})`

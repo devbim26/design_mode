@@ -90,10 +90,16 @@
     sync();
   }
 
+  // Рабочая область холста смонтирована только когда её панель активна
+  // в dockview (Launchpad/Image Viewer/IFC Viewer её демонтируют).
+  function canvasPanelActive() {
+    return !!document.querySelector(".konvajs-content");
+  }
+
   function sync() {
     var m = manager();
     var tab = window.__devbimGetTab ? window.__devbimGetTab() : null;
-    if (!m || tab !== "canvas") {
+    if (!m || tab !== "canvas" || !canvasPanelActive()) {
       if (root) root.style.display = "none";
       return;
     }
