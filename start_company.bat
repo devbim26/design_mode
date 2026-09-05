@@ -15,7 +15,7 @@ if not exist "companies\%~1\.env" (
   echo Компания не найдена: %~1 ^(нет companies\%~1\.env^)
   exit /b 1
 )
-rem cwd = каталог компании: её .env грузится первым (порядок cwd -^> root -^> parent)
+rem cwd = каталог компании: её .env грузится первым (порядок INVOKEAI_ROOT -^> parent -^> cwd)
 cd /d "%~dp0companies\%~1"
 set "INVOKEAI_ROOT=%~dp0companies\%~1\data"
 echo Запуск сервера для компании %~1 ...
