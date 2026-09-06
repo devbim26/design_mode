@@ -108,7 +108,7 @@ class AnalyzeImageInvocation(BaseInvocation):
 Для analyze-image: «Опиши изображение как промт, по которому его можно
 воссоздать» + те же правила вывода.
 
-### 2. Клиент: два идемпотентных патча в `setup_imagerouter.py`
+### 2. Клиент: три идемпотентных патча в `setup_imagerouter.py`
 
 **`patch_prompt_expansion_flag()`** — index-бандл (искать по `index-*.js`):
 - OLD: `allowPromptExpansion:!1` (проверено: ровно 1 вхождение)
@@ -130,6 +130,24 @@ class AnalyzeImageInvocation(BaseInvocation):
   до промт-only, не ломая стоковый флоу).
 - Идемпотентность: по наличию `images:` в NEW-фрагменте.
 
+**`patch_expansion_overlay_edit()`** — App-бандл, редактируемый оверлей
+результата (требование пользователя 06.09: «отредактировать → вставить»).
+Штатный оверлей `W$e=({expandedText:e})` показывает результат СТАТИЧЕСКИМ
+текстом (chakra Text) — правка до вставки невозможна. Патч переписывает
+компонент (якорь `W$e=({expandedText:e})=>{` — проверено: ровно 1 вхождение;
+заменяется тело компонента до `,Lne=u.memo(`):
+- текст результата → **uncontrolled textarea** (chakra `Ns` — та же, что у
+  промпт-бокса, `variant:"darkFilled"`, `defaultValue:e`, маркер
+  `data-devbim-enhanced`) — React не контролирует значение после монтирования,
+  пользователь свободно правит;
+- обработчики Replace/Insert читают ТЕКУЩЕЕ значение из DOM
+  (`document.querySelector("textarea[data-devbim-enhanced]").value`,
+  fallback на исходный `e`) — вставляется отредактированный текст;
+  Insert по-прежнему дописывает в конец основного промта через `\n`;
+- кнопки/иконки/лейаут (Replace зелёная / Insert синяя / Discard красная)
+  переиспользуются из заменяемого фрагмента (все идентификаторы в скоупе).
+- Идемпотентность: по наличию `data-devbim-enhanced` в бандле.
+
 Плюс `deploy_prompt_enhancer()`: копирование `imagerouter/prompt_enhancer.py` →
 `invokeai/app/invocations/devbim_prompt_enhancer.py` (идемпотентно, перезапись).
 
@@ -147,10 +165,11 @@ class AnalyzeImageInvocation(BaseInvocation):
 ### 4. UX-потоки (все штатные, ничего своего)
 
 - Промпт-бокс → ✨ → «Expand current prompt»: текущий промт (+референсы из
-  патча yke) → VLM → оверлей → Replace/Insert/Discard.
+  патча yke) → VLM → оверлей (текст **редактируемый**) → правка при желании →
+  Replace / Insert / Discard.
 - Дроп картинки на промпт-бокс / «Upload image for prompt generation» /
   ПКМ по картинке галереи → «Use for prompt generation»: картинка → VLM →
-  оверлей → Replace/Insert.
+  оверлей (редактируемый) → Replace/Insert.
 - Во время работы textarea заблокирована, спиннер; ошибка — тост
   «Prompt expansion failed» (локализован).
 
@@ -192,7 +211,8 @@ class AnalyzeImageInvocation(BaseInvocation):
 
 Ручной E2E (Playwright, конвенция проекта):
 - F5 → в промпт-боксе кнопка ✨ → «Expand current prompt» → спиннер →
-  оверлей → Replace (промт заменён улучшенным).
+  оверлей → отредактировать текст → Replace (в промпте отредактированная
+  версия) и Insert (дописан в конец).
 - Дроп картинки на промпт-бокс → оверлей с описанием.
 - ПКМ по картинке галереи → «Use for prompt generation».
 - Добавить Reference Image → улучшить → результат учитывает содержимое референса.
