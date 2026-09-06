@@ -86,11 +86,117 @@
   #loadbar i{display:block; height:100%; width:0; background:var(--accent); transition:width .3s}
   #toolbar{
     position:absolute; left:10px; top:10px; display:flex; gap:6px; flex-wrap:wrap; max-width:calc(100% - 20px);
+    z-index:5;
   }
   #toolbar button{padding:4px 10px; font-size:12px; font-weight:500}
   #navhelp{
     position:absolute; right:10px; bottom:10px; font-size:11px; color:var(--muted);
     background:rgba(12,13,15,.75); border:1px solid var(--border); border-radius:6px; padding:4px 9px;
+  }
+
+  /* --- панель «Сечения» --- */
+  #secpanel{
+    display:none; position:absolute; left:10px; top:46px; z-index:7;
+    width:292px; background:var(--panel); border:1px solid var(--border);
+    border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.45);
+    max-height:calc(100% - 60px); overflow:auto; padding:10px;
+  }
+  #secpanel.open{display:block}
+  #secpanel h3{
+    margin:0 0 8px; font-size:11px; text-transform:uppercase; letter-spacing:.06em;
+    color:var(--muted); display:flex; align-items:center; gap:6px;
+  }
+  #secpanel h3 .spacer{flex:1}
+  #secpanel h3 button{padding:2px 8px; font-size:12px}
+  .sec-adds{display:grid; grid-template-columns:1fr 1fr 1fr; gap:6px; margin-bottom:8px}
+  .sec-adds button{padding:5px 4px; font-size:11.5px; font-weight:500}
+  #sec-show-planes{
+    width:100%; text-align:left; margin-bottom:8px; background:transparent;
+    color:var(--muted); border:1px solid var(--border); font-weight:400;
+  }
+  #sec-show-planes.on{color:var(--accent); border-color:var(--accent); background:#12232d}
+  .sec-list-title{font-size:11px; color:var(--muted); margin:6px 0 6px}
+  .sec-card{
+    border:1px solid var(--border); border-radius:7px; padding:7px 8px 8px;
+    margin-bottom:8px; background:var(--panel2);
+  }
+  .sec-head{display:flex; align-items:center; gap:5px}
+  .sec-head .name{flex:1; font-size:12px; font-weight:600; white-space:nowrap;
+    overflow:hidden; text-overflow:ellipsis}
+  .sec-head .pos{font-size:11px; color:var(--muted); white-space:nowrap}
+  .sec-head button{
+    padding:2px 7px; font-size:11.5px; background:transparent; color:var(--muted);
+    border:1px solid var(--border); font-weight:400; flex:0 0 auto;
+  }
+  .sec-head button:hover{color:var(--text)}
+  .sec-head button.on{color:var(--accent); border-color:var(--accent)}
+  .sec-slider{display:flex; align-items:center; gap:8px; margin-top:7px}
+  .sec-slider input[type=range]{flex:1; accent-color:var(--accent)}
+  .sec-empty{font-size:12px; color:var(--muted); padding:2px 0 4px}
+  #sec-del-all{width:100%; background:transparent; color:var(--muted);
+    border:1px solid var(--border); font-weight:400}
+  .sec-hint{font-size:11px; color:var(--muted); margin-top:7px; line-height:1.4}
+
+  /* --- панель «Человек» --- */
+  #personpanel{
+    display:none; position:absolute; left:10px; top:46px; z-index:7;
+    width:292px; background:var(--panel); border:1px solid var(--border);
+    border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.45);
+    max-height:calc(100% - 60px); overflow:auto; padding:10px;
+  }
+  #personpanel.open{display:block}
+  #personpanel h3{
+    margin:0 0 8px; font-size:11px; text-transform:uppercase; letter-spacing:.06em;
+    color:var(--muted); display:flex; align-items:center; gap:6px;
+  }
+  #personpanel h3 .spacer{flex:1}
+  #personpanel h3 button{padding:2px 8px; font-size:12px}
+  #person-place{width:100%; margin-bottom:8px}
+  #person-eye{width:100%; margin-bottom:8px}
+  #person-info{font-size:12px; color:var(--muted); margin:0 0 8px; display:none;
+    border:1px solid var(--border); border-radius:6px; padding:5px 8px; background:var(--panel2)}
+  #person-ctx{display:none; margin:0 0 8px}
+  #person-ctx label{display:block; font-size:11px; color:var(--muted); margin-bottom:3px}
+  #person-ctx input{
+    width:100%; background:var(--bg); color:var(--text); border:1px solid var(--border);
+    border-radius:6px; padding:4px 8px; font:inherit; font-size:11.5px; outline:none;
+  }
+  #person-ctx input:focus{border-color:var(--accent)}
+  #person-remove{width:100%; background:transparent; color:var(--muted);
+    border:1px solid var(--border); font-weight:400; display:none}
+  .person-hint{font-size:11px; color:var(--muted); margin-top:7px; line-height:1.4}
+  body.placing{cursor:crosshair}
+
+  /* --- панель «Камера» (для ИИ-рендеринга) --- */
+  #campanel{
+    display:none; position:absolute; left:10px; top:46px; z-index:7;
+    width:292px; background:var(--panel); border:1px solid var(--border);
+    border-radius:8px; box-shadow:0 8px 24px rgba(0,0,0,.45);
+    max-height:calc(100% - 60px); overflow:auto; padding:10px;
+  }
+  #campanel.open{display:block}
+  #campanel h3{
+    margin:0 0 8px; font-size:11px; text-transform:uppercase; letter-spacing:.06em;
+    color:var(--muted); display:flex; align-items:center; gap:6px;
+  }
+  #campanel h3 .spacer{flex:1}
+  #campanel h3 button{padding:2px 8px; font-size:12px}
+  .cam-row{display:flex; align-items:center; gap:8px; margin-bottom:8px}
+  .cam-row label{flex:0 0 auto; font-size:12px; color:var(--muted)}
+  .cam-row input[type=range]{flex:1; accent-color:var(--accent)}
+  .cam-row .val{flex:0 0 44px; text-align:right; font-size:12px; color:var(--text)}
+  .cam-btns{display:grid; grid-template-columns:1fr 1fr; gap:6px; margin-bottom:8px}
+  .cam-btns button{padding:5px 4px; font-size:11.5px; font-weight:500}
+  #cam-guide{width:100%; margin-bottom:2px}
+  .cam-hint{font-size:11px; color:var(--muted); margin-top:7px; line-height:1.4}
+  #cropguide{
+    display:none; position:absolute; z-index:4; pointer-events:none;
+    border:2px dashed var(--accent); border-radius:2px;
+    box-shadow:0 0 0 200vmax rgba(12,13,15,.35);
+  }
+  #cropguide .tag{
+    position:absolute; left:0; top:-20px; font-size:10.5px; color:var(--accent);
+    background:rgba(12,13,15,.8); border-radius:4px; padding:1px 6px; white-space:nowrap;
   }
 
   .prop-group{margin-bottom:10px; border:1px solid var(--border); border-radius:6px; overflow:hidden}
@@ -162,8 +268,63 @@
       <button id="btn-hide" class="ghost" title="Скрыть выделенные элементы">Скрыть</button>
       <button id="btn-isolate" class="ghost" title="Оставить только выделенные элементы">Изолировать</button>
       <button id="btn-fit" class="ghost" title="Вписать модель в окно">Вписать</button>
-      <button id="btn-plane" class="ghost" title="Добавить горизонтальную секущую плоскость (перетаскивайте мышью)">Сечение</button>
-      <button id="btn-planes-del" class="ghost" title="Удалить все секущие плоскости">✕ сечения</button>
+      <button id="btn-sections" class="ghost" title="Сечения: горизонтальные и вертикальные, скрытие плоскостей, позиция слайдером">Сечения ▾</button>
+      <button id="btn-person" class="ghost" title="Человек для масштаба: постановка на перекрытие и вид от глаз (1,7 м)">👤 ▾</button>
+      <button id="btn-camera" class="ghost" title="Камера для ИИ-рендеринга: FOV, вертикали, орто-фасад, рамка кадра">📷 ▾</button>
+    </div>
+    <div id="campanel">
+      <h3>Камера <span class="spacer"></span><button id="cam-close" class="ghost" title="Закрыть панель">✕</button></h3>
+      <div class="cam-row">
+        <label for="cam-fov" title="Фокусное расстояние перспективной камеры">FOV</label>
+        <input type="range" id="cam-fov" min="20" max="90" step="1" value="50">
+        <span class="val" id="cam-fov-val">50°</span>
+      </div>
+      <div class="cam-btns">
+        <button id="cam-verticals" title="В виде от глаз: убрать наклон камеры — вертикали стен строго вертикальны (двухточечная перспектива). Горячая клавиша V">⌷ Вертикали</button>
+        <button id="cam-horizon" title="Выровнять орбитальную камеру: взгляд строго горизонтальный">— Горизонт</button>
+        <button id="cam-ortho" title="Ортографический фронтальный вид: по нормали выбранного элемента (или ближайшей к камере оси) — чистый фасад без перспективы">▦ Орто-фасад</button>
+        <button id="cam-persp" title="Вернуться в перспективу">◐ Перспектива</button>
+      </div>
+      <div class="cam-row">
+        <label for="cam-guide" title="Рамка кадрирования поверх вьюпорта — снимок обрежется по рамке">Кадр</label>
+        <select id="cam-guide">
+          <option value="">свободный</option>
+          <option value="1:1">1:1</option>
+          <option value="3:2">3:2</option>
+          <option value="2:3">2:3</option>
+          <option value="16:9">16:9</option>
+          <option value="9:16">9:16</option>
+          <option value="4:5">4:5</option>
+          <option value="3:4">3:4 (портрет)</option>
+        </select>
+      </div>
+      <div class="cam-hint">«Орто-фасад» берёт нормаль последнего выбранного элемента (кликните по стене) — снимки фасадов без искажений. Снимок кадрируется по рамке, стороны кратны 64.</div>
+    </div>
+    <div id="cropguide"><span class="tag">кадр</span></div>
+    <div id="personpanel">
+      <h3>Человек <span class="spacer"></span><button id="person-close" class="ghost" title="Закрыть панель">✕</button></h3>
+      <button id="person-place" title="Включить режим постановки, затем кликните по полу/перекрытию в модели">👤 Поставить на перекрытие</button>
+      <button id="person-eye" title="Камера в глаза человека (высота 1,7 м): мышь — осмотр, WASD — ходьба">👁 Вид от глаз · 1,7 м</button>
+      <div id="person-info"></div>
+      <div id="person-ctx">
+        <label for="person-context" title="Строится по позиции человека или выделению; копируется в буфер при снимке">Для ИИ-промта (клик — выделить)</label>
+        <input readonly id="person-context" title="Вставьте в промт после снимка (Ctrl+V)">
+      </div>
+      <button id="person-remove">✕ Убрать человека</button>
+      <div class="person-hint">Клик по вертикальной грани (стене) опустит человека на пол под ней. В виде от глаз: мышь — осмотр, WASD/стрелки — ходьба, Shift — быстрее, ESC — вернуться к обзору.</div>
+    </div>
+    <div id="secpanel">
+      <h3>Сечения <span class="spacer"></span><button id="sec-close" class="ghost" title="Закрыть панель">✕</button></h3>
+      <div class="sec-adds">
+        <button id="sec-add-h" title="Горизонтальное сечение (план): всё выше плоскости скрывается">▬ Гориз.</button>
+        <button id="sec-add-x" title="Вертикальное сечение по оси X (разрез вдоль): скрывается половина со стороны камеры">▯ Верт. X</button>
+        <button id="sec-add-z" title="Вертикальное сечение по оси Z (разрез поперёк): скрывается половина со стороны камеры">▯ Верт. Z</button>
+      </div>
+      <button id="sec-show-planes" title="Скрыть/показать вспомогательные плоскости — само сечение продолжает действовать">👁 Плоскости: показаны</button>
+      <div class="sec-list-title" id="sec-list-title">Активные сечения (0)</div>
+      <div id="sec-list"></div>
+      <button id="sec-del-all">✕ Удалить все сечения</button>
+      <div class="sec-hint">Плоскость тянется мышью за стрелку. Скрытые плоскости продолжают резать модель — двигайте их слайдером.</div>
     </div>
     <div class="empty" id="empty">
       <div class="big">🏢</div>
@@ -195,7 +356,9 @@
 import {
   Components, Worlds, SimpleScene, OrthoPerspectiveCamera, SimpleRenderer,
   FragmentsManager, IfcLoader, Hider, Clipper,
-  Vector2, Vector3, Box3, Color,
+  Vector2, Vector3, Box3, Color, Group, Mesh, MeshBasicMaterial,
+  PlaneGeometry, SphereGeometry, CanvasTexture, PerspectiveCamera,
+  Euler, SRGBColorSpace, DoubleSide,
 } from "/ifc/thatopen.mjs";
 
 const $ = (id) => document.getElementById(id);
@@ -286,6 +449,7 @@ async function selectElements(ids, { showProps = true } = {}) {
   selection = new Set(ids);
   await applyHighlight();
   markTreeSelection();
+  updatePromptContext();          // контекст для ИИ-промта (если человека нет)
   if (showProps) {
     if (ids.length === 1) await showProperties(ids[0]);
     else if (ids.length > 1) showPropsSummary(ids.length);
@@ -329,6 +493,9 @@ async function loadIfc(bytes, name) {
 
   await buildTree();
   fitModel();
+  if (personGroup && personModelName && personModelName !== name) removePerson();
+  renderSecList();        // сечения переживают загрузку — пересчитать слайдеры
+  updateSecShowPlanes();
   await setProgress(null);
 
   const secs = ((performance.now() - t0) / 1000).toFixed(1);
@@ -396,6 +563,23 @@ window.__ifc = {
   get fragments() { return fragments; }, get hider() { return hider; },
   get clipper() { return clipper; }, get model() { return model; },
   get selection() { return selection; },
+  addSection, refreshSections: renderSecList, movePlane,
+  get promptContext() { return $("person-context").value; },
+  camera: { levelVerticals, levelOrbit, orthoFacade,
+    setFov: (f) => { fovSlider.value = String(f); fovSlider.dispatchEvent(new Event("input", { bubbles: true })); },
+    setGuide: (v) => { const g = $("cam-guide"); g.value = v; g.dispatchEvent(new Event("change", { bubbles: true })); },
+    get lastHitNormal() { return lastHitNormal; } },
+  person: {
+    get object() { return personGroup; },
+    place: (x, y, z) => placePerson(x, y, z),
+    enterFP, exitFP, remove: removePerson,
+    get state() {
+      return {
+        placed: !!personGroup, fp: fpState.active, placing: placingPerson,
+        pos: personGroup ? personGroup.position.toArray() : null,
+      };
+    },
+  },
   selectElements, loadIfc, raycast: (x = 0, y = 0) => {
     // x, y — координаты мыши в пикселях страницы
     const mouse = new Vector2(x, y);
@@ -404,14 +588,96 @@ window.__ifc = {
   capture: () => renderSnapshot().toDataURL("image/png"),
 };
 
+// --- контекст для ИИ-промта: этаж/помещение по предкам в дереве ---
+const ctxMap = new Map();     // localId -> {storey, space, cat}
+const ctxNames = new Map();   // localId (этаж/помещение) -> имя
+let personCtxId = null;       // элемент, по которому поставлен человек
+
+function walkCtx(node, cur) {
+  // структура getSpatialStructure: контейнер (category, localId=null) ->
+  // его сущность-прокси (localId, category=null) -> элементы. Этаж/помещение
+  // узнаём по контейнеру, id берём у прокси; класс элемента — по ближайшему
+  // контейнеру-предку.
+  const ctx = {
+    storey: cur?.storey ?? null,
+    space: cur?.space ?? null,
+    cat: node.category ?? cur?.cat ?? null,
+  };
+  if (node.category === "IFCBUILDINGSTOREY" || node.category === "IFCSPACE") {
+    const id = node.localId ?? (node.children || []).find((c) => c.localId != null)?.localId ?? null;
+    if (id != null) {
+      if (node.category === "IFCBUILDINGSTOREY") ctx.storey = id;
+      else ctx.space = id;
+    }
+  }
+  if (node.localId != null) ctxMap.set(node.localId, ctx);
+  const next = { storey: ctx.storey, space: ctx.space, cat: ctx.cat };
+  for (const c of node.children || []) walkCtx(c, next);
+}
+
+async function resolveCtxNames() {
+  // имена этажей и помещений — одним пакетным запросом (LongName || Name)
+  if (!model) return;
+  const want = new Set();
+  for (const { storey, space } of ctxMap.values()) {
+    if (storey != null) want.add(storey);
+    if (space != null) want.add(space);
+  }
+  const list = [...want];
+  if (!list.length) return;
+  try {
+    const data = await model.getItemsData(list, { attributesDefault: true });
+    list.forEach((id, i) => {
+      const item = data?.[i];
+      const name = item?.LongName?.value ?? item?.Name?.value ?? null;
+      if (name) ctxNames.set(id, String(name));
+    });
+  } catch (e) { console.warn("ctx names:", e); }
+}
+
+function ctxName(localId) { return ctxNames.get(localId) ?? `#${localId}`; }
+
+// копия строки контекста в буфер при снимке — пользователь вставляет её в промт
+function copyContextToClipboard() {
+  const s = $("person-context").value;
+  if (!s) return;
+  const notify = () => embedToast("Prompt context copied — paste it into the prompt (Ctrl+V)", false, 4000);
+  const fallback = () => {
+    const ta = document.createElement("textarea");
+    ta.value = s;
+    ta.style.cssText = "position:fixed;opacity:0";
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); notify(); } catch { /* без буфера — поле в панели */ }
+    ta.remove();
+  };
+  if (navigator.clipboard?.writeText) navigator.clipboard.writeText(s).then(notify).catch(fallback);
+  else fallback();
+}
+
+function updatePromptContext() {
+  const src = personGroup ? personCtxId : (selection.size === 1 ? [...selection][0] : null);
+  const ctx = src != null ? ctxMap.get(src) : undefined;
+  const parts = [];
+  if (ctx?.storey != null) parts.push(`floor "${ctxName(ctx.storey)}"`);
+  if (ctx?.space != null) parts.push(`room "${ctxName(ctx.space)}"`);
+  if (!personGroup && ctx?.cat) parts.push(`element ${ctx.cat.replace(/^IFC/, "")}`);
+  const s = parts.length ? `BIM context: ${parts.join(", ")}` : "";
+  $("person-context").value = s;
+  $("person-ctx").style.display = s ? "block" : "none";
+}
+
 async function buildTree() {
   const container = $("tree");
   container.innerHTML = "";
   if (!model) return;
   const root = await model.getSpatialStructure();
   elementIds = new Set(collectIds(root));
+  ctxMap.clear();
+  walkCtx(root, null);
   const el = renderNode(root, true);
   container.appendChild(el);
+  resolveCtxNames().then(updatePromptContext);   // имена придут асинхронно
 }
 
 function renderNode(node, open) {
@@ -550,10 +816,22 @@ dom.addEventListener("pointerup", (e) => {
   downPos = null;
   if (dx * dx + dy * dy > 25) return;             // это было вращение/панорама
   if (e.button !== 0 || !model) return;
+  const mouse = new Vector2(e.clientX, e.clientY);
+  if (placingPerson) {
+    // постановка человека: клик по модели -> привязка к перекрытию/полу
+    fragments.raycast({ camera: world.camera.three, mouse, dom }).then(async (hit) => {
+      if (!hit) { setStatus("Мимо модели — кликните по полу или перекрытию", true); return; }
+      if (hit.normal) lastHitNormal = hit.normal.clone();   // для «Орто-фасада»
+      setPlacing(false);
+      await placePerson(hit.point.x, hit.point.y, hit.point.z, hit.localId);
+      setStatus("Человек поставлен — «Вид от глаз» открывает камеру 1,7 м");
+    });
+    return;
+  }
   // fragments.raycast ждёт координаты мыши в пикселях страницы (screenToCast
   // сам вычитает rect канваса и нормализует)
-  const mouse = new Vector2(e.clientX, e.clientY);
   fragments.raycast({ camera: world.camera.three, mouse, dom }).then((hit) => {
+    if (hit?.normal) lastHitNormal = hit.normal.clone();     // для «Орто-фасада»
     if (hit) selectElements([hit.localId]);
     else selectElements([]);
   });
@@ -583,21 +861,639 @@ $("btn-isolate").addEventListener("click", async () => {
 
 $("btn-fit").addEventListener("click", fitModel);
 
-$("btn-plane").addEventListener("click", async () => {
-  if (!model) return;
-  const box = model.box ?? new Box3().setFromObject(model.object);
+// --- панель «Сечения»: горизонтальные/вертикальные, скрытие плоскостей ---
+const Z_UNIT = new Vector3(0, 0, 1);
+const secMeta = new Map();            // id плоскости -> {kind:"h"|"x"|"z", n:номер}
+const secCounters = { h: 0, x: 0, z: 0 };
+const secRowRefs = new Map();         // id -> {slider, posEl} (обновление после drag)
+const SEC_NAMES = { h: "Горизонтальное", x: "Вертикальное X", z: "Вертикальное Z" };
+const SEC_KIND_BY_AXIS = { y: "h", x: "x", z: "z" };
+
+function axisOf(normal) {
+  const ax = Math.abs(normal.x), ay = Math.abs(normal.y), az = Math.abs(normal.z);
+  return ay >= ax && ay >= az ? "y" : ax >= az ? "x" : "z";
+}
+
+// Перемещение/поворот плоскости. Библиотечный setFromNormalAndCoplanarPoint
+// не годится: его reset() делает helper.lookAt(normal) ДО сброса позиции
+// helper — при флипе к нормали (1,0,0) ориентация квадрата/стрелки ломается.
+// Клиппинг синхронизируется update() из normal + helper.position.
+function movePlane(plane, normal, point) {
+  plane.normal.copy(normal);
+  plane.origin.copy(point);
+  plane.helper.position.copy(point);
+  plane.helper.quaternion.setFromUnitVectors(Z_UNIT, normal.clone().normalize());
+  plane.helper.updateMatrix();
+  plane.update();
+}
+
+function modelBox() {
+  return model ? model.box ?? new Box3().setFromObject(model.object) : null;
+}
+
+function planePos(plane) {
+  return plane.helper.position[axisOf(plane.normal)];
+}
+
+function planeRange(plane) {
+  const box = modelBox();
+  if (!box || box.isEmpty()) return null;
+  const axis = axisOf(plane.normal);
+  const size = box.getSize(new Vector3());
+  const m = size[axis] * 0.01 || 0.1;
+  return { min: box.min[axis] - m, max: box.max[axis] + m };
+}
+
+function fmtPlanePos(plane, v) {
+  const axis = axisOf(plane.normal);
+  const s = (v >= 0 ? "+" : "-") + Math.abs(v).toFixed(2) + " м";
+  return axis === "y" ? `отм. ${s}` : `${axis} = ${s}`;
+}
+
+function allPlanesVisible() {
+  for (const [, p] of clipper.list) if (!p.visible) return false;
+  return true;
+}
+
+function updateSecShowPlanes() {
+  const btn = $("sec-show-planes");
+  const all = allPlanesVisible();
+  btn.textContent = all ? "👁 Плоскости: показаны" : "👁 Плоскости: скрыты";
+  btn.classList.toggle("on", all);
+}
+
+function addSection(kind) {
+  if (!model) { setStatus("Сначала загрузите модель", true); return; }
+  const box = modelBox();
   const center = box.getCenter(new Vector3());
   const size = box.getSize(new Vector3());
+  const camPos = new Vector3();
+  world.camera.three.getWorldPosition(camPos);
+  let normal, point;
+  if (kind === "h") {
+    normal = new Vector3(0, -1, 0);
+    point = center.clone().add(new Vector3(0, size.y * 0.25, 0));
+  } else if (kind === "x") {
+    // срезаем половину, обращённую к камере, — интерьер виден сразу
+    normal = new Vector3(camPos.x >= center.x ? 1 : -1, 0, 0);
+    point = center.clone();
+  } else {
+    normal = new Vector3(0, 0, camPos.z >= center.z ? 1 : -1);
+    point = center.clone();
+  }
   clipper.enabled = true;
   clipper.visible = true;
-  await clipper.createFromNormalAndCoplanarPoint(world, new Vector3(0, -1, 0), center.add(new Vector3(0, size.y * 0.25, 0)));
-  setStatus("Секущая плоскость добавлена — тяните её мышью; всё выше плоскости скрыто");
+  const id = clipper.createFromNormalAndCoplanarPoint(world, normal, point);
+  secCounters[kind] += 1;
+  secMeta.set(id, { kind, n: secCounters[kind] });
+  renderSecList();
+  updateSecShowPlanes();
+  setStatus(`${SEC_NAMES[kind]} сечение добавлено — тяните плоскость за стрелку или слайдером`);
+}
+
+function renderSecList() {
+  const listEl = $("sec-list");
+  listEl.innerHTML = "";
+  secRowRefs.clear();
+  const ids = [...clipper.list.keys()];
+  $("sec-list-title").textContent = `Активные сечения (${ids.length})`;
+  $("sec-del-all").style.display = ids.length ? "" : "none";
+  if (!ids.length) {
+    listEl.innerHTML = '<div class="sec-empty">Сечений нет — добавьте выше.</div>';
+    return;
+  }
+  for (const id of ids) {
+    const plane = clipper.list.get(id);
+    const axis = axisOf(plane.normal);
+    const meta = secMeta.get(id) || { kind: SEC_KIND_BY_AXIS[axis], n: 1 };
+    const name = `${SEC_NAMES[meta.kind]} ${meta.n}`;
+
+    const card = document.createElement("div");
+    card.className = "sec-card";
+
+    const head = document.createElement("div");
+    head.className = "sec-head";
+    const nameEl = document.createElement("span");
+    nameEl.className = "name";
+    nameEl.textContent = name;
+    const posEl = document.createElement("span");
+    posEl.className = "pos";
+    posEl.textContent = fmtPlanePos(plane, planePos(plane));
+
+    const flipBtn = document.createElement("button");
+    flipBtn.textContent = "⇄";
+    flipBtn.title = "Развернуть сторону отсечения";
+    flipBtn.addEventListener("click", () => {
+      movePlane(plane, plane.normal.clone().negate(), plane.helper.position.clone());
+      posEl.textContent = fmtPlanePos(plane, planePos(plane));
+      setStatus("Сторона отсечения развёрнута");
+    });
+
+    const visBtn = document.createElement("button");
+    visBtn.textContent = "👁";
+    visBtn.title = "Скрыть/показать эту плоскость (сечение остаётся)";
+    visBtn.classList.toggle("on", plane.visible);
+    visBtn.addEventListener("click", () => {
+      plane.visible = !plane.visible;
+      visBtn.classList.toggle("on", plane.visible);
+      updateSecShowPlanes();
+    });
+
+    const delBtn = document.createElement("button");
+    delBtn.textContent = "✕";
+    delBtn.title = "Удалить это сечение";
+    delBtn.addEventListener("click", async () => {
+      await clipper.delete(world, id);
+      secMeta.delete(id);
+      renderSecList();
+      updateSecShowPlanes();
+    });
+
+    head.append(nameEl, posEl, flipBtn, visBtn, delBtn);
+    card.appendChild(head);
+
+    const range = planeRange(plane);
+    if (range) {
+      const row = document.createElement("div");
+      row.className = "sec-slider";
+      const slider = document.createElement("input");
+      slider.type = "range";
+      slider.min = range.min;
+      slider.max = range.max;
+      slider.step = (range.max - range.min) / 400;
+      slider.value = planePos(plane);
+      slider.title = "Положение плоскости вдоль оси";
+      slider.addEventListener("input", () => {
+        const v = Number(slider.value);
+        const p = plane.helper.position.clone();
+        p[axis] = v;
+        movePlane(plane, plane.normal.clone(), p);
+        posEl.textContent = fmtPlanePos(plane, v);
+      });
+      row.appendChild(slider);
+      card.appendChild(row);
+      secRowRefs.set(id, { slider, posEl });
+    }
+    listEl.appendChild(card);
+  }
+}
+
+// после перетаскивания стрелки — обновить слайдеры и координаты
+clipper.onAfterDrag.add(() => {
+  for (const [id, refs] of secRowRefs) {
+    const plane = clipper.list.get(id);
+    if (!plane) continue;
+    refs.posEl.textContent = fmtPlanePos(plane, planePos(plane));
+    refs.slider.value = planePos(plane);
+  }
 });
 
-$("btn-planes-del").addEventListener("click", () => {
+const secPanel = $("secpanel");
+function toggleSecPanel(force) {
+  const open = force !== undefined ? force : !secPanel.classList.contains("open");
+  secPanel.classList.toggle("open", open);
+  $("btn-sections").classList.toggle("active", open);
+  if (open) { renderSecList(); updateSecShowPlanes(); }
+}
+
+$("btn-sections").addEventListener("click", (e) => { e.stopPropagation(); toggleSecPanel(); });
+$("sec-close").addEventListener("click", () => toggleSecPanel(false));
+$("sec-add-h").addEventListener("click", () => addSection("h"));
+$("sec-add-x").addEventListener("click", () => addSection("x"));
+$("sec-add-z").addEventListener("click", () => addSection("z"));
+$("sec-del-all").addEventListener("click", () => {
   clipper.deleteAll();
+  secMeta.clear();
+  secCounters.h = secCounters.x = secCounters.z = 0;
+  renderSecList();
+  updateSecShowPlanes();
   setStatus("Секущие плоскости удалены");
 });
+$("sec-show-planes").addEventListener("click", () => {
+  clipper.visible = !allPlanesVisible();
+  renderSecList();
+  updateSecShowPlanes();
+  setStatus(clipper.visible ? "Плоскости сечений показаны" : "Плоскости скрыты — сечения продолжают действовать");
+});
+document.addEventListener("pointerdown", (e) => {
+  if (e.target.closest("#toolbar")) return;
+  if (secPanel.classList.contains("open") && !secPanel.contains(e.target)) toggleSecPanel(false);
+  if (personPanel.classList.contains("open") && !personPanel.contains(e.target)) togglePersonPanel(false);
+  if (camPanel.classList.contains("open") && !camPanel.contains(e.target)) toggleCamPanel(false);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if (fpState.active) { exitFP(); return; }
+  if (placingPerson) { setPlacing(false); setStatus("Режим постановки отменён"); return; }
+  toggleSecPanel(false);
+  togglePersonPanel(false);
+  toggleCamPanel(false);
+});
+
+// =====================================================================
+// «Человек»: силуэт для масштаба + камера от глаз (Position Camera / Walk
+// как в SketchUp). Постановка кликом с привязкой к перекрытию, вид от
+// глаз на высоте 1,7 м: осмотр мышью, ходьба WASD.
+// =====================================================================
+const EYE_HEIGHT = 1.7;
+const PERSON_H = 1.75;
+let personGroup = null;      // THREE.Group: биллборд-силуэт + маркер глаз
+let personModelName = null;  // модель, в которую поставлен человек
+let placingPerson = false;   // режим постановки (следующий клик по модели)
+const fpState = {
+  active: false, yaw: 0, pitch: 0, eye: new Vector3(), keys: new Set(),
+  saved: null, snapToken: 0, lastSnap: 0, lastLod: 0, raf: 0, prevT: 0,
+};
+const FP_KEYS = {
+  KeyW: "w", KeyS: "s", KeyA: "a", KeyD: "d",
+  ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right",
+};
+
+function makeSilhouetteTexture() {
+  // стоящая фигура во весь рост, ноги к нижнему краю (v=0)
+  const c = document.createElement("canvas");
+  c.width = 256; c.height = 832;
+  const x = c.getContext("2d");
+  x.fillStyle = "rgba(56,132,177,0.9)";
+  x.beginPath(); x.arc(128, 98, 52, 0, Math.PI * 2); x.fill();          // голова
+  x.fillRect(114, 138, 28, 34);                                         // шея
+  x.beginPath();                                                        // туловище
+  x.moveTo(52, 196);
+  x.quadraticCurveTo(128, 156, 204, 196);       // плечи
+  x.quadraticCurveTo(214, 330, 186, 444);       // правый бок
+  x.quadraticCurveTo(128, 466, 70, 444);        // бёдра
+  x.quadraticCurveTo(42, 330, 52, 196);         // левый бок
+  x.closePath(); x.fill();
+  x.save(); x.translate(66, 202); x.rotate(0.05);                       // руки
+  x.beginPath(); x.roundRect(-17, 0, 34, 224, 17); x.fill(); x.restore();
+  x.save(); x.translate(190, 202); x.rotate(-0.05);
+  x.beginPath(); x.roundRect(-17, 0, 34, 224, 17); x.fill(); x.restore();
+  x.beginPath();                                                        // ноги
+  x.moveTo(72, 452);
+  x.quadraticCurveTo(64, 640, 82, 816);
+  x.lineTo(120, 816);
+  x.quadraticCurveTo(117, 640, 118, 472);
+  x.closePath(); x.fill();
+  x.beginPath();
+  x.moveTo(138, 472);
+  x.quadraticCurveTo(139, 640, 138, 816);
+  x.lineTo(176, 816);
+  x.quadraticCurveTo(194, 640, 184, 452);
+  x.closePath(); x.fill();
+  x.beginPath(); x.ellipse(100, 820, 32, 12, 0, 0, Math.PI * 2); x.fill();  // стопы
+  x.beginPath(); x.ellipse(158, 820, 32, 12, 0, 0, Math.PI * 2); x.fill();
+  const tex = new CanvasTexture(c);
+  tex.colorSpace = SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+
+function ensurePersonObject() {
+  if (personGroup) return personGroup;
+  personGroup = new Group();
+  const board = new Mesh(
+    new PlaneGeometry(0.55, PERSON_H),
+    new MeshBasicMaterial({ map: makeSilhouetteTexture(), transparent: true, side: DoubleSide, depthWrite: false }),
+  );
+  board.position.y = PERSON_H / 2;
+  personGroup.add(board);
+  const eye = new Mesh(new SphereGeometry(0.05, 12, 10), new MeshBasicMaterial({ color: ACCENT }));
+  eye.position.y = EYE_HEIGHT;
+  personGroup.add(eye);
+  world.scene.three.add(personGroup);
+  return personGroup;
+}
+
+// биллборд разворачивается лицом к камере (как 2D-люди в SketchUp)
+(function billboardLoop() {
+  requestAnimationFrame(billboardLoop);
+  if (!personGroup || fpState.active) return;
+  personGroup.rotation.y = Math.atan2(
+    world.camera.three.position.x - personGroup.position.x,
+    world.camera.three.position.z - personGroup.position.z,
+  );
+})();
+
+async function snapToGround(x, y, z) {
+  // Вертикальный луч вниз от точки (+0,1): та же горизонтальная поверхность
+  // (перекрытие/пол/крыша) при клике по ней, либо пол ПОД вертикальной
+  // гранью (стеной). fragments.raycast строит луч из переданной камеры и
+  // мыши — берём ВРЕМЕННУЮ камеру, смотрящую строго вниз, и центр канваса.
+  // Возвращает y поверхности или null (промах — под точкой нет геометрии).
+  const cam = new PerspectiveCamera(35, 1, 0.01, 60);
+  cam.position.set(x, y + 0.1, z);
+  cam.lookAt(x, y - 1, z);
+  cam.updateMatrixWorld(true);
+  const rect = dom.getBoundingClientRect();
+  const mouse = new Vector2(rect.left + rect.width / 2, rect.top + rect.height / 2);
+  try {
+    const hit = await fragments.raycast({ camera: cam, mouse, dom });
+    return hit ? { y: hit.point.y, localId: hit.localId } : null;
+  } catch { return null; }
+}
+
+const fmtM = (v) => (v >= 0 ? "+" : "-") + Math.abs(v).toFixed(2);
+
+async function placePerson(x, y, z, ctxLocalId = null) {
+  ensurePersonObject();
+  const res = await snapToGround(x, y, z);
+  const gy = res?.y ?? y;
+  if (!personGroup) return gy;                      // успели убрать, пока летел луч
+  personGroup.position.set(x, gy, z);
+  personGroup.visible = true;
+  personModelName = loadedModelName;
+  personCtxId = res?.localId ?? ctxLocalId;         // контекст: где стоит
+  updatePromptContext();
+  const info = $("person-info");
+  info.style.display = "block";
+  info.textContent = `Стоит: x = ${x.toFixed(2)} м, отм. ${fmtM(gy)} м, z = ${z.toFixed(2)} м · глаза на 1,7 м`;
+  $("person-remove").style.display = "";
+  $("person-eye").disabled = false;
+  return gy;
+}
+
+function removePerson() {
+  if (fpState.active) exitFP();
+  if (personGroup) {
+    world.scene.three.remove(personGroup);
+    personGroup.traverse((o) => {
+      o.geometry?.dispose?.();
+      if (o.material) { o.material.map?.dispose?.(); o.material.dispose?.(); }
+    });
+    personGroup = null;
+  }
+  personModelName = null;
+  personCtxId = null;
+  updatePromptContext();
+  $("person-info").style.display = "none";
+  $("person-remove").style.display = "none";
+  $("person-eye").disabled = true;
+}
+
+function setPlacing(on) {
+  placingPerson = on;
+  document.body.classList.toggle("placing", on);
+  $("person-place").classList.toggle("active", on);
+  $("person-place").textContent = on ? "Кликните по перекрытию в модели…" : "👤 Поставить на перекрытие";
+}
+
+function updatePersonEyeButton() {
+  const btn = $("person-eye");
+  if (fpState.active) { btn.textContent = "↩ Вернуться к обзору"; btn.classList.add("active"); }
+  else { btn.textContent = "👁 Вид от глаз · 1,7 м"; btn.classList.remove("active"); }
+}
+
+function enterFP() {
+  if (!personGroup || fpState.active) return;
+  const target = world.camera.controls.getTarget(new Vector3());
+  fpState.saved = {
+    projection: world.camera.projection.current,
+    pos: world.camera.three.position.clone(),
+    target: target.clone(),
+  };
+  // начальный взгляд: туда, где была цель орбитальной камеры
+  const eye = personGroup.position.clone().add(new Vector3(0, EYE_HEIGHT, 0));
+  const dir = target.clone().sub(eye);
+  if (dir.lengthSq() < 1e-6) dir.set(1, 0, 0);
+  dir.normalize();
+  fpState.pitch = Math.asin(Math.max(-0.999, Math.min(0.999, dir.y)));
+  fpState.yaw = Math.atan2(-dir.x, -dir.z);
+  fpState.eye.copy(eye);
+  world.camera.projection.set("Perspective");
+  world.camera.controls.enabled = false;
+  personGroup.visible = false;                      // силуэт и есть «вы»
+  fpState.keys.clear();
+  fpState.active = true;
+  fpState.prevT = performance.now();
+  fpState.raf = requestAnimationFrame(fpLoop);
+  updatePersonEyeButton();
+  setStatus("Вид от глаз (1,7 м): мышь — осмотр, WASD/стрелки — ходьба, Shift — быстрее, ESC — выход");
+}
+
+function fpLoop() {
+  if (!fpState.active) return;
+  fpState.raf = requestAnimationFrame(fpLoop);
+  const now = performance.now();
+  const dt = Math.min(0.1, (now - fpState.prevT) / 1000);
+  fpState.prevT = now;
+  const k = fpState.keys;
+  let f = 0, s = 0;
+  if (k.has("w") || k.has("up")) f += 1;
+  if (k.has("s") || k.has("down")) f -= 1;
+  if (k.has("a") || k.has("left")) s -= 1;
+  if (k.has("d") || k.has("right")) s += 1;
+  if (f || s) {
+    const speed = k.has("shift") ? 4.8 : 1.6;       // м/с, ходьба/бег
+    // вперёд/вправо по горизонту от yaw (Euler YXZ: forward=(-sinφ,·,-cosφ))
+    const fx = -Math.sin(fpState.yaw), fz = -Math.cos(fpState.yaw);
+    const rx = Math.cos(fpState.yaw), rz = -Math.sin(fpState.yaw);
+    const len = Math.hypot(f, s);
+    fpState.eye.x += ((fx * f + rx * s) / len) * speed * dt;
+    fpState.eye.z += ((fz * f + rz * s) / len) * speed * dt;
+    personGroup.position.x = fpState.eye.x;
+    personGroup.position.z = fpState.eye.z;
+    if (now - fpState.lastSnap > 150) {             // перепривязка к полу
+      fpState.lastSnap = now;
+      const token = ++fpState.snapToken;
+      snapToGround(fpState.eye.x, fpState.eye.y, fpState.eye.z).then((res) => {
+        // промах (вышли за контур здания) — держим прежнюю высоту
+        if (!fpState.active || token !== fpState.snapToken || !personGroup || res === null) return;
+        personGroup.position.y = res.y;
+        fpState.eye.y = res.y + EYE_HEIGHT;
+        if (res.localId != null && res.localId !== personCtxId) {
+          personCtxId = res.localId;                // зашли в другое помещение
+          updatePromptContext();
+        }
+      });
+    }
+    if (now - fpState.lastLod > 250) { fpState.lastLod = now; fragments.core.update(); }
+  }
+  world.camera.three.position.copy(fpState.eye);
+  world.camera.three.quaternion.setFromEuler(new Euler(fpState.pitch, fpState.yaw, 0, "YXZ"));
+}
+
+function exitFP() {
+  if (!fpState.active) return;
+  fpState.active = false;
+  cancelAnimationFrame(fpState.raf);
+  fpState.keys.clear();
+  if (personGroup) {
+    personGroup.visible = true;
+    snapToGround(personGroup.position.x, fpState.eye.y, personGroup.position.z)
+      .then((res) => {
+        if (!personGroup || res === null) return;
+        personGroup.position.y = res.y;
+        if (res.localId != null) { personCtxId = res.localId; updatePromptContext(); }
+      });
+  }
+  world.camera.controls.enabled = true;
+  if (fpState.saved) {
+    world.camera.projection.set(fpState.saved.projection);
+    world.camera.controls.setLookAt(
+      fpState.saved.pos.x, fpState.saved.pos.y, fpState.saved.pos.z,
+      fpState.saved.target.x, fpState.saved.target.y, fpState.saved.target.z,
+    );
+    world.camera.controls.update();
+  }
+  updatePersonEyeButton();
+  setStatus("Обзор восстановлен");
+}
+
+// осмотр мышью в FP-режиме (ЛКМ-перетаскивание)
+let fpDrag = null;
+dom.addEventListener("pointerdown", (e) => {
+  if (!fpState.active || e.button !== 0) return;
+  fpDrag = { x: e.clientX, y: e.clientY };
+  dom.setPointerCapture?.(e.pointerId);
+});
+dom.addEventListener("pointermove", (e) => {
+  if (!fpState.active || !fpDrag) return;
+  const dx = e.clientX - fpDrag.x, dy = e.clientY - fpDrag.y;
+  fpDrag = { x: e.clientX, y: e.clientY };
+  fpState.yaw -= dx * 0.0042;
+  fpState.pitch = Math.max(-1.45, Math.min(1.45, fpState.pitch - dy * 0.0042));
+});
+dom.addEventListener("pointerup", () => { fpDrag = null; });
+dom.addEventListener("pointercancel", () => { fpDrag = null; });
+
+document.addEventListener("keydown", (e) => {
+  if (!fpState.active) return;
+  if (e.code === "Escape") { exitFP(); return; }
+  if (e.code === "KeyV") { levelVerticals(); return; }   // вертикали — двухточечная
+  const k = FP_KEYS[e.code];
+  if (k) { fpState.keys.add(k); e.preventDefault(); }
+  else if (e.key === "Shift") fpState.keys.add("shift");
+});
+document.addEventListener("keyup", (e) => {
+  const k = FP_KEYS[e.code];
+  if (k) fpState.keys.delete(k);
+  else if (e.key === "Shift") fpState.keys.delete("shift");
+});
+
+const personPanel = $("personpanel");
+function togglePersonPanel(force) {
+  const open = force !== undefined ? force : !personPanel.classList.contains("open");
+  personPanel.classList.toggle("open", open);
+  $("btn-person").classList.toggle("active", open);
+}
+$("btn-person").addEventListener("click", (e) => { e.stopPropagation(); togglePersonPanel(); });
+$("person-close").addEventListener("click", () => togglePersonPanel(false));
+$("person-context").addEventListener("click", (e) => { e.target.select(); });
+$("person-place").addEventListener("click", () => {
+  if (!model) { setStatus("Сначала загрузите модель", true); return; }
+  setPlacing(!placingPerson);
+  setStatus(placingPerson ? "Режим постановки: кликните по полу или перекрытию в модели" : "Режим постановки отменён");
+});
+$("person-eye").addEventListener("click", () => { fpState.active ? exitFP() : enterFP(); });
+$("person-remove").addEventListener("click", () => { removePerson(); setStatus("Человек убран"); });
+
+// =====================================================================
+// Панель «Камера» (для ИИ-рендеринга): FOV, вертикали (двухточечная
+// перспектива), горизонт орбиты, орто-фасад, рамка кадра.
+// =====================================================================
+let lastHitNormal = null;   // нормаль грани последнего raycast-клика
+const camPanel = $("campanel");
+function toggleCamPanel(force) {
+  const open = force !== undefined ? force : !camPanel.classList.contains("open");
+  camPanel.classList.toggle("open", open);
+  $("btn-camera").classList.toggle("active", open);
+}
+
+// FOV: телеобъектив (узкий) — строгие фасады, широкий — интерьеры
+const fovSlider = $("cam-fov");
+fovSlider.value = String(Math.round(world.camera.threePersp.fov));
+$("cam-fov-val").textContent = fovSlider.value + "°";
+fovSlider.addEventListener("input", () => {
+  world.camera.threePersp.fov = Number(fovSlider.value);
+  world.camera.threePersp.updateProjectionMatrix();
+  $("cam-fov-val").textContent = fovSlider.value + "°";
+});
+
+// «Вертикали»: в FP убрать наклон — вертикали стен строго вертикальны
+function levelVerticals() {
+  if (!fpState.active) { setStatus("«Вертикали» действуют в виде от глаз — включите «👁 Вид от глаз» (или клавиша V там же)", true); return; }
+  fpState.pitch = 0;
+  setStatus("Камера выровнена: вертикали стен строго вертикальны (двухточечная перспектива)");
+}
+
+// «Горизонт»: орбитальная камера — взгляд строго горизонтальный
+function levelOrbit() {
+  if (fpState.active) { setStatus("В виде от глаз используйте «Вертикали»", true); return; }
+  const ctr = world.camera.controls;
+  const target = ctr.getTarget(new Vector3());
+  const off = world.camera.three.position.clone().sub(target);
+  const horiz = new Vector3(off.x, 0, off.z);
+  if (horiz.lengthSq() < 1e-9) { setStatus("Взгляд сверху — нечем выравнивать", true); return; }
+  horiz.normalize().multiplyScalar(off.length());        // дистанция та же
+  ctr.setLookAt(target.x + horiz.x, target.y, target.z + horiz.z, target.x, target.y, target.z);
+  ctr.update();
+  setStatus("Горизонт выровнен");
+}
+
+// «Орто-фасад»: фронтальный ортографический вид без перспективы —
+// нормаль последнего выбранного элемента либо ближайшая к камере ось
+async function orthoFacade() {
+  if (!model) { setStatus("Сначала загрузите модель", true); return; }
+  if (fpState.active) { setStatus("Выйдите из вида от глаз (ESC)", true); return; }
+  const box = modelBox();
+  const center = box.getCenter(new Vector3());
+  const size = box.getSize(new Vector3());
+  let n = lastHitNormal ? lastHitNormal.clone() : null;
+  if (!n) {
+    const camPos = world.camera.three.position;
+    n = Math.abs(camPos.x - center.x) >= Math.abs(camPos.z - center.z)
+      ? new Vector3(Math.sign(camPos.x - center.x) || 1, 0, 0)
+      : new Vector3(0, 0, Math.sign(camPos.z - center.z) || 1);
+  }
+  n.y = 0;
+  n.normalize();
+  const dist = Math.max(size.x, size.y, size.z) * 1.6;
+  world.camera.projection.set("Orthographic");
+  world.camera.controls.setLookAt(
+    center.x + n.x * dist, center.y, center.z + n.z * dist,
+    center.x, center.y, center.z,
+  );
+  world.camera.controls.update();
+  try { await world.camera.fit(model.object.children); } catch (e) { console.warn("fit:", e); }
+  setStatus("Ортографический фасадный вид (без перспективы) — «◐ Перспектива» для возврата");
+}
+
+$("cam-verticals").addEventListener("click", levelVerticals);
+$("cam-horizon").addEventListener("click", levelOrbit);
+$("cam-ortho").addEventListener("click", orthoFacade);
+$("cam-persp").addEventListener("click", () => {
+  world.camera.projection.set("Perspective");
+  setStatus("Перспектива");
+});
+
+// Рамка кадра: пунктирный оверлей, снимок обрезается по ней (renderSnapshot)
+const CROP_RATIOS = { "1:1": [1, 1], "3:2": [3, 2], "2:3": [2, 3], "16:9": [16, 9], "9:16": [9, 16], "4:5": [4, 5], "3:4": [3, 4] };
+const cropGuide = $("cropguide");
+let cropRatio = null;
+function updateGuideLayout() {
+  if (!cropRatio) { cropGuide.style.display = "none"; return; }
+  const vp = $("viewport");
+  const vw = Math.max(40, vp.clientWidth - 20), vh = Math.max(40, vp.clientHeight - 20);
+  const [rw, rh] = cropRatio;
+  let w = vw, h = vw * rh / rw;
+  if (h > vh) { h = vh; w = vh * rw / rh; }
+  cropGuide.style.display = "block";
+  cropGuide.style.width = Math.round(w) + "px";
+  cropGuide.style.height = Math.round(h) + "px";
+  cropGuide.style.left = Math.round((vp.clientWidth - w) / 2) + "px";
+  cropGuide.style.top = Math.round((vp.clientHeight - h) / 2) + "px";
+}
+$("cam-guide").addEventListener("change", (e) => {
+  const v = e.target.value;
+  cropRatio = v ? CROP_RATIOS[v] : null;
+  cropGuide.querySelector(".tag").textContent = v ? `кадр ${v}` : "кадр";
+  updateGuideLayout();
+  setStatus(cropRatio ? `Рамка кадра ${v}: снимок будет обрезан по рамке` : "Рамка кадра выключена");
+});
+new ResizeObserver(updateGuideLayout).observe($("viewport"));
+
+$("btn-camera").addEventListener("click", (e) => { e.stopPropagation(); toggleCamPanel(); });
+$("cam-close").addEventListener("click", () => toggleCamPanel(false));
 
 function hideTreeMarks(ids) {
   document.querySelectorAll("#tree .tnode").forEach((n) => {
@@ -705,17 +1601,83 @@ async function loadServerModel(name) {
 // поэтому снимок надо делать в той же JS-задаче, что и рендер. Стороны
 // выравниваются кратно 64 в диапазоне 128..2048 (требование ImageRouter к
 // параметрам генерации; добавляются прозрачные поля, пропорции вида
-// сохраняются).
+// сохраняются). Если включена рамка кадра (панель «Камера») — снимок
+// кадрируется по ней. Под зданием рисуется мягкая контактная тень (по
+// проекции нижних углов bbox) — модель «стоит» на земле, ИИ не вешает
+// здание в воздух; тень видна только в прозрачных полях: WebGL-кадр
+// накладывается поверх. В FP-виде тени нет (интерьер от глаз).
+function projectGroundRect(src) {
+  const box = modelBox();
+  if (!box) return null;
+  const cam = world.camera.three;
+  const camPos = new Vector3();
+  cam.getWorldPosition(camPos);
+  const camDir = new Vector3();
+  cam.getWorldDirection(camDir);
+  const pts = [];
+  for (const [gx, gz] of [
+    [box.min.x, box.min.z], [box.max.x, box.min.z],
+    [box.max.x, box.max.z], [box.min.x, box.max.z],
+  ]) {
+    const v = new Vector3(gx, box.min.y, gz);
+    if (v.clone().sub(camPos).dot(camDir) <= 0) return null;   // основание за камерой
+    v.project(cam);
+    pts.push([(v.x + 1) / 2 * src.width, (1 - v.y) / 2 * src.height]);
+  }
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  const y0 = Math.min(...ys), y1 = Math.max(...ys);
+  return { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, w: x1 - x0, h: y1 - y0 };
+}
+
+function drawShadowEllipse(ctx, cx, cy, rx, ry) {
+  if (!(rx >= 2) || !(ry >= 2)) return;
+  if (cx + rx < 0 || cx - rx > ctx.canvas.width || cy + ry < 0 || cy - ry > ctx.canvas.height) return;
+  ctx.save();
+  ctx.translate(cx, cy);
+  ctx.scale(rx, ry);
+  const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+  g.addColorStop(0, "rgba(8,10,14,0.42)");
+  g.addColorStop(0.7, "rgba(8,10,14,0.18)");
+  g.addColorStop(1, "rgba(8,10,14,0)");
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(0, 0, 1, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.restore();
+}
+
 function renderSnapshot() {
   const r = world.renderer.three;
   r.render(world.scene.three, world.camera.three);
   const src = r.domElement;
   const snap64 = (v) => Math.min(2048, Math.max(128, Math.ceil(v / 64) * 64));
+  // кроп по рамке кадра: координаты CSS → пиксели буфера (DPR)
+  let sx = 0, sy = 0, sw = src.width, sh = src.height;
+  if (cropRatio && cropGuide.style.display !== "none") {
+    const g = cropGuide.getBoundingClientRect();
+    const s = src.getBoundingClientRect();
+    if (g.width > 4 && g.height > 4 && s.width > 0) {
+      const kx = src.width / s.width, ky = src.height / s.height;
+      sx = Math.max(0, (g.left - s.left) * kx);
+      sy = Math.max(0, (g.top - s.top) * ky);
+      sw = Math.max(32, Math.min(src.width - sx, g.width * kx));
+      sh = Math.max(32, Math.min(src.height - sy, g.height * ky));
+    }
+  }
   const c = document.createElement("canvas");
-  c.width = snap64(src.width);   // размер буфера учитывает DPR панели
-  c.height = snap64(src.height);
+  c.width = snap64(sw);
+  c.height = snap64(sh);
   const ctx = c.getContext("2d");
-  ctx.drawImage(src, (c.width - src.width) / 2, (c.height - src.height) / 2);
+  // контактная тень — до наложения WebGL-кадра (кадр 1:1, только центрирование)
+  if (model && !fpState.active) {
+    const rect = projectGroundRect(src);
+    if (rect) {
+      const ox = (c.width - sw) / 2, oy = (c.height - sh) / 2;
+      drawShadowEllipse(ctx, ox + rect.cx - sx, oy + rect.cy - sy, rect.w * 0.55, rect.h * 0.55);
+    }
+  }
+  ctx.drawImage(src, sx, sy, sw, sh, (c.width - sw) / 2, (c.height - sh) / 2, sw, sh);
   return c;
 }
 
@@ -747,6 +1709,7 @@ async function sendSnapshot({ toCanvas = true } = {}) {
   btn.disabled = true;
   try {
     embedToast("Snapshot…", false, 60000);
+    copyContextToClipboard();                     // BIM-контекст — в буфер обмена
     const name = "ifc-snapshot.png";
     const dto = await uploadImage(renderSnapshot(), name, toCanvas ? "general" : "user");
     if (toCanvas) {

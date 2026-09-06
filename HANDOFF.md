@@ -594,8 +594,141 @@ invokeai==6.2.0` их нужно запускать повторно в поря
     референсы перед генерацией. Стоимость диагностики: ~$0.6 кредитов
     (3 генерации + 2 прямых API-запроса), остаток $18.64.
 
+24. **Модернизация сечений IFC-вьювера** (06.09, вечер, по запросу
+    пользователя «вертикальные сечения + скрытие плоскости + что-то ещё»).
+    Кнопки «Сечение»/«✕ сечения» заменены кнопкой «Сечения ▾» —
+    всплывающая панель `#secpanel` в тулбаре вьюпорта (видна и в
+    embed-режиме панели «IFC Viewer» на холсте). Всё — внутри
+    `ifc/ifcviewer.html`, деплой штатным setup_ifcviewer.py (копия
+    as-is), бандлы не тронуты. Возможности: (а) три типа сечений —
+    горизонтальное (нормаль (0,-1,0), 75% высоты) и вертикальные X/Z
+    (нормаль ±X/±Z со ЗНАКОМ ПО КАМЕРЕ — срезается половина,
+    обращённая к наблюдателю); (б) тумблер «👁 Плоскости» — clipper.visible
+    (скрывает ВСЕ helpers, клиппинг остаётся); (в) карточка на каждое
+    сечение: слайдер позиции вдоль оси в пределах bbox (live-координата
+    в метрах), ⇄ флип нормали, 👁 видимость конкретной плоскости
+    (plane.visible), ✕ удаление (clipper.delete(world,id)); «Удалить все»;
+    (г) после перетаскивания стрелки слайдеры обновляются
+    (clipper.onAfterDrag); сечения переживают перезагрузку модели.
+    ГРАБЛИ (03.09…06.09 проверено по бандлу 3.4.8): (1) у Event из
+    @thatopen метод подписки `.add()`, НЕ `.on()` — на `.on()` падает
+    молча «TypeError: onAfterDrag.on is not a function»; (2)
+    библиотечный plane.setFromNormalAndCoplanarPoint НЕ годится для
+    флипа: его reset() делает helper.lookAt(normal) ДО сброса позиции
+    helper — при флипе к нормали (1,0,0) второй lookAt пропускается
+    (normal.equals) и квадрат/стрелка оказываются повёрнуты криво;
+    вместо него своя movePlane(): normal.copy + origin.copy +
+    helper.position.copy + helper.quaternion.setFromUnitVectors(ẑ,
+    normal) + update() — update() синхронизирует three.plane из
+    normal+helper.position, клиппинг едет вживую (объекты плоскостей в
+    материалах те же); (3) ЖИВАЯ позиция после drag — только
+    plane.helper.position (plane.origin при drag НЕ обновляется);
+    (4) clipper.createFromNormalAndCoplanarPoint возвращает id
+    (string), порядок clipper.list = порядок создания; (5) при
+    добавлении сечения clipper.visible=true принудительно (иначе при
+    скрытых helpers новое сечение «не появляется»); (6) агрегат-тумблер
+    «👁 Плоскости» показывает «скрыты», если скрыта ХОТЯ БЫ одна
+    (every-visible), клик по нему показывает ВСЕ. Отладка:
+    window.__ifc.addSection('h'|'x'|'z'), __ifc.refreshSections(),
+    __ifc.movePlane. Тесты: `tests/test_ifc_sections.py` (+ node
+    --check извлечённого module-скрипта вручную). Скриншоты:
+    docs/ifc-sections-*.png (panel-open/horizontal/vertical-x/
+    planes-hidden/flipped). Спека:
+    docs/superpowers/specs/2026-09-06-ifc-sections-upgrade-design.md.
+
+25. **«Человек» в IFC-вьювере: силуэт + камера от глаз 1,7 м** (06.09,
+    поздний вечер, по запросу «как в SketchUp»). Кнопка «👤 ▾» в тулбаре
+    → панель #personpanel (структура/деплой — как сечения, всё в
+    ifcviewer.html). (а) Постановка: «Поставить на перекрытие» включает
+    режим (body.placing, курсор crosshair), следующий КЛИК по модели
+    ставит фигуру (в pointerup-выборе guard `if (placingPerson)`).
+    Привязка к перекрытию — snapToGround(): вертикальный луч ВНИЗ от
+    точки клика (+0,1) через fragments.raycast с ВРЕМЕННОЙ
+    PerspectiveCamera(fov 35, near 0.01, far 60), смотрящей строго вниз;
+    мышь = центр канваса (screenToCast вычитает rect, setFromCamera
+    строит луч от переданной камеры — камера может быть любой, проверено
+    на школе с офсетом x≈27, z≈19). Клик по горизонтали → та же
+    поверхность; по стене → пол под ней; ПРОМАХ (двор без плиты — в
+    school.ifc центр bbox это двор!) → высота клика как есть. (б) Фигура:
+    биллборд PlaneGeometry 0.55×1.75 + CanvasTexture (силуэт рисуется
+    canvas 2D, colorSpace SRGB), свой rAF разворачивает по азимуту
+    камеры (atan2 dx,dz); маркер-сфера уровня глаз на 1,7. (в) «Вид от
+    глаз»: controls.enabled=false, поза+проекция сохраняются
+    (controls.getTarget(new Vector3()) — camera-controls 3.x ТРЕБУЕТ
+    out-параметр!), камера ведётся вручную quaternion.setFromEuler(
+    Euler(pitch,yaw,0,'YXZ')) в собственном rAF; осмотр — pointer drag
+    (pitch clamp ±1.45), ходьба WASD/стрелки 1,6 м/с (Shift 4,8),
+    forward по горизонту от yaw ((-sinφ,-cosφ), right (cosφ,-sinφ));
+    человек следует x/z с перепривязкой snapToGround (троттлинг 150 мс,
+    snapToken от гонок); fragments.core.update() при движении (LOD);
+    ESC/кнопка — выход: setLookAt(saved)+проекция, силуэт показывается.
+    При загрузке ДРУГОЙ модели человек убирается (personModelName!==name).
+    ГРАБЛИ: (1) ГЛАВНЫЙ БАГ: snapToGround при промахе возвращал y ГЛАЗ —
+    ходьба по пустоте поднимала камеру на +1,7 каждые 150 мс (улетела на
+    y=7.75 при высоте модели 2,7); фикс — промах возвращает null, высота
+    сохраняется; (2) чтение camera.position сразу после enterFP() даёт
+    СТАРУЮ позу — fpLoop копирует eye только со следующего rAF-кадра (не
+    баг, но в тестах ждать кадр); (3) рендер непрерывный (Components.update
+    rAF-цикл) — ручная камера/биллборд отображаются без доп. триггеров;
+    (4) клик по канвасу закрывает панели (внешний клик) — после постановки
+    человека панель закрывается, принято. Отладка: window.__ifc.person
+    (place/enterFP/exitFP/remove/state). Тесты: tests/test_ifc_sections.py
+    (+ test_person_markup/logic). Скриншоты: docs/ifc-person-*.png
+    (placed/fp-roof/fp-ground/orbit/fp-school). Спека — там же,
+    дополнение от 06.09 (вечер).
+
+26. **ИИ-рендеринг: контактная тень + BIM-контекст промта + панель
+    «Камера»** (06.09, ночь; первая очередь из обзора «что полезного для
+    ИИ-рендеринга», утверждена пользователем). Всё — в ifcviewer.html,
+    деплой setup_ifcviewer.py. (а) КОНТАКТНАЯ ТЕНЬ в снимке: 4 нижних
+    угла bbox проецируются камерой (projectGroundRect), мягкий
+    радиальный эллипс (rgba(8,10,14,0.42)→0, 0.55× габарита) рисуется
+    ДО наложения WebGL-кадра — виден только в прозрачных полях, здание
+    «стоит» на земле; отключена в FP и когда основание за камерой
+    (dot<=0)/вне кадра; в орто-фасаде вырождается (ry<2 → skip).
+    Проверено пиксельно: ~120k тёмно-полупрозрачных пикселей.
+    (б) BIM-КОНТЕКСТ ПРОМТА: walkCtx по getSpatialStructure строит
+    ctxMap localId→{storey,space,cat}; ГРАБЛЯ (главная): в структуре
+    КОНТЕЙНЕР имеет category без localId, а его сущность — ДОЧЕРНИЙ
+    узел с localId без category (example: IFCBUILDINGSTOREY#null →
+    ?#144 → IFCSLAB#null → ?#22620) — id этажа/помещения берём у
+    первого потомка с localId, класс элемента — с ближайшего
+    контейнера-предка; иначе контекст ПУСТОЙ (первая версия смотрела
+    category у id-узла). Имена этажей/помещений — ОДНИМ пакетным
+    model.getItemsData (LongName ?? Name), асинхронно после дерева.
+    Источник: элемент клика постановки человека (personCtxId,
+    обновляется при ходьбе по snap-лучу) либо одиночное выделение.
+    Строка «BIM context: floor "Nivel 1", element SLAB» — в поле
+    #person-context панели «Человек» (клик — select());
+    при «📸 To Canvas»/«💾 To Assets» — copyContextToClipboard()
+    (navigator.clipboard, фолбэк textarea+execCommand, тост «paste
+    into the prompt (Ctrl+V)») — вставить в промт руками, поле промта
+    приложения не патчим. (в) ПАНЕЛЬ «📷 ▾» (#campanel): FOV-слайдер
+    20–90° (threePersp.fov + updateProjectionMatrix); «⌷ Вертикали» —
+    в FP pitch→0 (горячая V; вне FP — подсказка), проверено: Euler.x=0;
+    «— Горизонт» — орбита: офсет цели проецируется в горизонталь при
+    сохранении длины; «▦ Орто-фасад» — projection.set("Orthographic")
+    + setLookAt по нормали (lastHitNormal последнего raycast-клика, y
+    гасится; нет клика — ось X/Z к камере) + world.camera.fit(
+    model.object.children); «◐ Перспектива» — назад; рамка кадра
+    (#cropguide, select 1:1/3:2/16:9/…) — пунктир + затемнение вне
+    (box-shadow 200vmax), renderSnapshot кропит по прямоугольнику
+    (CSS→буфер через DPR), стороны по-прежнему snap64 (кроп 1190×670 →
+    1216×704). ГРАБЛИ: строка проекции — "Orthographic", НЕ "Ortho"
+    (ProjectionManager.set: всё не-"Orthographic" уходит в перспективу
+    — первый вариант молча не переключал); #toolbar потребовал z-index
+    над затемнением рамки. Отладка: window.__ifc.promptContext,
+    __ifc.camera.{setFov,setGuide,levelVerticals,levelOrbit,orthoFacade,
+    lastHitNormal}. Тесты: tests/test_ifc_ai_render.py. Скриншоты:
+    docs/ifc-ai-{shadow-snapshot,ortho-facade,panels}.png. Спека —
+    docs/superpowers/specs/2026-09-06-ifc-sections-upgrade-design.md,
+    дополнение 2. НЕ СДЕЛАНО (кандидаты следом): «кадры» (сохранение
+    видов+серия снимков), авто-маска по элементу (силуэт через Hider →
+    мост V3), пакетная генерация + PDF-альбом.
+
 17. **Мультикомпанность: экземпляр сервера на компанию** (05.09.2026).
     Продажа по компаниям: каждой — отдельный процесс InvokeAI со своим
+
     портом (9100+), паролем и корнем `companies/<код>/data` (галерея,
     IFC-файлы, БД изолированы автоматически; venv и патчи общие).
     Спека/план: `docs/superpowers/specs|plans/2026-09-05-company-instances*`.
@@ -699,6 +832,11 @@ cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
 .\venv\Scripts\python.exe .\setup_ifcviewer.py          # вкладка IFC (идемпотентно)
 .\venv\Scripts\python.exe .\setup_pdfviewer.py          # вкладка PDF (идемпотентно)
 .\venv\Scripts\python.exe .\tests\test_mask_toggle.py   # тумблер Маска/Слой
+.\venv\Scripts\python.exe .\tests\test_ifc_sections.py  # сечения + человек (IFC)
+.\venv\Scripts\python.exe .\tests\test_ifc_ai_render.py # тень/контекст/камера (IFC)
+# синтаксис module-скрипта вьювера после правок ifcviewer.html:
+#   venv\Scripts\python.exe -c "import re,pathlib;s=pathlib.Path('ifc/ifcviewer.html').read_text(encoding='utf-8');pathlib.Path('ifc/_chk.mjs').write_text(re.search(r'<script type=\"module\">(.*?)</script>',s,re.S).group(1),encoding='utf-8')"
+#   node --check ifc/_chk.mjs && del ifc\_chk.mjs
 # проверить, что index-бандл парсится (после патчей навигации!):
 node -e "import('file:///C:/Users/Lenovo/Desktop/проект SOFT_2/Дизайн/InvokeAI/InvokeAI/venv/Lib/site-packages/invokeai/frontend/web/dist/assets/index-BFW2ubNY.js').catch(e=>console.log(e.message))"
 # перезапустить сервер (_restart_server.ps1), затем:
@@ -708,8 +846,12 @@ node -e "import('file:///C:/Users/Lenovo/Desktop/проект SOFT_2/Дизай�
 # 4) F5 — блокировка сбрасывается, вкладка models не восстанавливается
 # 5) Canvas: выбрать edit-модель, фото+маску+промпт → Generate → галерея
 # 6) IFC: GET /api/v1/ifc/list — модели; вкладка «IFC» в левой рейке:
-#    открыть example.ifc/school.ifc с сервера, клик-выбор, «Сечение»;
-#    отладка — window.__ifc внутри iframe
+#    открыть example.ifc/school.ifc с сервера, клик-выбор; «Сечения ▾»
+#    (гориз./вертик. X/Z, скрытие плоскостей, слайдер/флип); «👤 ▾»
+#    (постановка на перекрытие + «Вид от глаз» 1,7 м: WASD, V — вертикали);
+#    «📷 ▾» (FOV, орто-фасад, рамка кадра); снимок — с контактной тенью,
+#    BIM-контекст промта копируется в буфер; отладка — window.__ifc
+#    внутри iframe (__ifc.person, __ifc.camera, __ifc.promptContext)
 ```
 
 Откат интеграции: восстановить `*.imagerouter-bak`, удалить
