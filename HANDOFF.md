@@ -513,7 +513,12 @@ invokeai==6.2.0` их нужно запускать повторно в поря
     flash @300). Референсы: `patch_expand_graph_refs` дописывает в граф
     глобальные Reference Images (state.canvas.present.referenceImages.
     entities[].ipAdapter.image; сервер берёт до 4 шт, даунскейл до 1024,
-    JPEG q85). Оверлей: `patch_expansion_overlay_edit` — редактируемый
+    JPEG q85). V2 (06.09, вечер, по жалобе «дом во вьювере не учитывался»):
+    если включённых референсов НЕТ — фолбэк на текущий выбор галереи
+    (state.gallery.selection, последние 4) — «что открыто во вьювере, то
+    и учитывается»; уже пропатченные V1-бандлы мигрируют на V2 повторным
+    запуском setup (JS_REFS_COLLECTOR_V1 → V2); поведение коллектора
+    проверяется тестом в node. Оверлей: `patch_expansion_overlay_edit` — редактируемый
     textarea (uncontrolled defaultValue + чтение из DOM в Replace/Insert).
     Флаг allowPromptExpansion НЕ включаем: оверлей и блокировка промпта
     от него не зависят, точка входа одна — наша кнопка. Пустой промт без
