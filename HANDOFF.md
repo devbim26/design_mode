@@ -532,7 +532,11 @@ invokeai==6.2.0` их нужно запускать повторно в поря
     вкладки, Generate и Canvas): Replace/Insert берут отредактированный
     текст, референсы доходят до VLM (ответ явно опирается на «as shown in
     the reference image»), консоль чистая; скриншот
-    docs/prompt-enhance-button.png. Тесты: tests/test_prompt_enhancer.py
+    docs/prompt-enhance-button.png. Ключ/URL/модель читаются ЛЕНИВО
+    внутри call_vlm из задеплоенного роутера
+    invokeai.app.api.routers.imagerouter (единый источник — .env).
+    use_cache=False на обеих инвокациях — свежий результат на повторных
+    кликах (temperature > 0). Тесты: tests/test_prompt_enhancer.py
     (включая живой smoke VLM). Проверка после изменений:
     setup_imagerouter.py + node-import App-бандла + рестарт + E2E
     чек-лист (план docs/superpowers/plans/2026-09-06-prompt-enhancer.md).

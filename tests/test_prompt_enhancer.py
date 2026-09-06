@@ -29,6 +29,8 @@ def test_router_enhancer_model():
     ), ir.CHAT_COMPLETIONS_URL
     assert ir.DEFAULT_ENHANCER_MODEL == "zai/glm-5.3-flash"
     old = os.environ.pop("PROMPT_ENHANCER_MODEL", None)
+    old_done = ir._ENV_LOADED["done"]
+    ir._ENV_LOADED["done"] = True  # иначе _ensure_env() догрузит проектный .env и вернёт vars
     try:
         assert ir._enhancer_model() == "zai/glm-5.3-flash"  # дефолт
         os.environ["PROMPT_ENHANCER_MODEL"] = "moonshot/kimi-k3"
@@ -36,6 +38,7 @@ def test_router_enhancer_model():
         os.environ["PROMPT_ENHANCER_MODEL"] = "   "
         assert ir._enhancer_model() == "zai/glm-5.3-flash"  # пусто -> дефолт
     finally:
+        ir._ENV_LOADED["done"] = old_done
         if old is None:
             os.environ.pop("PROMPT_ENHANCER_MODEL", None)
         else:
@@ -48,8 +51,8 @@ def _load_enhancer_mod():
         "devbim_prompt_enhancer", ROOT / "imagerouter" / "prompt_enhancer.py"
     )
     mod = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mod  # pydantic 2.13: без регистрации в sys.modules строковые
-    # аннотации (from __future__ import annotations) не резолвятся -> InvalidFieldError
+    sys.modules[spec.name] = mod  # стандартный паттерн spec-loader; регистрация нужна,
+    # чтобы pydantic мог резолвить модуль динамически загруженных классов
     spec.loader.exec_module(mod)
     return mod
 
@@ -98,8 +101,6 @@ def test_build_body():
 
 def test_live_smoke():
     import json
-
-    import requests as rq
 
     key_file = ROOT / "data" / "imagerouter.json"
     env_file = ROOT / ".env"
