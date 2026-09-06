@@ -13,8 +13,10 @@
     IMAGEROUTER_API_KEY    — ключ ImageRouter
     PROMPT_ENHANCER_MODEL  — VLM (по умолчанию zai/glm-5.3-flash)
 """
-from __future__ import annotations
-
+# ВНИМАНИЕ: НЕ добавлять `from __future__ import annotations` — PEP 563
+# превращает `-> StringOutput` в строку, run_app.py падает на
+# output_annotation.__name__ ('str' has no attribute '__name__'),
+# сервер не стартует (get_output_annotation возвращает строку).
 import base64
 import io
 import re
