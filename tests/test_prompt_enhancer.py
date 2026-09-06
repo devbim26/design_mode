@@ -129,9 +129,115 @@ def test_live_smoke():
     print("OK: живой smoke VLM ->", text[:80], "...")
 
 
+import shutil
+import tempfile
+
+import setup_imagerouter as sir
+
+# Минимальные фрагменты App-бандла, достаточные для якорей патчей
+PE_FAKE = (
+    'const m7="Generate",pne=u.memo(()=>{const e=FC(),t=qr(),n=T(K2);'
+    'return o.jsxs(E,{pos:"relative",w:"200px",children:[o.jsx(hne,{}),'
+    'o.jsx(mte,{prepend:t,children:o.jsxs(pe,{onClick:t?e.enqueueFront:e.enqueueBack,'
+    'isLoading:e.isLoading||n,loadingText:m7,rightIcon:o.jsx(D1,{}),variant:"solid",'
+    'colorScheme:"invokeYellow",size:"lg",w:"calc(100% - 60px)",'
+    'children:[o.jsx("span",{children:m7}),o.jsx(mt,{})]})})]})});'
+    'pne.displayName="InvokeQueueBackButton";'
+)
+REFS_FAKE = (
+    'const yke=({state:e,imageDTO:t})=>{const n=sd(e);const s=["sdxl"].includes(n)?"tag_based":"sentence_based";'
+    'if(t){const i=new Et(Q("claude-analyze-image-graph")),a=i.addNode({type:"claude_analyze_image",'
+    'id:Q("claude_analyze_image"),model_architecture:s,image:ehe(t)});return{graph:i,outputNodeId:a.id}}'
+    'else{const i=V2(e),a=new Et(Q("claude-expand-prompt-graph")),r=a.addNode({type:"claude_expand_prompt",'
+    'id:Q("claude_expand_prompt"),model_architecture:s,prompt:i});return{graph:a,outputNodeId:r.id}}},'
+    'lb=async e=>{const{dispatch:t,getState:n,imageDTO:s}=e,i=G0.get();if(!i)return;const{graph:a,outputNodeId:r}=yke({state:n(),imageDTO:s})},'
+)
+OVERLAY_FAKE = (
+    'W$e=({expandedText:e})=>{const t=K(),n=T(V2),s=u.useCallback(()=>{t(nb(e)),ci.reset()},[t,e]),'
+    'i=u.useCallback(()=>{const r=n,l=r?`${r}\\n${e}`:e;t(nb(l)),ci.reset()},[t,e,n]),'
+    'a=u.useCallback(()=>{ci.reset()},[]);return o.jsxs(E,{pos:"absolute",inset:0,bg:"base.800",'
+    'backdropFilter:"blur(8px)",zIndex:10,direction:"column",children:['
+    'o.jsx(E,{flex:1,p:2,borderRadius:"md",overflowY:"auto",minH:0,children:'
+    'o.jsxs(W,{fontSize:"sm",w:"full",pr:7,children:[o.jsx(Ue,{as:KC,boxSize:5,display:"inline",mr:2,'
+    'color:"invokeYellow.500"}),e]})}),o.jsxs(E,{gap:2,p:1,justifyContent:"flex-end",pos:"absolute",'
+    'bottom:0,right:0,flexDirection:"column",children:[o.jsxs(Fn,{orientation:"vertical",children:['
+    'o.jsx($e,{label:"Replace",placement:"right",children:o.jsx(re,{onClick:s,icon:o.jsx(Wp,{}),'
+    'colorScheme:"invokeGreen",size:"xs","aria-label":"Replace"})}),'
+    'o.jsx($e,{label:"Insert",placement:"right",children:o.jsx(re,{onClick:i,icon:o.jsx(an,{}),'
+    'colorScheme:"invokeBlue",size:"xs","aria-label":"Insert"})})]}),'
+    'o.jsx($e,{label:"Discard",placement:"right",children:o.jsx(re,{onClick:a,icon:o.jsx(Yt,{}),'
+    'colorScheme:"invokeRed",size:"xs","aria-label":"Discard"})})]})]})},'
+    'Lne=u.memo(()=>{const{isSuccess:e,isPending:t}=ie(ci.$state)})'
+)
+
+
+def test_patch_prompt_enhance_button():
+    with tempfile.TemporaryDirectory() as td:
+        b = Path(td) / "App-fake.js"
+        b.write_text(PE_FAKE, encoding="utf-8")
+        assert sir.patch_prompt_enhance_button(b) is True
+        assert sir.patch_prompt_enhance_button(b) is False  # идемпотентно
+        s = b.read_text(encoding="utf-8")
+        assert s.count("DevbimPEBtn") >= 2  # определение + использование
+        assert s.count('const m7="Generate",pne=u.memo(') == 1  # якорь сохранён
+        assert s.index("const DevbimPEBtn") < s.index('const m7="Generate"')
+        assert s.count("o.jsx(DevbimPEBtn,{})") == 1
+        assert (Path(td) / "App-fake.js.imagerouter-bak").exists()
+    print("OK: патч кнопки Prompt Enhance идемпотентен")
+
+
+def test_patch_expand_graph_refs():
+    with tempfile.TemporaryDirectory() as td:
+        b = Path(td) / "App-fake.js"
+        b.write_text(REFS_FAKE, encoding="utf-8")
+        assert sir.patch_expand_graph_refs(b) is True
+        assert sir.patch_expand_graph_refs(b) is False
+        s = b.read_text(encoding="utf-8")
+        assert "prompt:i,images:(function(st){" in s
+        assert "image_name:x.ipAdapter.image.image_name" in s
+        assert "c.present" in s  # redux-undo развёрнут
+        assert s.count("claude_analyze_image") == 2  # ветка анализа не тронута
+        assert (Path(td) / "App-fake.js.imagerouter-bak").exists()
+    print("OK: патч референсов идемпотентен")
+
+
+def test_patch_expansion_overlay_edit():
+    with tempfile.TemporaryDirectory() as td:
+        b = Path(td) / "App-fake.js"
+        b.write_text(OVERLAY_FAKE, encoding="utf-8")
+        assert sir.patch_expansion_overlay_edit(b) is True
+        assert sir.patch_expansion_overlay_edit(b) is False
+        s = b.read_text(encoding="utf-8")
+        # 3 вхождения: атрибут textarea + два querySelector в Replace/Insert
+        assert s.count("data-devbim-enhanced") == 3, s.count("data-devbim-enhanced")
+        assert "defaultValue:e" in s and "Lne=u.memo(" in s  # якорь-хвост сохранён
+        assert (Path(td) / "App-fake.js.imagerouter-bak").exists()
+    print("OK: патч оверлея идемпотентен")
+
+
+def test_deploy_prompt_enhancer():
+    with tempfile.TemporaryDirectory() as td:
+        dst_dir = Path(td)
+        # подменяем пути деплоя
+        orig_dst = sir.PE_DST
+        try:
+            sir.PE_DST = dst_dir / "devbim_prompt_enhancer.py"
+            assert sir.deploy_prompt_enhancer() is True
+            assert sir.deploy_prompt_enhancer() is False  # повторно — пропуск
+            text = sir.PE_DST.read_text(encoding="utf-8")
+            assert 'claude_expand_prompt' in text and 'claude_analyze_image' in text
+        finally:
+            sir.PE_DST = orig_dst
+    print("OK: деплой модуля инвокаций идемпотентен")
+
+
 if __name__ == "__main__":
     test_router_enhancer_model()
     test_sanitize()
     test_prepare_image()
     test_build_body()
     test_live_smoke()
+    test_patch_prompt_enhance_button()
+    test_patch_expand_graph_refs()
+    test_patch_expansion_overlay_edit()
+    test_deploy_prompt_enhancer()

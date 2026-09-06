@@ -59,6 +59,9 @@ ADMIN_JS_DST = DIST / "devbim-admin.js"
 MASK_TOGGLE_SRC = SRC / "devbim_mask_toggle.js"
 MASK_TOGGLE_NAME = "devbim-mask-toggle.js"
 
+PE_SRC = SRC / "prompt_enhancer.py"
+PE_DST = SP / "invokeai" / "app" / "invocations" / "devbim_prompt_enhancer.py"
+
 # Якорь тот же, что у setup_ifcviewer.py (JS_APPCONTENT_ANCHOR): вставка
 # префиксом, якорь сохраняется для IFC-патча при любом порядке запуска.
 JS_CANVAS_BRIDGE_ANCHOR = "const cue=u.memo("
@@ -385,6 +388,187 @@ def patch_queue_buttons() -> bool:
     return True
 
 
+# ----------------------------------------------------------------------------
+# Prompt Enhancer: улучшение промта через VLM ImageRouter.
+#   deploy_prompt_enhancer — модуль инвокаций claude_expand_prompt /
+#   claude_analyze_image в пакет (новый файл, автоподхват __init__.py).
+#   Три патча App-бандла (все идемпотентны, бэкап *.imagerouter-bak):
+#     patch_prompt_enhance_button  — голубая кнопка #38BDF8 в слоте 60px
+#                                    справа от жёлтой Generate;
+#     patch_expand_graph_refs      — референсы (Reference Images) в граф
+#                                    расширения промта (state.canvas.present
+#                                    .referenceImages.entities[].ipAdapter.image);
+#     patch_expansion_overlay_edit — оверлей результата: статический текст ->
+#                                    редактируемый textarea (uncontrolled,
+#                                    defaultValue), Replace/Insert читают
+#                                    отредактированное значение из DOM.
+# ----------------------------------------------------------------------------
+
+def deploy_prompt_enhancer() -> bool:
+    """Копирует модуль инвокаций Prompt Enhancer в пакет invokeai."""
+    if not PE_SRC.exists():
+        print("ОШИБКА: нет источника", PE_SRC)
+        sys.exit(1)
+    if PE_DST.exists() and PE_DST.read_text(encoding="utf-8") == PE_SRC.read_text(encoding="utf-8"):
+        print("Модуль Prompt Enhancer уже развернут, пропуск")
+        return False
+    PE_DST.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(PE_SRC, PE_DST)
+    print("Модуль инвокаций развернут:", PE_DST)
+    return True
+
+
+# Кнопка Prompt Enhance: компонент + вставка в контейнер Generate (слот 60px).
+# Je — стор-хук (как у штатной кнопки расширения), ie(ci.$state) — стор
+# Prompt Expansion, lb — штатный enqueue-and-wait, KC — иконка-искра.
+JS_PE_BTN = (
+    'const DevbimPEBtn=u.memo(()=>{const{dispatch:e,getState:t}=Je(),'
+    '{isPending:n}=ie(ci.$state),s=u.useCallback(()=>{ci.setPending(),'
+    'lb({dispatch:e,getState:t})},[e,t]);return o.jsx($e,{label:"Prompt Enhance",'
+    'placement:"top",hasArrow:!0,children:o.jsx(pe,{"aria-label":"Prompt Enhance",'
+    'onClick:s,isDisabled:n,position:"absolute",right:0,top:0,w:"56px",h:"40px",'
+    'minW:"56px",px:0,variant:"solid",sx:{background:"#38BDF8",color:"#0B0C0E",'
+    '_hover:{background:"#5CC8FA"},_disabled:{background:"#38BDF8",opacity:.5}},'
+    'children:o.jsx(KC,{size:16})})})});'
+)
+JS_PE_PREFIX_OLD = 'const m7="Generate",pne=u.memo('
+JS_PE_TAIL_OLD = 'o.jsx(mt,{})]})})]})});pne.displayName="InvokeQueueBackButton"'
+JS_PE_TAIL_NEW = 'o.jsx(mt,{})]})}),o.jsx(DevbimPEBtn,{})]})});pne.displayName="InvokeQueueBackButton"'
+
+
+def patch_prompt_enhance_button(bundle: Path | None = None) -> bool:
+    """Голубая кнопка «Prompt Enhance» справа от жёлтой Generate."""
+    if bundle is None:
+        targets = [
+            f for f in DIST.glob("assets/*.js")
+            if 'displayName="InvokeQueueBackButton"' in f.read_text(encoding="utf-8")
+        ]
+        if len(targets) != 1:
+            print(f"ОШИБКА: бандл с кнопкой Generate найден {len(targets)} раз (ожидался 1)")
+            sys.exit(1)
+        bundle = targets[0]
+    s = bundle.read_text(encoding="utf-8")
+    if "DevbimPEBtn" in s:
+        print("Кнопка Prompt Enhance уже установлена, пропуск")
+        return False
+    if s.count(JS_PE_PREFIX_OLD) != 1 or s.count(JS_PE_TAIL_OLD) != 1:
+        print("ОШИБКА: якоря кнопки Generate найдены не по одному разу — структура изменилась")
+        sys.exit(1)
+    s = s.replace(JS_PE_PREFIX_OLD, JS_PE_BTN + JS_PE_PREFIX_OLD, 1)
+    s = s.replace(JS_PE_TAIL_OLD, JS_PE_TAIL_NEW, 1)
+    bak = bundle.with_suffix(bundle.suffix + ".imagerouter-bak")
+    if not bak.exists():
+        shutil.copy2(bundle, bak)
+    bundle.write_text(s, encoding="utf-8")
+    print(f"Кнопка Prompt Enhance установлена у Generate: {bundle.name} (бэкап: {bak.name})")
+    return True
+
+
+# Референсы в граф расширения промта: глобальные Reference Images канваса
+# (redux-undo: живое состояние в .present; грабля тумблера, п.16 HANDOFF).
+JS_REFS_OLD = (
+    'const i=V2(e),a=new Et(Q("claude-expand-prompt-graph")),r=a.addNode('
+    '{type:"claude_expand_prompt",id:Q("claude_expand_prompt"),'
+    'model_architecture:s,prompt:i});return{graph:a,outputNodeId:r.id}'
+)
+JS_REFS_COLLECTOR = (
+    'images:(function(st){var acc=[];try{var c=st&&st.canvas?st.canvas:null;'
+    'c=c&&c.present?c.present:c;var ents=(c&&c.referenceImages&&'
+    'c.referenceImages.entities)||[];ents.forEach(function(x){'
+    'if(x&&x.isEnabled!==false&&x.ipAdapter&&x.ipAdapter.image&&'
+    'x.ipAdapter.image.image_name)acc.push({image_name:x.ipAdapter.image.image_name})})'
+    '}catch(err){acc=[]}return acc})(e)'
+)
+JS_REFS_NEW = JS_REFS_OLD.replace("prompt:i});", "prompt:i," + JS_REFS_COLLECTOR + "});")
+
+
+def patch_expand_graph_refs(bundle: Path | None = None) -> bool:
+    """Прикладывает Reference Images к графу улучшения промта."""
+    if bundle is None:
+        targets = [
+            f for f in DIST.glob("assets/*.js")
+            if 'displayName="TabContent"' in f.read_text(encoding="utf-8")
+        ]
+        if len(targets) != 1:
+            print(f"ОШИБКА: бандл с рядом кнопок Generate найден {len(targets)} раз (ожидался 1)")
+            sys.exit(1)
+        bundle = targets[0]
+    s = bundle.read_text(encoding="utf-8")
+    if JS_REFS_COLLECTOR in s:
+        print("Референсы в графе расширения уже подключены, пропуск")
+        return False
+    if s.count(JS_REFS_OLD) != 1:
+        print(f"ОШИБКА: фрагмент yke найден {s.count(JS_REFS_OLD)} раз (ожидался 1)")
+        sys.exit(1)
+    s = s.replace(JS_REFS_OLD, JS_REFS_NEW, 1)
+    bak = bundle.with_suffix(bundle.suffix + ".imagerouter-bak")
+    if not bak.exists():
+        shutil.copy2(bundle, bak)
+    bundle.write_text(s, encoding="utf-8")
+    print(f"Референсы подключены к улучшению промта: {bundle.name} (бэкап: {bak.name})")
+    return True
+
+
+# Оверлей результата: редактируемый textarea вместо статического текста.
+# Ns — chakra Textarea (та же, что у промпт-бокса). Uncontrolled defaultValue:
+# React не перезаписывает правки пользователя; Replace/Insert читают значение
+# из DOM (querySelector по data-devbim-enhanced).
+JS_OVERLAY_ANCHOR_START = 'W$e=({expandedText:e})=>{'
+JS_OVERLAY_ANCHOR_END = ']})]})},Lne=u.memo('
+JS_OVERLAY_NEW = (
+    'W$e=({expandedText:e})=>{const t=K(),n=T(V2),'
+    's=u.useCallback(()=>{const el=document.querySelector("textarea[data-devbim-enhanced]");'
+    't(nb(el?el.value:e)),ci.reset()},[t,e]),'
+    'i=u.useCallback(()=>{const el=document.querySelector("textarea[data-devbim-enhanced]"),'
+    'v2=el?el.value:e,r=n,l=r?`${r}\\n${v2}`:v2;t(nb(l)),ci.reset()},[t,e,n]),'
+    'a=u.useCallback(()=>{ci.reset()},[]);'
+    'return o.jsxs(E,{pos:"absolute",inset:0,bg:"base.800",backdropFilter:"blur(8px)",'
+    'zIndex:10,direction:"column",children:['
+    'o.jsx(E,{flex:1,p:2,borderRadius:"md",overflowY:"auto",minH:0,children:'
+    'o.jsx(Ns,{"data-devbim-enhanced":!0,defaultValue:e,variant:"darkFilled",'
+    'fontSize:"sm",w:"full",resize:"none",placeholder:"Enhanced prompt",'
+    'sx:{"::placeholder":{color:"rgba(255,255,255,.4)"}}})}),'
+    'o.jsxs(E,{gap:2,p:1,justifyContent:"flex-end",pos:"absolute",bottom:0,right:0,'
+    'flexDirection:"column",children:[o.jsxs(Fn,{orientation:"vertical",children:['
+    'o.jsx($e,{label:"Replace",placement:"right",children:o.jsx(re,{onClick:s,'
+    'icon:o.jsx(Wp,{}),colorScheme:"invokeGreen",size:"xs","aria-label":"Replace"})}),'
+    'o.jsx($e,{label:"Insert",placement:"right",children:o.jsx(re,{onClick:i,'
+    'icon:o.jsx(an,{}),colorScheme:"invokeBlue",size:"xs","aria-label":"Insert"})})]}),'
+    'o.jsx($e,{label:"Discard",placement:"right",children:o.jsx(re,{onClick:a,'
+    'icon:o.jsx(Yt,{}),colorScheme:"invokeRed",size:"xs","aria-label":"Discard"})})'
+    ']})]})},Lne=u.memo('
+)
+
+
+def patch_expansion_overlay_edit(bundle: Path | None = None) -> bool:
+    """Оверлей результата расширения промта становится редактируемым."""
+    if bundle is None:
+        targets = [
+            f for f in DIST.glob("assets/*.js")
+            if 'displayName="TabContent"' in f.read_text(encoding="utf-8")
+        ]
+        if len(targets) != 1:
+            print(f"ОШИБКА: App-бандл (TabContent) найден {len(targets)} раз (ожидался 1)")
+            sys.exit(1)
+        bundle = targets[0]
+    s = bundle.read_text(encoding="utf-8")
+    if "data-devbim-enhanced" in s:
+        print("Оверлей расширения уже редактируемый, пропуск")
+        return False
+    if s.count(JS_OVERLAY_ANCHOR_START) != 1 or s.count(JS_OVERLAY_ANCHOR_END) != 1:
+        print("ОШИБКА: якоря оверлея W$e найдены не по одному разу — структура изменилась")
+        sys.exit(1)
+    i = s.index(JS_OVERLAY_ANCHOR_START)
+    j = s.index(JS_OVERLAY_ANCHOR_END, i) + len(JS_OVERLAY_ANCHOR_END)
+    s = s[:i] + JS_OVERLAY_NEW + s[j:]
+    bak = bundle.with_suffix(bundle.suffix + ".imagerouter-bak")
+    if not bak.exists():
+        shutil.copy2(bundle, bak)
+    bundle.write_text(s, encoding="utf-8")
+    print(f"Оверлей расширения промта редактируемый: {bundle.name} (бэкап: {bak.name})")
+    return True
+
+
 def patch_canvas_bridge(bundle: Path | None = None) -> bool:
     """Мост менеджера канваса для тумблера «Маска/Слой» (devbim_mask_toggle.js)."""
     if bundle is None:
@@ -635,7 +819,7 @@ def patch_index_html() -> bool:
 
 def main() -> None:
     for p in (SRC / "imagerouter_router.py", SRC / "imagerouter.html", SRC / "devbim_admin.js",
-              MASK_TOGGLE_SRC, DIST, API_APP.parent):
+              MASK_TOGGLE_SRC, PE_SRC, DIST, API_APP.parent):
         if not p.exists():
             print("Не найдено:", p)
             sys.exit(1)
@@ -648,6 +832,10 @@ def main() -> None:
     patch_canvas_control_layer()
     patch_queue_buttons()
     patch_canvas_bridge()
+    deploy_prompt_enhancer()
+    patch_prompt_enhance_button()
+    patch_expand_graph_refs()
+    patch_expansion_overlay_edit()
     patch_left_rail()
     patch_generate_button()
     patch_admin_gate()
