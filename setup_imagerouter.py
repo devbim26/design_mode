@@ -466,12 +466,16 @@ def patch_prompt_enhance_button(bundle: Path | None = None) -> bool:
 
 # Референсы в граф расширения промта: глобальные Reference Images канваса
 # (redux-undo: живое состояние в .present; грабля тумблера, п.16 HANDOFF).
+# V2 (06.09, вечер): если референсов нет — фолбэк на текущую картинку из
+# Image Viewer (state.gallery.selection, последние 4): «что смотрю — то и
+# учитывай» (жалоба пользователя: дом во вьювере не попадал в улучшение).
 JS_REFS_OLD = (
     'const i=V2(e),a=new Et(Q("claude-expand-prompt-graph")),r=a.addNode('
     '{type:"claude_expand_prompt",id:Q("claude_expand_prompt"),'
     'model_architecture:s,prompt:i});return{graph:a,outputNodeId:r.id}'
 )
-JS_REFS_COLLECTOR = (
+# V1 — коллектор без фолбэка галереи (для миграции уже пропатченных бандлов)
+JS_REFS_COLLECTOR_V1 = (
     'images:(function(st){var acc=[];try{var c=st&&st.canvas?st.canvas:null;'
     'c=c&&c.present?c.present:c;var ents=(c&&c.referenceImages&&'
     'c.referenceImages.entities)||[];ents.forEach(function(x){'
@@ -479,11 +483,23 @@ JS_REFS_COLLECTOR = (
     'x.ipAdapter.image.image_name)acc.push({image_name:x.ipAdapter.image.image_name})})'
     '}catch(err){acc=[]}return acc})(e)'
 )
+JS_REFS_COLLECTOR = (
+    'images:(function(st){var acc=[];try{var c=st&&st.canvas?st.canvas:null;'
+    'c=c&&c.present?c.present:c;var ents=(c&&c.referenceImages&&'
+    'c.referenceImages.entities)||[];ents.forEach(function(x){'
+    'if(x&&x.isEnabled!==false&&x.ipAdapter&&x.ipAdapter.image&&'
+    'x.ipAdapter.image.image_name)acc.push({image_name:x.ipAdapter.image.image_name})})'
+    '}catch(err){acc=[]}'
+    'if(acc.length===0){try{var sel=(st&&st.gallery&&st.gallery.selection)||[];'
+    'sel.slice(-4).forEach(function(n){if(n)acc.push({image_name:n})})'
+    '}catch(err2){}}'
+    'return acc})(e)'
+)
 JS_REFS_NEW = JS_REFS_OLD.replace("prompt:i});", "prompt:i," + JS_REFS_COLLECTOR + "});")
 
 
 def patch_expand_graph_refs(bundle: Path | None = None) -> bool:
-    """Прикладывает Reference Images к графу улучшения промта."""
+    """Прикладывает Reference Images (или картинку из вьювера) к графу улучшения."""
     if bundle is None:
         targets = [
             f for f in DIST.glob("assets/*.js")
@@ -497,11 +513,17 @@ def patch_expand_graph_refs(bundle: Path | None = None) -> bool:
     if JS_REFS_COLLECTOR in s:
         print("Референсы в графе расширения уже подключены, пропуск")
         return False
-    if s.count(JS_REFS_OLD) != 1:
-        print(f"ОШИБКА: фрагмент yke найден {s.count(JS_REFS_OLD)} раз (ожидался 1)")
-        sys.exit(1)
-    s = s.replace(JS_REFS_OLD, JS_REFS_NEW, 1)
     bak = bundle.with_suffix(bundle.suffix + ".imagerouter-bak")
+    if JS_REFS_OLD in s:  # свежий бандл — штатная вставка
+        if s.count(JS_REFS_OLD) != 1:
+            print(f"ОШИБКА: фрагмент yke найден {s.count(JS_REFS_OLD)} раз (ожидался 1)")
+            sys.exit(1)
+        s = s.replace(JS_REFS_OLD, JS_REFS_NEW, 1)
+    elif JS_REFS_COLLECTOR_V1 in s:  # миграция V1 -> V2 (повторный запуск setup)
+        s = s.replace(JS_REFS_COLLECTOR_V1, JS_REFS_COLLECTOR, 1)
+    else:
+        print("ОШИБКА: не найден ни якорь yke, ни V1-коллектор (частичная правка?)")
+        sys.exit(1)
     if not bak.exists():
         shutil.copy2(bundle, bak)
     bundle.write_text(s, encoding="utf-8")

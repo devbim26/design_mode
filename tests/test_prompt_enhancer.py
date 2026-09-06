@@ -197,9 +197,93 @@ def test_patch_expand_graph_refs():
         assert "prompt:i,images:(function(st){" in s
         assert "image_name:x.ipAdapter.image.image_name" in s
         assert "c.present" in s  # redux-undo развёрнут
+        assert "st.gallery.selection" in s  # фолбэк на картинку из вьювера
         assert s.count("claude_analyze_image") == 2  # ветка анализа не тронута
         assert (Path(td) / "App-fake.js.imagerouter-bak").exists()
     print("OK: патч референсов идемпотентен")
+
+
+def _collector_src(patched_text):
+    """Достаёт JS-коллектор (function(st){...}) из пропатченного бандла."""
+    import re as _re
+
+    m = _re.search(r"images:(\(function\(st\)\{.*?\}\))\(e\)", patched_text, _re.DOTALL)
+    assert m, "коллектор не найден в бандле"
+    return m.group(1)
+
+
+def _run_collector_js(collector_src, states):
+    """Прогоняет JS-коллектор в node на списке состояний; возвращает список результатов."""
+    import json as _json
+    import subprocess
+
+    js = (
+        "const fn = " + collector_src + ";\n"
+        "const cases = " + _json.dumps(states) + ";\n"
+        "console.log(JSON.stringify(cases.map(st => fn(st))));\n"
+    )
+    r = subprocess.run(["node", "-e", js], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    return _json.loads(r.stdout)
+
+
+def test_refs_collector_behavior():
+    with tempfile.TemporaryDirectory() as td:
+        b = Path(td) / "App-fake.js"
+        b.write_text(REFS_FAKE, encoding="utf-8")
+        sir.patch_expand_graph_refs(b)
+        src = _collector_src(b.read_text(encoding="utf-8"))
+        states = [
+            {  # референсы приоритетнее галереи
+                "canvas": {"present": {"referenceImages": {"entities": [
+                    {"isEnabled": True, "ipAdapter": {"image": {"image_name": "ref1.png"}}}]}}},
+                "gallery": {"selection": ["gal1.png"]},
+            },
+            {  # нет референсов -> фолбэк на выбор галереи (картинка во вьювере)
+                "canvas": {"present": {"referenceImages": {"entities": []}}},
+                "gallery": {"selection": ["gal1.png", "gal2.png"]},
+            },
+            {  # выключенный референс не считается -> фолбэк
+                "canvas": {"present": {"referenceImages": {"entities": [
+                    {"isEnabled": False, "ipAdapter": {"image": {"image_name": "r.png"}}}]}}},
+                "gallery": {"selection": ["g.png"]},
+            },
+            {"canvas": {}, "gallery": {"selection": ["a", "b", "c", "d", "e", "f"]}},  # последние 4
+            {"canvas": {}},   # пусто везде
+            {},               # пустой стейт
+            {"canvas": {"referenceImages": {"entities": []}},  # canvas без .present
+             "gallery": {"selection": ["x.png"]}},
+        ]
+        out = _run_collector_js(src, states)
+        assert out[0] == [{"image_name": "ref1.png"}], out[0]
+        assert out[1] == [{"image_name": "gal1.png"}, {"image_name": "gal2.png"}], out[1]
+        assert out[2] == [{"image_name": "g.png"}], out[2]
+        assert out[3] == [{"image_name": "c"}, {"image_name": "d"}, {"image_name": "e"}, {"image_name": "f"}], out[3]
+        assert out[4] == [] and out[5] == [], (out[4], out[5])
+        assert out[6] == [{"image_name": "x.png"}], out[6]
+    print("OK: коллектор — референсы приоритет, фолбэк на выбор галереи")
+
+
+def test_refs_collector_migration_v1_to_v2():
+    """Бандл, пропатченный V1-коллектором (без фолбэка галереи), мигрирует на V2."""
+    with tempfile.TemporaryDirectory() as td:
+        b = Path(td) / "App-fake.js"
+        v1_bundle = REFS_FAKE.replace(
+            "model_architecture:s,prompt:i});",
+            "model_architecture:s,prompt:i," + sir.JS_REFS_COLLECTOR_V1 + "});",
+        )
+        b.write_text(v1_bundle, encoding="utf-8")
+        assert sir.patch_expand_graph_refs(b) is True  # миграция
+        assert sir.patch_expand_graph_refs(b) is False  # идемпотентно
+        s = b.read_text(encoding="utf-8")
+        assert sir.JS_REFS_COLLECTOR_V1 not in s
+        assert sir.JS_REFS_COLLECTOR in s
+        assert "st.gallery.selection" in s
+        out = _run_collector_js(_collector_src(s), [{"gallery": {"selection": ["house.png"]}}])
+        assert out == [[{"image_name": "house.png"}]], out
+        # мигрированный путь: свежий якорь больше не встречается, только один узел
+        assert s.count("claude_expand_prompt") == 2
+    print("OK: миграция коллектора V1 -> V2")
 
 
 def test_patch_expansion_overlay_edit():
@@ -240,5 +324,7 @@ if __name__ == "__main__":
     test_live_smoke()
     test_patch_prompt_enhance_button()
     test_patch_expand_graph_refs()
+    test_refs_collector_behavior()
+    test_refs_collector_migration_v1_to_v2()
     test_patch_expansion_overlay_edit()
     test_deploy_prompt_enhancer()
