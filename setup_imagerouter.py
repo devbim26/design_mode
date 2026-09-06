@@ -17,7 +17,11 @@
      относящиеся только к локальным моделям (Refiner, Advanced/VAE, Compositing,
      Concepts/LoRA, «Advanced Options» с Scheduler/Steps/CFG). Остаётся только
      то, что использует ImageRouter API: промпт, модель, размер, seed.
-  6. Админский доступ по паролю (.env: ADMIN_PASSWORD):
+  6. Патчит собранный JS: у кнопки Generate убираются кнопки локальной
+     очереди — меню «полоски» (пауза/очистка очереди) и «крестик» (отмена);
+     локальная очередь при облачной генерации не используется, полоса
+     прогресса сохраняется.
+  7. Админский доступ по паролю (.env: ADMIN_PASSWORD):
      - вкладка «Модели» убирается из левой рейки;
      - в меню (шестерёнка «Настройки») добавляется пункт «Менеджер моделей»;
      - клик по шестерёнке и по пункту открывает модальное окно пароля
@@ -334,6 +338,53 @@ def patch_canvas_control_layer() -> bool:
     return True
 
 
+# ----------------------------------------------------------------------------
+# Кнопки локальной очереди у кнопки Generate (ряд QueueControls:
+# [InvokeQueueBackButton, Spacer, QueueActionsMenuButton, CancelIconButton]).
+# Генерация полностью облачная — локальная очередь всегда пуста, поэтому
+# кнопка-«полоски» (меню очереди: пауза/возобновление/очистка) и кнопка-
+# «крестик» (отмена текущего элемента очереди) бесполезны и убираются из
+# рендера. Сам компонент QueueActionsMenuButton остаётся в бандле (не
+# используется), полоса прогресса под кнопкой Generate сохраняется — через
+# неё виден прогресс облачной генерации (события invocation_progress).
+# ----------------------------------------------------------------------------
+
+# Ряд кнопок QueueControls: убрать меню очереди (cne) и отмену (fne)
+JS_QUEUE_BUTTONS_OLD = (
+    'children:[o.jsx(pne,{}),o.jsx(mt,{}),o.jsx(cne,{}),o.jsx(fne,{})]'
+)
+JS_QUEUE_BUTTONS_NEW = 'children:[o.jsx(pne,{}),o.jsx(mt,{})]'
+
+
+def patch_queue_buttons() -> bool:
+    """Убирает кнопки локальной очереди («полоски» и «крестик») справа от Generate."""
+    targets = [
+        f for f in DIST.glob("assets/*.js")
+        if 'displayName="InvokeQueueBackButton"' in f.read_text(encoding="utf-8")
+    ]
+    if len(targets) != 1:
+        print(f"ОШИБКА: бандл с рядом кнопок Generate найден {len(targets)} раз (ожидался 1)")
+        sys.exit(1)
+    f = targets[0]
+    s = f.read_text(encoding="utf-8")
+    if JS_QUEUE_BUTTONS_OLD not in s:
+        if JS_QUEUE_BUTTONS_NEW in s:
+            print("Кнопки очереди у Generate уже скрыты, пропуск")
+            return False
+        print("ОШИБКА: не найден ряд кнопок Generate (частичная правка?)")
+        sys.exit(1)
+    if s.count(JS_QUEUE_BUTTONS_OLD) != 1:
+        print(f"ОШИБКА: ряд кнопок Generate найден {s.count(JS_QUEUE_BUTTONS_OLD)} раз (ожидался 1)")
+        sys.exit(1)
+    s = s.replace(JS_QUEUE_BUTTONS_OLD, JS_QUEUE_BUTTONS_NEW, 1)
+    bak = f.with_suffix(f.suffix + ".imagerouter-bak")
+    if not bak.exists():
+        shutil.copy2(f, bak)
+    f.write_text(s, encoding="utf-8")
+    print(f"Кнопки локальной очереди убраны у Generate: {f.name} (бэкап: {bak.name})")
+    return True
+
+
 def patch_canvas_bridge(bundle: Path | None = None) -> bool:
     """Мост менеджера канваса для тумблера «Маска/Слой» (devbim_mask_toggle.js)."""
     if bundle is None:
@@ -595,6 +646,7 @@ def main() -> None:
     patch_js()
     patch_left_panel()
     patch_canvas_control_layer()
+    patch_queue_buttons()
     patch_canvas_bridge()
     patch_left_rail()
     patch_generate_button()
