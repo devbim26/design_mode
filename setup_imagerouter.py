@@ -464,6 +464,80 @@ def patch_prompt_enhance_button(bundle: Path | None = None) -> bool:
     return True
 
 
+# ----------------------------------------------------------------------------
+# Generate-фолбэк на картинку из вьювера (06.09, вечер, по жалобе пользователя:
+# «открытая во вьювере картинка не отсылается на генерацию»). Если в граф не
+# попадает ни одного изображения (канвас пуст + нет включённых референсов),
+# выбранная во вьювере картинка автоматически прикладывается глобальным
+# референсом — тот же штатный экшен, что у ПКМ «Use as Reference Image»
+# (E1 + id + H0). Гейты: модель ImageRouter с пометкой «редактирование»
+# (иначе не ломаем txt2img), иначе — штатное поведение без изменений.
+# ----------------------------------------------------------------------------
+JS_GEN_FALLBACK = (
+    'const __devbimGenFallback=async function(g){try{'
+    'var st=g.getState();'
+    'var c=st&&st.canvas?st.canvas:null;c=c&&c.present?c.present:c;'
+    'var rl=(c&&c.rasterLayers&&c.rasterLayers.entities)||[],'
+    'cl=(c&&c.controlLayers&&c.controlLayers.entities)||[];'
+    'var hasContent=rl.some(function(x){return(x.objects||[]).length>0})'
+    '||cl.some(function(x){return(x.objects||[]).length>0});'
+    'var rf=(c&&c.referenceImages&&c.referenceImages.entities)||[];'
+    'var hasRefs=rf.some(function(x){return x&&x.isEnabled!==false&&x.ipAdapter&&x.ipAdapter.image});'
+    'if(hasContent||hasRefs)return;'
+    'var sel=(st&&st.gallery&&st.gallery.selection)||[];var name=sel[sel.length-1];'
+    'if(!name)return;'
+    'var mk=st&&st.params&&st.params.model&&st.params.model.key;'
+    'if(!mk||mk.indexOf("imagerouter/")!==0)return;'
+    'var cfg=await fetch("/api/v2/models/i/"+encodeURIComponent(mk))'
+    '.then(function(r){return r.json()}).catch(function(){return null});'
+    'if(!cfg||!cfg.description||cfg.description.indexOf("редактирование")<0)return;'
+    'var dto=await fetch("/api/v1/images/"+name)'
+    '.then(function(r){return r.json()}).catch(function(){return null});'
+    'if(!dto||!dto.image_name)return;'
+    'var r=E1(g.getState());r.image=id(dto);g.dispatch(H0({overrides:{config:r}}))'
+    '}catch(err){}};'
+)
+JS_GEN_FALLBACK_PREFIX_OLD = 'const m7="Generate",pne=u.memo('
+JS_GEN_HOOKS_OLD = 'const e=FC(),t=qr(),n=T(K2);'
+JS_GEN_HOOKS_NEW = 'const e=FC(),t=qr(),n=T(K2),g=Je();'
+JS_GEN_ONCLICK_OLD = 'onClick:t?e.enqueueFront:e.enqueueBack'
+JS_GEN_ONCLICK_NEW = (
+    'onClick:()=>{__devbimGenFallback(g).finally(function(){(t?e.enqueueFront:e.enqueueBack)()})}'
+)
+
+
+def patch_generate_viewer_fallback(bundle: Path | None = None) -> bool:
+    """Generate с пустым канвасом прикладывает картинку из вьювера референсом."""
+    if bundle is None:
+        targets = [
+            f for f in DIST.glob("assets/*.js")
+            if 'displayName="InvokeQueueBackButton"' in f.read_text(encoding="utf-8")
+        ]
+        if len(targets) != 1:
+            print(f"ОШИБКА: бандл с кнопкой Generate найден {len(targets)} раз (ожидался 1)")
+            sys.exit(1)
+        bundle = targets[0]
+    s = bundle.read_text(encoding="utf-8")
+    if "__devbimGenFallback" in s:
+        print("Generate-фолбэк на вьювер уже установлен, пропуск")
+        return False
+    if s.count(JS_GEN_FALLBACK_PREFIX_OLD) != 1:
+        print(f"ОШИБКА: якорь компонента Generate найден {s.count(JS_GEN_FALLBACK_PREFIX_OLD)} раз (ожидался 1)")
+        sys.exit(1)
+    if s.count(JS_GEN_HOOKS_OLD) != 1 or s.count(JS_GEN_ONCLICK_OLD) != 1:
+        print("ОШИБКА: якоря хуков/onClick кнопки Generate найдены не по одному разу — структура изменилась")
+        sys.exit(1)
+    s = s.replace(JS_GEN_FALLBACK_PREFIX_OLD, JS_GEN_FALLBACK + JS_GEN_FALLBACK_PREFIX_OLD, 1)
+    s = s.replace(JS_GEN_HOOKS_OLD, JS_GEN_HOOKS_NEW, 1)
+    s = s.replace(JS_GEN_ONCLICK_OLD, JS_GEN_ONCLICK_NEW, 1)
+    bak = bundle.with_suffix(bundle.suffix + ".imagerouter-bak")
+    if not bak.exists():
+        shutil.copy2(bundle, bak)
+    bundle.write_text(s, encoding="utf-8")
+    print(f"Generate-фолбэк на вьювер установлен: {bundle.name} (бэкап: {bak.name})")
+    return True
+
+
 # Референсы в граф расширения промта: глобальные Reference Images канваса
 # (redux-undo: живое состояние в .present; грабля тумблера, п.16 HANDOFF).
 # V2 (06.09, вечер): если референсов нет — фолбэк на текущую картинку из
@@ -859,6 +933,7 @@ def main() -> None:
     patch_generate_button()
     deploy_prompt_enhancer()
     patch_prompt_enhance_button()
+    patch_generate_viewer_fallback()
     patch_expand_graph_refs()
     patch_expansion_overlay_edit()
     patch_left_rail()

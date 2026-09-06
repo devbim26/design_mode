@@ -187,6 +187,43 @@ def test_patch_prompt_enhance_button():
     print("OK: патч кнопки Prompt Enhance идемпотентен")
 
 
+def test_patch_generate_viewer_fallback():
+    with tempfile.TemporaryDirectory() as td:
+        b = Path(td) / "App-fake.js"
+        b.write_text(PE_FAKE, encoding="utf-8")
+        assert sir.patch_generate_viewer_fallback(b) is True
+        assert sir.patch_generate_viewer_fallback(b) is False  # идемпотентно
+        s = b.read_text(encoding="utf-8")
+        assert s.count("__devbimGenFallback") == 2  # определение + вызов в onClick
+        assert "n=T(K2),g=Je();" in s  # стор доступен в компоненте
+        assert "__devbimGenFallback(g).finally" in s  # enqueue после фолбэка
+        assert "(t?e.enqueueFront:e.enqueueBack)()" in s  # штатный enqueue сохранён
+        assert s.count("const m7=") == 1  # якорь не задублирован
+        assert (Path(td) / "App-fake.js.imagerouter-bak").exists()
+    print("OK: патч Generate-фолбэка идемпотентен")
+
+
+def test_gen_fallback_helper_syntax():
+    """Синтаксис JS-хелпера __devbimGenFallback валиден (node --check)."""
+    import subprocess
+
+    node = shutil.which("node")
+    if not node:
+        print("SKIP: node не найден")
+        return
+    f = Path(tempfile.mkdtemp()) / "gen_fallback.js"
+    f.write_text(sir.JS_GEN_FALLBACK, encoding="utf-8")
+    r = subprocess.run([node, "--check", str(f)], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    # ключевые строки поведения
+    src = sir.JS_GEN_FALLBACK
+    assert "st.params.model.key" in src  # модель из params
+    assert "редактирование" in src  # гейт: модель принимает картинки
+    assert "gallery.selection" in src  # картинка из вьювера
+    assert "E1(g.getState())" in src and "H0({overrides:{config:r}})" in src  # штатный add-reference
+    print("OK: node --check __devbimGenFallback")
+
+
 def test_patch_expand_graph_refs():
     with tempfile.TemporaryDirectory() as td:
         b = Path(td) / "App-fake.js"
@@ -323,6 +360,8 @@ if __name__ == "__main__":
     test_build_body()
     test_live_smoke()
     test_patch_prompt_enhance_button()
+    test_patch_generate_viewer_fallback()
+    test_gen_fallback_helper_syntax()
     test_patch_expand_graph_refs()
     test_refs_collector_behavior()
     test_refs_collector_migration_v1_to_v2()

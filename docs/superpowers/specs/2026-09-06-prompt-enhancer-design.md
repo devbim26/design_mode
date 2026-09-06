@@ -278,3 +278,19 @@ class AnalyzeImageInvocation(BaseInvocation):
 в node; уже пропатченные V1 бандлы мигрируют на V2 повторным запуском
 `setup_imagerouter.py`. Генерация не меняется (у неё свои пути: канвас/маска/
 референсы).
+
+## Дополнение 2 (06.09, вечер): Generate-фолбэк на картинку из вьювера
+
+Вторая жалоба: генерация с пустым канвасом уходила txt2img — только промт,
+картинка из вьювера не прикладывалась. Решение — `patch_generate_viewer_
+fallback()` (App-бандл, якоря `const e=FC()…` / `onClick:t?e.enqueueFront:
+e.enqueueBack`, оба уникальны): клик по Generate сначала зовёт async-хелпер
+`__devbimGenFallback(store)`, enqueue — в `.finally()`. Хелпер: если на
+канвасе НЕТ контента (raster/control layers пусты) и нет включённых
+референсов — берёт последнюю выбранную картинку галереи
+(`gallery.selection`) и прикладывает её глобальным референсом штатным
+экшеном ПКМ «Use as Reference Image» (E1 + id + H0). Гейты: ключ модели
+`imagerouter/…` из `state.params.model.key` И описание конфигурации модели
+содержит «редактирование» (GET /api/v2/models/i/{key}) — иначе чистый
+txt2img не ломаем. Далее штатный конвейер: ip_adapter в графе → посредник
+шлёт edits c image[]. Референс виден в панели Reference Images после клика.
