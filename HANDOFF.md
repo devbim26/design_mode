@@ -495,6 +495,48 @@ invokeai==6.2.0` их нужно запускать повторно в поря
     месте. F5 в браузере достаточно; действует на все инстансы компаний
     (venv общий).
 
+22. **Prompt Enhancer — улучшение промта через VLM ImageRouter** (06.09).
+    Голубая кнопка ✨ (#38BDF8, 56×40px, слот 60px справа от жёлтой
+    Generate; патч App-бандла `patch_prompt_enhance_button` в
+    setup_imagerouter.py) запускает ШТАТНЫЙ флоу Prompt Expansion
+    (ci.setPending + lb — как у скрытой штатной кнопки): граф
+    claude_expand_prompt → реальная очередь → string_output → оверлей
+    результата. Сервер: `imagerouter/prompt_enhancer.py`, деплой
+    `deploy_prompt_enhancer` в `venv/.../invokeai/app/invocations/
+    devbim_prompt_enhancer.py` — пакет подхватывает новые *.py сам
+    (__all__ в __init__.py + star-import graph.py). Инвокации
+    claude_expand_prompt (prompt + images[]) и claude_analyze_image ходят
+    в /v1/openai/chat/completions; модель zai/glm-5.3-flash, override
+    .env PROMPT_ENHANCER_MODEL; вывод всегда английский; max_tokens 1500
+    (ГРАБЛЯ: reasoning-модели при малом лимите возвращают ПУСТОЙ content —
+    бюджет съедается размышлениями до начала ответа, поймано на glm-5.3-
+    flash @300). Референсы: `patch_expand_graph_refs` дописывает в граф
+    глобальные Reference Images (state.canvas.present.referenceImages.
+    entities[].ipAdapter.image; сервер берёт до 4 шт, даунскейл до 1024,
+    JPEG q85). Оверлей: `patch_expansion_overlay_edit` — редактируемый
+    textarea (uncontrolled defaultValue + чтение из DOM в Replace/Insert).
+    Флаг allowPromptExpansion НЕ включаем: оверлей и блокировка промпта
+    от него не зависят, точка входа одна — наша кнопка. Пустой промт без
+    референсов → тост «Введите промт или приложите референсное
+    изображение». ГРАБЛИ (найдены при деплое 06.09): (а) `from __future__
+    import annotations` в модуле инвокций ВАЛИТ СЕРВЕР на старте (fix
+    7add770): InvokeAI-реестр разбирает аннотацию выхода `-> StringOutput`
+    через inspect.signature БЕЗ eval_str, получает строку 'StringOutput',
+    и run_app падает на `.__name__` — future-annotations в
+    invokeai/app/invocations ЗАПРЕЩЕНЫ (в модуле стоит guard-комментарий);
+    (б) порядок в main() (fix a3367e5): patch_generate_button()
+    (переименование m7="DevBIM"→"Generate") обязан идти ДО
+    patch_prompt_enhance_button() — на свежем force-reinstall+rebrand
+    якорь кнопки PE — m7="Generate". VLM отвечает 5–30 с — оверлей крутит
+    спиннер, textarea до ответа disabled. Проверено вживую 06.09 (обе
+    вкладки, Generate и Canvas): Replace/Insert берут отредактированный
+    текст, референсы доходят до VLM (ответ явно опирается на «as shown in
+    the reference image»), консоль чистая; скриншот
+    docs/prompt-enhance-button.png. Тесты: tests/test_prompt_enhancer.py
+    (включая живой smoke VLM). Проверка после изменений:
+    setup_imagerouter.py + node-import App-бандла + рестарт + E2E
+    чек-лист (план docs/superpowers/plans/2026-09-06-prompt-enhancer.md).
+
 17. **Мультикомпанность: экземпляр сервера на компанию** (05.09.2026).
     Продажа по компаниям: каждой — отдельный процесс InvokeAI со своим
     портом (9100+), паролем и корнем `companies/<код>/data` (галерея,
