@@ -490,7 +490,7 @@ def patch_expand_graph_refs(bundle: Path | None = None) -> bool:
             if 'displayName="TabContent"' in f.read_text(encoding="utf-8")
         ]
         if len(targets) != 1:
-            print(f"ОШИБКА: бандл с рядом кнопок Generate найден {len(targets)} раз (ожидался 1)")
+            print(f"ОШИБКА: App-бандл (TabContent) найден {len(targets)} раз (ожидался 1)")
             sys.exit(1)
         bundle = targets[0]
     s = bundle.read_text(encoding="utf-8")
@@ -832,12 +832,14 @@ def main() -> None:
     patch_canvas_control_layer()
     patch_queue_buttons()
     patch_canvas_bridge()
+    # Переименование m7="DevBIM" -> m7="Generate" обязано идти ДО
+    # patch_prompt_enhance_button(): её якорь — 'const m7="Generate",pne=u.memo('.
+    patch_generate_button()
     deploy_prompt_enhancer()
     patch_prompt_enhance_button()
     patch_expand_graph_refs()
     patch_expansion_overlay_edit()
     patch_left_rail()
-    patch_generate_button()
     patch_admin_gate()
     patch_tab_guard()
     patch_index_html()
