@@ -995,7 +995,9 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
                     pil = _apply_edit_mask(init_full, zone_full, pil, edit_bbox)
                 metadata = json.dumps(
                     {
-                        "generation_mode": "imagerouter-edit" if is_edit else "imagerouter",
+                        # edits-эндпоинт используется и для чистых референсов (без
+                        # исходника) — метка режима должна это отражать
+                        "generation_mode": "imagerouter-edit" if (is_edit or refs_pil) else "imagerouter",
                         "imagerouter_model": mid,
                         "positive_prompt": info["positive"],
                         "negative_prompt": info["negative"],

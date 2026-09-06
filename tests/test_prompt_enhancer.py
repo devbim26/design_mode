@@ -203,6 +203,26 @@ def test_patch_generate_viewer_fallback():
     print("OK: патч Generate-фолбэка идемпотентен")
 
 
+def test_gen_fallback_migration_v1_to_v2():
+    """Бандл со сломанной V1 (DTO по 404-пути GET /images/{name}) мигрирует на V2."""
+    with tempfile.TemporaryDirectory() as td:
+        b = Path(td) / "App-fake.js"
+        v1 = (
+            PE_FAKE.replace('const m7="Generate",pne=u.memo(',
+                             sir.JS_GEN_FALLBACK_V1 + 'const m7="Generate",pne=u.memo(', 1)
+                   .replace("const e=FC(),t=qr(),n=T(K2);", sir.JS_GEN_HOOKS_NEW, 1)
+                   .replace("onClick:t?e.enqueueFront:e.enqueueBack", sir.JS_GEN_ONCLICK_NEW, 1)
+        )
+        b.write_text(v1, encoding="utf-8")
+        assert sir.patch_generate_viewer_fallback(b) is True  # миграция
+        assert sir.patch_generate_viewer_fallback(b) is False
+        s = b.read_text(encoding="utf-8")
+        assert sir.JS_GEN_FALLBACK_V1 not in s
+        assert sir.JS_GEN_FALLBACK in s
+        assert "images_by_names" in s  # правильный DTO-эндпоинт
+    print("OK: миграция Generate-фолбэка V1 -> V2")
+
+
 def test_gen_fallback_helper_syntax():
     """Синтаксис JS-хелпера __devbimGenFallback валиден (node --check)."""
     import subprocess
@@ -220,6 +240,7 @@ def test_gen_fallback_helper_syntax():
     assert "st.params.model.key" in src  # модель из params
     assert "редактирование" in src  # гейт: модель принимает картинки
     assert "gallery.selection" in src  # картинка из вьювера
+    assert "images_by_names" in src and 'method:"POST"' in src  # DTO правильным эндпоинтом
     assert "E1(g.getState())" in src and "H0({overrides:{config:r}})" in src  # штатный add-reference
     print("OK: node --check __devbimGenFallback")
 
@@ -361,6 +382,7 @@ if __name__ == "__main__":
     test_live_smoke()
     test_patch_prompt_enhance_button()
     test_patch_generate_viewer_fallback()
+    test_gen_fallback_migration_v1_to_v2()
     test_gen_fallback_helper_syntax()
     test_patch_expand_graph_refs()
     test_refs_collector_behavior()

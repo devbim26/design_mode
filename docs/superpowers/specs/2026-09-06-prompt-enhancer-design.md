@@ -292,5 +292,8 @@ e.enqueueBack`, оба уникальны): клик по Generate сначал�
 экшеном ПКМ «Use as Reference Image» (E1 + id + H0). Гейты: ключ модели
 `imagerouter/…` из `state.params.model.key` И описание конфигурации модели
 содержит «редактирование» (GET /api/v2/models/i/{key}) — иначе чистый
-txt2img не ломаем. Далее штатный конвейер: ip_adapter в графе → посредник
+txt2img не ломаем. DTO картинки — POST /api/v1/images/images_by_names
+({image_names:[…]}) -> список ImageDTO (ГРАБЛЯ: GET /api/v1/images/{name}
+в 6.2 отдаёт 404 — такого эндпоинта нет). Метка режима в метаданных:
+«imagerouter-edit» и для чистых референсов (правка роутера 06.09). Далее штатный конвейер: ip_adapter в графе → посредник
 шлёт edits c image[]. Референс виден в панели Reference Images после клика.

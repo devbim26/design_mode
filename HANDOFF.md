@@ -518,7 +518,21 @@ invokeai==6.2.0` их нужно запускать повторно в поря
     (state.gallery.selection, последние 4) — «что открыто во вьювере, то
     и учитывается»; уже пропатченные V1-бандлы мигрируют на V2 повторным
     запуском setup (JS_REFS_COLLECTOR_V1 → V2); поведение коллектора
-    проверяется тестом в node. Оверлей: `patch_expansion_overlay_edit` — редактируемый
+    проверяется тестом в node. ГЕНЕРАЦИЯ с пустым канвасом (вторая жалоба
+    06.09, «вьювер не отсылается на генерацию»): patch_generate_viewer_
+    fallback — клик Generate сначала зовёт __devbimGenFallback(store)
+    (хелпер перед const m7, в pne добавлен g=Je(), onClick обёрнут в
+    .finally): нет контента на канвасе (raster/control) и нет включённых
+    референсов -> последняя выбранная картинка галереи прикладывается
+    глобальным референсом штатным экшеном (E1+id+H0, как ПКМ «Use as
+    Reference Image»); гейты: модель imagerouter/* из state.params.model.key
+    и «редактирование» в описании (иначе txt2img не ломаем). ГРАБЛЯ: DTO
+    картинки — ТОЛЬКО POST /api/v1/images/images_by_names ({image_names:
+    […]}), GET /api/v1/images/{name} в 6.2 отдаёт 404 (V1 фолбэка молча
+    уходила в txt2img — миграция V1→V2 повторным setup). Метка режима в
+    метаданных: «imagerouter-edit» теперь и для чистых референсов.
+    Проверено вживую 06.09: пустой канвас + выбранная картинка -> в графе
+    ip_adapter, посредник шлёт edits c image[]. Оверлей: `patch_expansion_overlay_edit` — редактируемый
     textarea (uncontrolled defaultValue + чтение из DOM в Replace/Insert).
     Флаг allowPromptExpansion НЕ включаем: оверлей и блокировка промпта
     от него не зависят, точка входа одна — наша кнопка. Пустой промт без

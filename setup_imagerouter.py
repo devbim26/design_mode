@@ -491,6 +491,34 @@ JS_GEN_FALLBACK = (
     'var cfg=await fetch("/api/v2/models/i/"+encodeURIComponent(mk))'
     '.then(function(r){return r.json()}).catch(function(){return null});'
     'if(!cfg||!cfg.description||cfg.description.indexOf("редактирование")<0)return;'
+    'var dtos=await fetch("/api/v1/images/images_by_names",{method:"POST",'
+    'headers:{"Content-Type":"application/json"},'
+    'body:JSON.stringify({image_names:[name]})})'
+    '.then(function(r){return r.json()}).catch(function(){return null});'
+    'var dto=dtos&&dtos[0]?dtos[0]:null;'
+    'if(!dto||!dto.image_name)return;'
+    'var r=E1(g.getState());r.image=id(dto);g.dispatch(H0({overrides:{config:r}}))'
+    '}catch(err){}};'
+)
+# V1 — сломанная версия (GET /api/v1/images/{name} в 6.2 отдаёт 404); для миграции
+JS_GEN_FALLBACK_V1 = (
+    'const __devbimGenFallback=async function(g){try{'
+    'var st=g.getState();'
+    'var c=st&&st.canvas?st.canvas:null;c=c&&c.present?c.present:c;'
+    'var rl=(c&&c.rasterLayers&&c.rasterLayers.entities)||[],'
+    'cl=(c&&c.controlLayers&&c.controlLayers.entities)||[];'
+    'var hasContent=rl.some(function(x){return(x.objects||[]).length>0})'
+    '||cl.some(function(x){return(x.objects||[]).length>0});'
+    'var rf=(c&&c.referenceImages&&c.referenceImages.entities)||[];'
+    'var hasRefs=rf.some(function(x){return x&&x.isEnabled!==false&&x.ipAdapter&&x.ipAdapter.image});'
+    'if(hasContent||hasRefs)return;'
+    'var sel=(st&&st.gallery&&st.gallery.selection)||[];var name=sel[sel.length-1];'
+    'if(!name)return;'
+    'var mk=st&&st.params&&st.params.model&&st.params.model.key;'
+    'if(!mk||mk.indexOf("imagerouter/")!==0)return;'
+    'var cfg=await fetch("/api/v2/models/i/"+encodeURIComponent(mk))'
+    '.then(function(r){return r.json()}).catch(function(){return null});'
+    'if(!cfg||!cfg.description||cfg.description.indexOf("редактирование")<0)return;'
     'var dto=await fetch("/api/v1/images/"+name)'
     '.then(function(r){return r.json()}).catch(function(){return null});'
     'if(!dto||!dto.image_name)return;'
@@ -518,9 +546,17 @@ def patch_generate_viewer_fallback(bundle: Path | None = None) -> bool:
             sys.exit(1)
         bundle = targets[0]
     s = bundle.read_text(encoding="utf-8")
-    if "__devbimGenFallback" in s:
+    if JS_GEN_FALLBACK in s:
         print("Generate-фолбэк на вьювер уже установлен, пропуск")
         return False
+    bak = bundle.with_suffix(bundle.suffix + ".imagerouter-bak")
+    if JS_GEN_FALLBACK_V1 in s:  # миграция сломанной V1 (DTO по 404-пути)
+        s = s.replace(JS_GEN_FALLBACK_V1, JS_GEN_FALLBACK, 1)
+        if not bak.exists():
+            shutil.copy2(bundle, bak)
+        bundle.write_text(s, encoding="utf-8")
+        print(f"Generate-фолбэк мигрирован V1 -> V2: {bundle.name} (бэкап: {bak.name})")
+        return True
     if s.count(JS_GEN_FALLBACK_PREFIX_OLD) != 1:
         print(f"ОШИБКА: якорь компонента Generate найден {s.count(JS_GEN_FALLBACK_PREFIX_OLD)} раз (ожидался 1)")
         sys.exit(1)
