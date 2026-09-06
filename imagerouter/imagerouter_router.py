@@ -62,6 +62,10 @@ CREDITS_URL = f"{IR_BASE}/v1/credits"
 MODELS_URL = f"{IR_BASE}/v3/models"
 GENERATIONS_URL = f"{IR_BASE}/v1/openai/images/generations"
 EDITS_URL = f"{IR_BASE}/v1/openai/images/edits"
+CHAT_COMPLETIONS_URL = f"{IR_BASE}/v1/openai/chat/completions"
+
+# VLM для улучшения промтов (Prompt Enhancer); override — .env PROMPT_ENHANCER_MODEL
+DEFAULT_ENHANCER_MODEL = "zai/glm-5.3-flash"
 
 # Дописывается к промпту, когда модель не принимает параметр mask и зона
 # правки подсвечивается прямо в картинке (см. _draw_mask_marker)
@@ -153,6 +157,11 @@ def _load_key() -> Optional[str]:
         return None
 
 
+def _enhancer_model() -> str:
+    _ensure_env()
+    return (os.environ.get("PROMPT_ENHANCER_MODEL") or "").strip() or DEFAULT_ENHANCER_MODEL
+
+
 def _auth_headers() -> dict[str, str]:
     key = _load_key()
     if not key:
@@ -206,6 +215,7 @@ def get_status() -> dict:
         "has_key": key is not None,
         "hint": f"...{key[-4:]}" if key else None,
         "key_source": "env" if _env_key() else ("file" if key else None),
+        "prompt_enhancer_model": _enhancer_model(),
     }
 
 
