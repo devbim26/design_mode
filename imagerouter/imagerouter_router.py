@@ -152,6 +152,52 @@ def _save_upscale_selection(models: list[str]) -> None:
     p.write_text(json.dumps({"models": models}, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
+# --- Основные модели (генерация/правка на холсте): выбор администратора ---
+#
+# Файл <INVOKEAI_ROOT>/data/imagerouter_main_models.json (per-company).
+# Пока файла нет — доступны ВСЕ модели каталога (обратная совместимость);
+# после первого сохранения — только выбранные, в порядке выбора (первая
+# модель — по умолчанию у «свежих» пользователей, клиент авто-выбирает
+# первый main-конфиг из /api/v2/models/).
+
+
+def _main_store_path() -> Path:
+    return Path(get_config().root_path) / "data" / "imagerouter_main_models.json"
+
+
+def _load_main_selection() -> Optional[list[str]]:
+    """None = файла нет (показываем всё); иначе — список id без дублей."""
+    p = _main_store_path()
+    try:
+        ids = json.loads(p.read_text(encoding="utf-8")).get("models")
+    except Exception:
+        ids = None
+    if not isinstance(ids, list):
+        return None
+    out: list[str] = []
+    for mid in ids:
+        if isinstance(mid, str) and mid and mid not in out:
+            out.append(mid)
+    return out
+
+
+def _save_main_selection(models: list[str]) -> None:
+    p = _main_store_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"models": models}, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def _selected_main_models() -> list[dict]:
+    """Модели каталога для инъекции как main: выбор администратора в его
+    порядке; без файла — весь каталог (в его порядке)."""
+    all_models = _fetch_ir_models()
+    sel = _load_main_selection()
+    if sel is None:
+        return all_models
+    by_id = {m.get("id"): m for m in all_models}
+    return [by_id[mid] for mid in sel if mid in by_id]
+
+
 # --- Хранение ключа: .env (IMAGEROUTER_API_KEY) > data/imagerouter.json ---
 
 def _load_env_file() -> None:
@@ -406,6 +452,46 @@ def put_upscale_models(body: UpscaleModelsBody) -> dict:
     return {"models": valid, "skipped": skipped}
 
 
+# --- Основные модели (генерация/правка): выбор администратора ---
+
+
+class MainModelsBody(BaseModel):
+    models: list[str] = Field(default_factory=list, max_length=1000)
+
+
+@imagerouter_router.get("/main-models")
+def get_main_models() -> dict:
+    """Текущий выбор основных моделей. all_by_default=True — файла ещё нет,
+    пользователям доступен весь каталог (список отдан для предзаполнения
+    чекбоксов админ-UI)."""
+    sel = _load_main_selection()
+    if sel is None:
+        ids = [m.get("id") for m in _fetch_ir_models() if m.get("id")]
+        return {"models": ids, "all_by_default": True}
+    items = []
+    for mid in sel:
+        m = _ir_model_by_id(mid)
+        items.append({"id": mid, "available": m is not None, "image_input": _supports_image_input(mid) if m else None})
+    return {"models": items, "all_by_default": False}
+
+
+@imagerouter_router.put("/main-models")
+def put_main_models(body: MainModelsBody) -> dict:
+    """Сохранить выбор основных моделей (генерация и/или правка). Валидация:
+    модель есть в каталоге (вход-image НЕ обязателен — чистая генерация
+    тоже допустима). Пустой список разрешён (полное отключение генерации)."""
+    catalog = {m.get("id") for m in _fetch_ir_models(force=True)}
+    valid: list[str] = []
+    skipped: list[str] = []
+    for mid in body.models:
+        if mid not in catalog:
+            skipped.append(mid)
+        elif mid not in valid:
+            valid.append(mid)
+    _save_main_selection(valid)
+    return {"models": valid, "skipped": skipped}
+
+
 # ============================================================================
 # Интеграция в основной интерфейс (Canvas): модели ImageRouter в выборе модели
 # ============================================================================
@@ -450,13 +536,13 @@ def _ir_fake_config(m: dict) -> dict:
     import hashlib
 
     mid = m.get("id", "")
-    price = _avg_price(m)
-    desc = "Облачная модель ImageRouter"
-    if price is not None:
-        desc += f" · ~${price}/img" if price > 0 else " · бесплатно"
+    # Краткое описание без стоимости (решение пользователя 08.09: цену
+    # пользователю не показываем). Слово «редактирование» ОБЯЗАТЕЛЬНО:
+    # на него опирается гейт Generate-фолбэка (п.22 HANDOFF).
+    desc = "Облачная генерация изображений"
     inputs = ((m.get("architecture") or {}).get("input_modalities")) or []
     if "image" in inputs:
-        desc += " · редактирование"
+        desc += " · ✏️ редактирование"
     return {
         "key": IR_KEY_PREFIX + mid,
         # hash обязателен (zod: min(1)) — стабильный псевдохеш от id
@@ -532,14 +618,11 @@ def _ir_tile_fake() -> dict:
 
 def _ir_upscale_fake_config(m: dict) -> dict:
     """Выбранная админом модель как spandrel-конфиг (дропдаун «Upscale Model»
-    вкладки Upscaling показывает все модели type=spandrel_image_to_image)."""
+    вкладки Upscaling показывает все модели type=spandrel_image_to_image).
+    Описание без стоимости — цену пользователю не показываем (08.09)."""
     import hashlib
 
     mid = m.get("id", "")
-    price = _avg_price(m)
-    desc = "Облачный апскейл ImageRouter"
-    if price is not None:
-        desc += f" · ~${price}/img" if price > 0 else " · бесплатно"
     return {
         "key": IR_UPSCALE_KEY_PREFIX + mid,
         # hash отличаем от main-фейка той же модели (роль другая — ключ другой)
@@ -552,7 +635,7 @@ def _ir_upscale_fake_config(m: dict) -> dict:
         "base": "any",
         "source": "https://imagerouter.io",
         "source_type": "url",
-        "description": desc,
+        "description": "Облачный апскейл изображений",
         "variant": "normal",
         "cover_image": None,
     }
@@ -573,7 +656,7 @@ def _ir_upscale_configs() -> list[dict]:
 
 def _ir_fake_configs() -> list[dict]:
     return (
-        [_ir_fake_config(m) for m in _fetch_ir_models()]
+        [_ir_fake_config(m) for m in _selected_main_models()]
         + [_ir_ipadapter_fake()]
         + _ir_upscale_configs()
         + [_ir_tile_fake()]
