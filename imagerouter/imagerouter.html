@@ -81,6 +81,13 @@
   }
   @keyframes sp{to{transform:rotate(360deg)}}
   label.chk{display:flex; align-items:center; gap:5px; color:var(--muted); font-size:12px; white-space:nowrap; cursor:pointer}
+  .model.up{cursor:default}
+  .model.up .up-chk{margin:0; cursor:pointer}
+  .model.up .ord{
+    display:inline-block; min-width:16px; text-align:center; font-size:11px; font-weight:600;
+    color:var(--accent); border:1px solid var(--accent-dim); border-radius:4px; padding:0 3px;
+  }
+  .model.up .up-move{padding:1px 7px; font-size:12px; line-height:1.4}
   .hint{color:var(--muted); font-size:11px}
   .hidden{display:none !important}
   #keysec .hint a{color:var(--accent)}
@@ -125,6 +132,22 @@
     <div class="msg" id="models-msg"></div>
   </section>
 
+  <section id="upsec">
+    <h2>Апскейлинг — модели для пользователей</h2>
+    <div class="hint" style="margin-bottom:8px">
+      Отмеченные модели появятся в списке «Upscale Model» на вкладке «Upscaling».
+      <b>Первая модель списка выбирается у пользователей по умолчанию</b> — порядок
+      меняйте стрелками ↑↓. После сохранения пользователям нужно обновить страницу (F5).
+    </div>
+    <div class="models-toolbar">
+      <input type="text" id="up-search" placeholder="Поиск (модели со входом-image)…">
+      <button id="up-save">Сохранить выбор</button>
+      <span class="count" id="up-count"></span>
+    </div>
+    <div id="up-models"><div class="hint">Загрузка…</div></div>
+    <div class="msg" id="up-msg"></div>
+  </section>
+
   <section>
     <h2>Генерация</h2>
     <div class="row" style="margin-bottom:8px">
@@ -161,7 +184,7 @@
 <script>
 "use strict";
 var API = "/api/v1/imagerouter";
-var state = { models: [], selected: null, hasKey: false };
+var state = { models: [], selected: null, hasKey: false, upscale: [] };
 
 function $(id){ return document.getElementById(id); }
 function setMsg(id, text, cls){
@@ -227,6 +250,7 @@ function loadModels(){
   api("/models?sort=name&limit=500").then(function(list){
     state.models = Array.isArray(list) ? list : [];
     renderModels();
+    renderUpscale();
   }).catch(function(e){
     $("models").innerHTML = "";
     setMsg("models-msg", "Не удалось загрузить список моделей: " + e.message, "err");
@@ -322,6 +346,114 @@ $("free-only").addEventListener("change", renderModels);
 $("sort").addEventListener("change", renderModels);
 $("refresh").addEventListener("click", loadModels);
 
+/* ---------- апскейлинг: модели для пользователей ---------- */
+
+// state.upscale — порядок = порядок выбора; первый элемент — модель по
+// умолчанию у пользователей
+
+function loadUpscale(){
+  api("/upscale-models").then(function(data){
+    state.upscale = (data.models || []).map(function(it){ return it.id; });
+    if (data.defaults_used)
+      setMsg("up-msg", "Показан список по умолчанию — сохраните, чтобы закрепить свой выбор", "");
+    renderUpscale();
+  }).catch(function(e){
+    $("up-models").innerHTML = "";
+    setMsg("up-msg", "Не удалось загрузить выбор: " + e.message, "err");
+  });
+}
+
+function toggleUpscale(id){
+  var i = state.upscale.indexOf(id);
+  if (i === -1) state.upscale.push(id);
+  else state.upscale.splice(i, 1);
+  renderUpscale();
+}
+
+function moveUpscale(id, dir){
+  var i = state.upscale.indexOf(id);
+  var j = i + dir;
+  if (i === -1 || j < 0 || j >= state.upscale.length) return;
+  var t = state.upscale[i];
+  state.upscale[i] = state.upscale[j];
+  state.upscale[j] = t;
+  renderUpscale();
+}
+
+function renderUpscale(){
+  var box = $("up-models");
+  if (!state.models.length){
+    box.innerHTML = '<div class="hint">Каталог ещё не загружен…</div>';
+    return;
+  }
+  var q = $("up-search").value.trim().toLowerCase();
+  var list = state.models.filter(function(m){
+    if (!isEditable(m)) return false;          // апскейл = edits-запрос, нужен вход-image
+    if (q && m.id.toLowerCase().indexOf(q) === -1) return false;
+    return true;
+  });
+  list.sort(function(a, b){
+    var sa = state.upscale.indexOf(a.id), sb = state.upscale.indexOf(b.id);
+    if ((sa === -1) !== (sb === -1)) return sa === -1 ? 1 : -1;   // выбранные выше
+    if (sa !== -1 && sb !== -1) return sa - sb;                    // в порядке выбора
+    var pa = avgPrice(a) || 0, pb = avgPrice(b) || 0;
+    return pa - pb;                                                // остальные по цене
+  });
+  $("up-count").textContent = "выбрано: " + state.upscale.length;
+  if (!list.length){
+    box.innerHTML = '<div class="hint">Ничего не найдено</div>';
+    return;
+  }
+  box.innerHTML = "";
+  list.forEach(function(m){
+    var idx = state.upscale.indexOf(m.id);
+    var el = document.createElement("div");
+    el.className = "model up" + (idx !== -1 ? " sel" : "");
+    var slash = m.id.indexOf("/");
+    var prov = slash > 0 ? m.id.slice(0, slash) : "";
+    var name = slash > 0 ? m.id.slice(slash + 1) : m.id;
+    var price = isFree(m)
+      ? '<span class="badge-free">free</span>'
+      : (avgPrice(m) != null ? '<span class="price">~$' + avgPrice(m).toFixed(4).replace(/0+$/,"").replace(/\.$/,"") + '/img</span>' : "");
+    var order = idx !== -1
+      ? '<span class="ord">' + (idx + 1) + '</span>' +
+        '<button class="ghost up-move" data-id="' + m.id + '" data-dir="-1" title="Выше (ближе к умолчанию)">↑</button>' +
+        '<button class="ghost up-move" data-id="' + m.id + '" data-dir="1" title="Ниже">↓</button>'
+      : "";
+    el.innerHTML = '<input type="checkbox" class="up-chk"' + (idx !== -1 ? " checked" : "") +
+      ' title="Доступна пользователям для апскейлинга">' + order +
+      '<span class="id">' + (prov ? '<span class="prov">' + prov + '</span>/' : '') +
+      "<b>" + name + "</b></span>" + price;
+    el.querySelector(".up-chk").addEventListener("change", function(){ toggleUpscale(m.id); });
+    el.querySelectorAll(".up-move").forEach(function(b){
+      b.addEventListener("click", function(ev){
+        ev.stopPropagation();
+        moveUpscale(b.dataset.id, parseInt(b.dataset.dir, 10));
+      });
+    });
+    box.appendChild(el);
+  });
+}
+
+$("up-search").addEventListener("input", renderUpscale);
+
+$("up-save").addEventListener("click", function(){
+  setMsg("up-msg", "Сохранение…");
+  api("/upscale-models", {
+    method: "PUT",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ models: state.upscale })
+  }).then(function(data){
+    state.upscale = data.models || [];
+    var extra = (data.skipped || []).length
+      ? " Пропущены (нет в каталоге или без входа-image): " + data.skipped.join(", ")
+      : "";
+    setMsg("up-msg", "Сохранено: " + state.upscale.length + " мод." +
+      (state.upscale.length ? "; по умолчанию — " + state.upscale[0] : "") + extra, "ok");
+    renderUpscale();
+  }).catch(function(e){ setMsg("up-msg", "Ошибка: " + e.message, "err"); });
+});
+
 /* ---------- генерация ---------- */
 
 $("gen").addEventListener("click", function(){
@@ -376,6 +508,7 @@ $("gen").addEventListener("click", function(){
 });
 
 refreshStatus();
+loadUpscale();
 </script>
 </body>
 </html>

@@ -10,6 +10,9 @@
     GET  /api/v1/imagerouter/models     — список моделей (прокси /v3/models)
     POST /api/v1/imagerouter/generate   — генерация (прокси /v1/openai/images/generations)
     POST /api/v1/imagerouter/admin-auth — проверка админского пароля (.env)
+    GET  /api/v1/imagerouter/upscale-models — модели апскейлинга, доступные
+                                             пользователям (выбор администратора)
+    PUT  /api/v1/imagerouter/upscale-models — сохранить выбор
 
 Секреты читаются из .env в корне проекта (см. _load_env_file):
     IMAGEROUTER_API_KEY — ключ ImageRouter; имеет приоритет над ключом,
@@ -19,12 +22,17 @@
 
 Часть 2 — ImageRouterCanvasMiddleware: модели ImageRouter в основном интерфейсе:
     GET    /api/v2/models/               — к списку добавляются модели ImageRouter
-                                            (появляются в выборе модели на Canvas)
+                                            (появляются в выборе модели на Canvas),
+                                            spandrel-фейки выбранных админом моделей
+                                            апскейлинга и декоративный Tile ControlNet
+                                            (вкладка Upscaling)
     POST   /api/v1/queue/{q}/enqueue_batch — если в графе выбрана модель ImageRouter,
                                             генерация выполняется через API, картинка
                                             сохраняется в галерею, клиенту отправляются
                                             штатные события batch_enqueued /
-                                            invocation_complete / queue_item_status_changed
+                                            invocation_complete / queue_item_status_changed;
+                                            графы апскейлинга (spandrel-узлы) идут в
+                                            /v1/openai/images/edits с серверным промптом
     GET/DELETE /api/v2/models/i/{key}    — чтение/запрет удаления для моделей ImageRouter
 
 Ключ хранится на сервере (<INVOKEAI_ROOT>/imagerouter.json) и в браузер не отдаётся.
@@ -80,17 +88,68 @@ PROMPT_REFERENCE_NOTE = (
     "учитывай их стиль и содержание."
 )
 
+# Вариант для JSON-режима (исходник + референсы одним массивом image[]):
+# модель получает несколько картинок и должна понимать роль каждой (06.09)
+PROMPT_REFERENCE_ROLES_NOTE = (
+    "\n\nПервое изображение — исходник для редактирования. "
+    "Остальные изображения — референсы материалов: "
+    "точно примени их текстуры и цвета к исходнику."
+)
+
 TIMEOUT_SHORT = 30
 TIMEOUT_GENERATE = 300
 
 # Префикс ключей моделей ImageRouter в интерфейсе InvokeAI
 IR_KEY_PREFIX = "imagerouter/"
+# Отдельный префикс для моделей апскейлинга (вкладка Upscaling): одна и та же
+# облачная модель может быть выбрана и главной (type=main), и моделью апскейла
+# (type=spandrel_image_to_image), а GET /api/v2/models/i/{key} отдаёт один
+# конфиг на ключ — ролям нужны разные ключи.
+IR_UPSCALE_KEY_PREFIX = "imagerouter-upscale/"
 # Модели представляются как main/diffusers/base=sdxl — единственная база, для которой
 # фронтенд строит граф без обязательных субмоделей (T5/CLIP и т.п.); сам граф
 # сервером не исполняется, а перехватывается мидлварью.
 FAKE_BASE = "sdxl"
 IR_MODELS_CACHE_TTL = 600.0
 MAX_RUNS = 10
+
+# --- Апскейлинг: выбор администратора (какие облачные модели видят пользователи) ---
+
+# Файл выбора: <INVOKEAI_ROOT>/data/imagerouter_upscale.json (per-company, как
+# imagerouter.json). Первый элемент списка — модель по умолчанию (клиент
+# авто-выбирает первый spandrel-конфиг из /api/v2/models/).
+DEFAULT_UPSCALE_MODELS = [
+    "philz1337x/clarity-2x",
+    "jingyunliang/swinir-2x",
+    "stabilityai/latent-2x",
+    "prunaai/P-Image-Upscale",
+    "csslc/ccsr-2x",
+]
+
+
+def _upscale_store_path() -> Path:
+    return Path(get_config().root_path) / "data" / "imagerouter_upscale.json"
+
+
+def _load_upscale_selection() -> list[str]:
+    p = _upscale_store_path()
+    try:
+        ids = json.loads(p.read_text(encoding="utf-8")).get("models")
+    except Exception:
+        ids = None
+    if not isinstance(ids, list):
+        return list(DEFAULT_UPSCALE_MODELS)
+    out: list[str] = []
+    for mid in ids:
+        if isinstance(mid, str) and mid and mid not in out:
+            out.append(mid)
+    return out
+
+
+def _save_upscale_selection(models: list[str]) -> None:
+    p = _upscale_store_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"models": models}, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
 # --- Хранение ключа: .env (IMAGEROUTER_API_KEY) > data/imagerouter.json ---
@@ -303,6 +362,50 @@ def generate(body: GenerateBody) -> Any:
     return _upstream_json(resp)
 
 
+# --- Апскейлинг: модели, доступные пользователям (выбор администратора) ---
+
+
+class UpscaleModelsBody(BaseModel):
+    models: list[str] = Field(default_factory=list, max_length=100)
+
+
+@imagerouter_router.get("/upscale-models")
+def get_upscale_models() -> dict:
+    """Текущий выбор + справочные данные из каталога (цена, вход-image).
+    defaults_used=True — файл ещё не создавался, отдан список по умолчанию."""
+    ids = _load_upscale_selection()
+    items: list[dict] = []
+    for mid in ids:
+        m = _ir_model_by_id(mid)
+        items.append(
+            {
+                "id": mid,
+                "available": m is not None,
+                "price": _avg_price(m) if m else None,
+                "image_input": _supports_image_input(mid) if m else None,
+            }
+        )
+    return {"models": items, "defaults_used": not _upscale_store_path().exists()}
+
+
+@imagerouter_router.put("/upscale-models")
+def put_upscale_models(body: UpscaleModelsBody) -> dict:
+    """Сохранить выбор. Валидация: модель есть в каталоге и принимает
+    изображение на вход (апскейл — это edits-запрос). Невалидные id
+    отсеиваются и перечисляются в ответе."""
+    catalog = {m.get("id"): m for m in _fetch_ir_models(force=True)}
+    valid: list[str] = []
+    skipped: list[str] = []
+    for mid in body.models:
+        m = catalog.get(mid)
+        if m is None or not _supports_image_input(mid):
+            skipped.append(mid)
+        elif mid not in valid:
+            valid.append(mid)
+    _save_upscale_selection(valid)
+    return {"models": valid, "skipped": skipped}
+
+
 # ============================================================================
 # Интеграция в основной интерфейс (Canvas): модели ImageRouter в выборе модели
 # ============================================================================
@@ -399,8 +502,82 @@ def _ir_ipadapter_fake() -> dict:
     }
 
 
+# Фейковый tile-ControlNet для вкладки Upscaling: unified-апскейл требует
+# «Tile ControlNet model for the chosen main model architecture» (base главных
+# фейков — sdxl, имя обязано содержать «tile» — по нему клиент авто-выбирает).
+# Локально граф не исполняется — узел в графе остаётся декорацией.
+TILE_CONTROLNET_FAKE_ID = "tile-controlnet"
+TILE_CONTROLNET_FAKE_KEY = IR_KEY_PREFIX + TILE_CONTROLNET_FAKE_ID
+
+
+def _ir_tile_fake() -> dict:
+    import hashlib
+
+    return {
+        "key": TILE_CONTROLNET_FAKE_KEY,
+        "hash": hashlib.md5(("upscale:" + TILE_CONTROLNET_FAKE_ID).encode("utf-8")).hexdigest(),
+        "path": f"imagerouter://{TILE_CONTROLNET_FAKE_ID}",
+        "file_size": 0,
+        "name": "Tile ControlNet (ImageRouter)",
+        "type": "controlnet",
+        "format": "checkpoint",
+        "base": FAKE_BASE,
+        "source": "https://imagerouter.io",
+        "source_type": "url",
+        "description": "Апскейлинг исполняется облаком ImageRouter (декоративная модель)",
+        "variant": "normal",
+        "cover_image": None,
+    }
+
+
+def _ir_upscale_fake_config(m: dict) -> dict:
+    """Выбранная админом модель как spandrel-конфиг (дропдаун «Upscale Model»
+    вкладки Upscaling показывает все модели type=spandrel_image_to_image)."""
+    import hashlib
+
+    mid = m.get("id", "")
+    price = _avg_price(m)
+    desc = "Облачный апскейл ImageRouter"
+    if price is not None:
+        desc += f" · ~${price}/img" if price > 0 else " · бесплатно"
+    return {
+        "key": IR_UPSCALE_KEY_PREFIX + mid,
+        # hash отличаем от main-фейка той же модели (роль другая — ключ другой)
+        "hash": hashlib.md5(("upscale:" + mid).encode("utf-8")).hexdigest(),
+        "path": f"imagerouter-upscale://{mid}",
+        "file_size": 0,
+        "name": mid.split("/")[-1],
+        "type": "spandrel_image_to_image",
+        "format": "checkpoint",
+        "base": "any",
+        "source": "https://imagerouter.io",
+        "source_type": "url",
+        "description": desc,
+        "variant": "normal",
+        "cover_image": None,
+    }
+
+
+def _ir_upscale_configs() -> list[dict]:
+    """Spandrel-фейки для моделей из выбора администратора (порядок списка =
+    порядок выбора: первый — модель по умолчанию у пользователей). Модели без
+    входа-image не инъектируются: апскейл — это edits-запрос (страховка от
+    вручную отредактированного файла выбора)."""
+    out: list[dict] = []
+    for mid in _load_upscale_selection():
+        m = _ir_model_by_id(mid)
+        if m is not None and _supports_image_input(mid):
+            out.append(_ir_upscale_fake_config(m))
+    return out
+
+
 def _ir_fake_configs() -> list[dict]:
-    return [_ir_fake_config(m) for m in _fetch_ir_models()] + [_ir_ipadapter_fake()]
+    return (
+        [_ir_fake_config(m) for m in _fetch_ir_models()]
+        + [_ir_ipadapter_fake()]
+        + _ir_upscale_configs()
+        + [_ir_tile_fake()]
+    )
 
 
 def _add_ir_models(data: Any) -> None:
@@ -423,6 +600,63 @@ def _pick_size(mid: str, width: int, height: int) -> Optional[str]:
     if not allowed:
         return candidate  # модель принимает произвольные размеры
     return candidate if candidate in allowed else None
+
+
+def _snap64(x: int) -> int:
+    return max(64, (int(x) + 31) // 64 * 64)
+
+
+# наблюдаемый лимит шлюза для моделей с произвольным размером (кратно 64, 128..2048)
+UPSCALE_SIDE_CAP = 2048
+
+
+def _pick_upscale_size(mid: str, width: int, height: int, scale: float) -> Optional[str]:
+    """Целевой размер апскейла: исходник × масштаб. Если у модели явный список
+    размеров — ближайший, покрывающий цель (иначе максимальный); без списка —
+    цель со снапом к 64 и капом стороны (size=auto → модель выберет сама)."""
+    m = _ir_model_by_id(mid) or {}
+    params = (m.get("parameters") or {}).get("size") or []
+    allowed = [s for s in params if isinstance(s, str) and s not in ("auto", "custom")]
+    target_w = _snap64(int(width) * int(scale))
+    target_h = _snap64(int(height) * int(scale))
+    if allowed:
+        dims: list[tuple[int, int]] = []
+        for s in allowed:
+            try:
+                a, b = s.lower().split("x")
+                dims.append((int(a), int(b)))
+            except ValueError:
+                continue
+        if dims:
+            covering = [d for d in dims if d[0] >= target_w and d[1] >= target_h]
+            chosen = min(covering, key=lambda d: d[0] * d[1]) if covering else max(dims, key=lambda d: d[0] * d[1])
+            return f"{chosen[0]}x{chosen[1]}"
+        return None
+    target_w, target_h = min(target_w, UPSCALE_SIDE_CAP), min(target_h, UPSCALE_SIDE_CAP)
+    if target_w < 128 or target_h < 128:
+        return None
+    return f"{target_w}x{target_h}"
+
+
+def _upscale_prompt(scale: float, creativity: Optional[float] = None, structure: Optional[float] = None) -> str:
+    """Серверный промпт для облачного апскейла (у вкладки поля промпта нет).
+    Регуляторы вкладки переводятся в мягкие пояснения: creativity — доля
+    перерисовки (1 - denoising_start, слайдер 0 ≈ 0.5), structure — вес
+    tile-ControlNet (0.3..0.625)."""
+    p = (
+        f"Upscale this image to approximately {int(round(scale))}x higher resolution. "
+        "Increase sharpness and refine fine details, textures and edges. "
+        "Keep the composition, geometry, colors and content exactly the same. "
+        "Do not add, remove or alter any objects."
+    )
+    if creativity is not None:
+        if creativity >= 0.75:
+            p += " You may creatively enhance fine details while keeping the overall structure recognizable."
+        elif creativity <= 0.25:
+            p += " Be strictly faithful: only increase resolution and sharpness, no artistic changes."
+    if structure is not None and structure >= 0.55:
+        p += " Preserve the exact structure, proportions and composition."
+    return p
 
 
 class _IRClientError(Exception):
@@ -565,7 +799,14 @@ def _apply_edit_mask(original: Any, zone_full: Any, edited: Any, bbox: tuple) ->
 
 def _extract_ir_info(batch: dict) -> dict:
     """Из графа Canvas достаём модель, промпт, размер, доску и исходное
-    изображение/маску (для режимов inpaint/outpaint/img2img)."""
+    изображение/маску (для режимов inpaint/outpaint/img2img).
+
+    Графы апскейлинга (вкладка Upscaling и quick-action из контекстного меню
+    картинки) распознаются по spandrel-узлу: is_upscale=True, модель апскейла
+    в upscale_model_key (префикс imagerouter-upscale/), исходник в init_image,
+    масштаб в upscale_scale. В графе вкладки есть и main-модель (sdxl_loader),
+    в adhoc-графе quick-action main-модели нет вовсе — поэтому признак
+    is_upscale первичнее model_key."""
     nodes = (batch.get("graph") or {}).get("nodes") or {}
     info: dict[str, Any] = {
         "model_key": None,
@@ -578,11 +819,40 @@ def _extract_ir_info(batch: dict) -> dict:
         "init_image": None,
         "mask": None,
         "references": [],
+        "is_upscale": False,
+        "upscale_model_key": None,
+        "upscale_scale": None,
+        # нормированные регуляторы вкладки: creativity = 1 - denoising_start
+        # (больше = творческая свобода), structure = control_weight тайла
+        "upscale_creativity": None,
+        "upscale_structure": None,
     }
     for node in nodes.values():
         if not isinstance(node, dict):
             continue
         ntype = node.get("type")
+        if ntype in ("spandrel_image_to_image", "spandrel_image_to_image_autoscale"):
+            info["is_upscale"] = True
+            um = node.get("image_to_image_model")
+            if isinstance(um, dict) and str(um.get("key", "")).startswith(IR_UPSCALE_KEY_PREFIX):
+                info["upscale_model_key"] = str(um["key"])
+            v = node.get("image")
+            if isinstance(v, dict) and isinstance(v.get("image_name"), str):
+                info["init_image"] = v["image_name"]
+            sc = node.get("scale")
+            if isinstance(sc, (int, float)) and sc > 0:
+                info["upscale_scale"] = float(sc)
+            continue
+        if ntype == "tiled_multi_diffusion_denoise_latents":
+            ds = node.get("denoising_start")
+            if isinstance(ds, (int, float)):
+                info["upscale_creativity"] = 1.0 - float(ds)
+        elif ntype == "controlnet":
+            # в графе ДВА controlnet-узла (двухстадийный контроль); вес
+            # первого — это маппинг слайдера Structure, дальше не перезаписываем
+            cw = node.get("control_weight")
+            if info["upscale_structure"] is None and isinstance(cw, (int, float)):
+                info["upscale_structure"] = float(cw)
         if ntype == "ip_adapter":
             # референсные изображения: image — словарь или список словарей;
             # их НЕ считаем исходником/маской
@@ -603,10 +873,10 @@ def _extract_ir_info(batch: dict) -> dict:
         m = node.get("model")
         if isinstance(m, dict) and str(m.get("key", "")).startswith(IR_KEY_PREFIX):
             info["model_key"] = str(m["key"])
-        if ntype == "save_image":
-            board = node.get("board")
-            if isinstance(board, dict) and board.get("board_id"):
-                info["board_id"] = str(board["board_id"])
+        # доска: у канваса поле board на save_image, у апскейла — на l2i
+        board = node.get("board")
+        if isinstance(board, dict) and board.get("board_id"):
+            info["board_id"] = str(board["board_id"])
         # исходное изображение: create_gradient_mask.image / i2l.image / любой ImageField
         for fname in ("image", "mask"):
             v = node.get(fname)
@@ -686,57 +956,44 @@ def _item_to_pil(item: dict) -> Any:
     return img.convert("RGB")
 
 
-def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
-    """Генерация через ImageRouter вместо локального исполнения графа."""
-    from PIL import Image
+def _pil_to_durl(img: Any, fmt: str = "PNG", max_side: int = 0, quality: int = 92) -> str:
+    """PIL-картинка -> data-URL для JSON-тела edits-эндпоинта.
 
-    from invokeai.app.api.dependencies import ApiDependencies
-    from invokeai.app.invocations.fields import ImageField
-    from invokeai.app.invocations.image import SaveImageInvocation
-    from invokeai.app.invocations.primitives import ImageOutput
+    PNG сохраняет альфу холста (прозрачные поля остаются прозрачными —
+    решение пользователя 05.09), JPEG с даунскейлом экономит объём для
+    референсов-фотографий.
+    """
+    im = img
+    if fmt == "JPEG":
+        im = img.convert("RGB")
+        if max_side and max(im.size) > max_side:
+            im.thumbnail((max_side, max_side))
+    buf = io.BytesIO()
+    if fmt == "JPEG":
+        im.save(buf, format="JPEG", quality=quality)
+    else:
+        im.save(buf, format="PNG")
+    return f"data:image/{fmt.lower()};base64," + base64.b64encode(buf.getvalue()).decode()
+
+
+def _queue_event_factories(queue_id: str, batch: dict, graph: dict, services: Any):
+    """Фабрики событий очереди для облачной генерации (canvas и апскейл):
+    бейдж очереди (queue_item_status_changed), алерт «Generating»
+    (invocation_started/progress). Возврат: (dispatch, status_event,
+    progress_event, batch_id, origin, destination, session_id)."""
     from invokeai.app.services.events.events_common import (
-        BatchEnqueuedEvent,
-        InvocationCompleteEvent,
         InvocationProgressEvent,
-        InvocationStartedEvent,
         QueueItemStatusChangedEvent,
     )
-    from invokeai.app.services.image_records.image_records_common import ImageCategory, ResourceOrigin
+    from invokeai.app.invocations.image import SaveImageInvocation
     from invokeai.app.services.session_queue.session_queue_common import BatchStatus
 
-    batch = payload.get("batch") or {}
-    graph = batch.get("graph") or {}
-    info = _extract_ir_info(batch)
-    model_key = info["model_key"]
-    if not model_key:
-        raise _IRClientError("ImageRouter: в графе не найдена модель ImageRouter")
-    mid = model_key[len(IR_KEY_PREFIX):]
-    key = _load_key()
-    if not key:
-        raise _IRClientError(
-            "API-ключ ImageRouter не задан. Откройте Model Manager → «Добавить модели» → "
-            "ImageRouter и введите ключ (imagerouter.io/api-keys).",
-            401,
-        )
-
-    runs = max(1, min(int(batch.get("runs") or 1), MAX_RUNS))
     batch_id = str(batch.get("batch_id") or uuid.uuid4())
     session_id = str(graph.get("id") or batch_id)
     origin = batch.get("origin") or "canvas"
     destination = batch.get("destination") or "canvas"
 
-    services = ApiDependencies.invoker.services
-    events = services.events
-
-    events.dispatch(
-        BatchEnqueuedEvent(
-            queue_id=queue_id, batch_id=batch_id, enqueued=runs, requested=runs, priority=0, origin=origin
-        )
-    )
-
-    # --- статус генерации в UI: бейдж очереди + алерт «Generating» ---
-
-    def _status_event(status: str, completed: int = 0, failed: int = 0) -> QueueItemStatusChangedEvent:
+    def status_event(status: str, completed: int = 0, failed: int = 0) -> QueueItemStatusChangedEvent:
         return QueueItemStatusChangedEvent(
             queue_id=queue_id,
             item_id=0,
@@ -760,7 +1017,7 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
             session_id=session_id,
         )
 
-    def _progress_event(message: str) -> InvocationProgressEvent:
+    def progress_event(message: str) -> InvocationProgressEvent:
         return InvocationProgressEvent(
             queue_id=queue_id,
             item_id=0,
@@ -772,6 +1029,57 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
             invocation_source_id="imagerouter_save",
             message=message,
         )
+
+    return services.events.dispatch, status_event, progress_event, batch_id, origin, destination, session_id
+
+
+def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
+    """Генерация через ImageRouter вместо локального исполнения графа."""
+    from PIL import Image
+
+    from invokeai.app.api.dependencies import ApiDependencies
+    from invokeai.app.invocations.fields import ImageField
+    from invokeai.app.invocations.image import SaveImageInvocation
+    from invokeai.app.invocations.primitives import ImageOutput
+    from invokeai.app.services.events.events_common import (
+        BatchEnqueuedEvent,
+        InvocationCompleteEvent,
+        InvocationStartedEvent,
+    )
+    from invokeai.app.services.image_records.image_records_common import ImageCategory, ResourceOrigin
+
+    batch = payload.get("batch") or {}
+    graph = batch.get("graph") or {}
+    info = _extract_ir_info(batch)
+    model_key = info["model_key"]
+    if not model_key:
+        raise _IRClientError("ImageRouter: в графе не найдена модель ImageRouter")
+    mid = model_key[len(IR_KEY_PREFIX):]
+    print(
+        f"[imagerouter] enqueue: model={mid} mode={info['mode']} "
+        f"init={info['init_image']} mask={info['mask']} refs={info['references']}",
+        flush=True,
+    )
+    key = _load_key()
+    if not key:
+        raise _IRClientError(
+            "API-ключ ImageRouter не задан. Откройте Model Manager → «Добавить модели» → "
+            "ImageRouter и введите ключ (imagerouter.io/api-keys).",
+            401,
+        )
+
+    runs = max(1, min(int(batch.get("runs") or 1), MAX_RUNS))
+    services = ApiDependencies.invoker.services
+    dispatch, _status_event, _progress_event, batch_id, origin, destination, session_id = (
+        _queue_event_factories(queue_id, batch, graph, services)
+    )
+    events = services.events
+
+    events.dispatch(
+        BatchEnqueuedEvent(
+            queue_id=queue_id, batch_id=batch_id, enqueued=runs, requested=runs, priority=0, origin=origin
+        )
+    )
 
     _inflight_inc(queue_id)
     # invalidates SessionQueueStatus -> клиент перезапросит /status (он патчится
@@ -907,13 +1215,50 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
 
         base_prompt = (info["positive"] or "").strip()
         if refs_pil:
-            base_prompt += PROMPT_REFERENCE_NOTE
+            # с исходником референсы уходят одним JSON-массивом — модели нужна
+            # подсказка о ролях картинок; без исходника — прежняя формулировка
+            base_prompt += PROMPT_REFERENCE_ROLES_NOTE if init_pil is not None else PROMPT_REFERENCE_NOTE
 
         use_marker = False  # модель отвергла параметр mask — зона правки подсвечивается в картинке
         marked_pil: Any = None
         for i in range(runs):
             run_state["run"] = i + 1
-            if use_edits:
+            if use_edits and refs_pil:
+                # ГРАБЛЯ (06.09): multipart со несколькими файлами (image +
+                # image[]) доставляет модели ТОЛЬКО ПЕРВОЕ изображение —
+                # референсы молча терялись, и модель рисовала материал «из
+                # головы» (винтажные обои вместо кирпича со штукатуркой).
+                # JSON-тело с массивом data-URL доходит целиком (проверено
+                # 06.09 контактным листом и сценарием «материалы на стены»).
+                # Параметр mask шлюз не принимает вовсе (19.08) — сразу маркер.
+                if mask_pil is not None:
+                    if marked_pil is None:
+                        marked_pil = _draw_mask_marker(init_pil, mask_pil)
+                    send_init, send_prompt = marked_pil, base_prompt + PROMPT_MARKER_NOTE
+                else:
+                    send_init, send_prompt = init_pil, base_prompt
+                images: list[str] = []
+                if send_init is not None:
+                    images.append(_pil_to_durl(send_init))  # PNG: альфа холста
+                images += [_pil_to_durl(r, "JPEG", 1024, 85) for r in refs_pil]
+                body_json: dict[str, Any] = {"model": mid, "prompt": send_prompt, "image": images}
+                if size:
+                    body_json["size"] = size
+                resp = requests.post(
+                    EDITS_URL,
+                    headers={"Authorization": f"Bearer {key}"},
+                    json=body_json,
+                    timeout=TIMEOUT_GENERATE,
+                )
+                print(f"[imagerouter] edits json ({len(images)} img) -> HTTP {resp.status_code}", flush=True)
+                try:
+                    data_out = _upstream_json(resp)
+                except HTTPException as e:
+                    raise _IRClientError(f"ImageRouter: {e.detail}", e.status_code) from e
+                err = _api_error_message(data_out)
+                if err:
+                    raise _IRClientError(f"ImageRouter: {err}", 502)
+            elif use_edits:
                 while True:
                     if use_marker:
                         if marked_pil is None:
@@ -1004,6 +1349,9 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
                         "width": info["width"],
                         "height": info["height"],
                         "source_image": info["init_image"],
+                        # список референсов — в БД, чтобы не гадать по дампу,
+                        # дошли ли они до запроса (диагностика 06.09)
+                        "ref_images": info["references"],
                     },
                     ensure_ascii=False,
                 )
@@ -1015,6 +1363,7 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
                     metadata=metadata,
                 )
                 saved.append(dto)
+                print(f"[imagerouter] saved {dto.image_name}", flush=True)
                 events.dispatch(
                     InvocationCompleteEvent(
                         queue_id=queue_id,
@@ -1042,6 +1391,190 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
         raise
     ticker_stop.set()
     # уменьшаем ДО отправки статуса: перезапрошенный /status должен быть чистым
+    _inflight_dec(queue_id)
+
+    events.dispatch(_status_event("completed", completed=len(saved)))
+
+    return {
+        "queue_id": queue_id,
+        "enqueued": runs,
+        "requested": runs,
+        "batch": batch,
+        "priority": 0,
+        "item_ids": [0] * len(saved),
+    }
+
+
+def _handle_upscale_generation(queue_id: str, payload: dict) -> dict:
+    """Апскейлинг через ImageRouter (вкладка Upscaling и quick-action из
+    контекстного меню картинки): исходник + масштаб → edits-эндпоинт с
+    серверным промптом, результат — в галерею. Проверка эха НЕ применяется:
+    честный апскейл после даунскейла к размеру входа почти совпадает с ним
+    (низкая средняя разница пикселей) и ловилась бы как «модель вернула
+    исходник»."""
+    from invokeai.app.api.dependencies import ApiDependencies
+    from invokeai.app.invocations.fields import ImageField
+    from invokeai.app.invocations.image import SaveImageInvocation
+    from invokeai.app.invocations.primitives import ImageOutput
+    from invokeai.app.services.events.events_common import (
+        BatchEnqueuedEvent,
+        InvocationCompleteEvent,
+        InvocationStartedEvent,
+    )
+    from invokeai.app.services.image_records.image_records_common import ImageCategory, ResourceOrigin
+
+    batch = payload.get("batch") or {}
+    graph = batch.get("graph") or {}
+    info = _extract_ir_info(batch)
+    model_key = info.get("upscale_model_key")
+    if not model_key:
+        raise _IRClientError(
+            "ImageRouter: модель апскейла не выбрана или недоступна. "
+            "Администратор задаёт список моделей в Менеджере моделей → ImageRouter.",
+            400,
+        )
+    mid = model_key[len(IR_UPSCALE_KEY_PREFIX):]
+    if not info.get("init_image"):
+        raise _IRClientError("ImageRouter: нет исходного изображения для апскейлинга", 400)
+    scale = float(info.get("upscale_scale") or 2)
+    print(
+        f"[imagerouter] upscale enqueue: model={mid} scale={scale} "
+        f"init={info['init_image']} creativity={info.get('upscale_creativity')} "
+        f"structure={info.get('upscale_structure')}",
+        flush=True,
+    )
+    key = _load_key()
+    if not key:
+        raise _IRClientError(
+            "API-ключ ImageRouter не задан. Откройте Model Manager → «Добавить модели» → "
+            "ImageRouter и введите ключ (imagerouter.io/api-keys).",
+            401,
+        )
+    if not _supports_image_input(mid):
+        raise _IRClientError(
+            f"Модель «{mid}» не принимает изображение на вход и не годится для апскейлинга. "
+            "Администратору: снимите её с списка моделей апскейлинга.",
+            400,
+        )
+
+    runs = max(1, min(int(batch.get("runs") or 1), MAX_RUNS))
+    services = ApiDependencies.invoker.services
+    dispatch, _status_event, _progress_event, batch_id, origin, destination, session_id = (
+        _queue_event_factories(queue_id, batch, graph, services)
+    )
+    events = services.events
+
+    events.dispatch(
+        BatchEnqueuedEvent(
+            queue_id=queue_id, batch_id=batch_id, enqueued=runs, requested=runs, priority=0, origin=origin
+        )
+    )
+
+    _inflight_inc(queue_id)
+    events.dispatch(_status_event("in_progress"))
+    events.dispatch(
+        InvocationStartedEvent(
+            queue_id=queue_id,
+            item_id=0,
+            batch_id=batch_id,
+            origin=origin,
+            destination=destination,
+            session_id=session_id,
+            invocation=SaveImageInvocation(id="imagerouter_save"),
+            invocation_source_id="imagerouter_save",
+        )
+    )
+    ticker_stop = threading.Event()
+    run_state = {"run": 0}
+
+    def _ticker() -> None:
+        t0 = time.time()
+        while not ticker_stop.wait(PROGRESS_TICK):
+            try:
+                events.dispatch(
+                    _progress_event(f"ImageRouter апскейл · {mid} · {run_state['run']}/{runs} · {int(time.time() - t0)} с")
+                )
+            except Exception:  # noqa: BLE001
+                break
+
+    threading.Thread(target=_ticker, daemon=True, name="ir-upscale-progress").start()
+
+    saved: list[Any] = []
+    try:
+        try:
+            init_pil = services.images.get_pil_image(info["init_image"])
+        except Exception as e:  # noqa: BLE001
+            raise _IRClientError(f"ImageRouter: не удалось загрузить исходное изображение ({e})", 500) from e
+        size = _pick_upscale_size(mid, init_pil.width, init_pil.height, scale)
+        prompt = _upscale_prompt(scale, info.get("upscale_creativity"), info.get("upscale_structure"))
+        for i in range(runs):
+            run_state["run"] = i + 1
+            body: dict[str, Any] = {"model": mid, "prompt": prompt, "image": [_pil_to_durl(init_pil)]}
+            if size:
+                body["size"] = size
+            resp = requests.post(
+                EDITS_URL,
+                headers={"Authorization": f"Bearer {key}"},
+                json=body,
+                timeout=TIMEOUT_GENERATE,
+            )
+            print(f"[imagerouter] upscale edits json -> HTTP {resp.status_code}", flush=True)
+            try:
+                data_out = _upstream_json(resp)
+            except HTTPException as e:
+                raise _IRClientError(f"ImageRouter: {e.detail}", e.status_code) from e
+            err = _api_error_message(data_out)
+            if err:
+                raise _IRClientError(f"ImageRouter: {err}", 502)
+            for item in data_out.get("data", []) if isinstance(data_out, dict) else []:
+                pil = _item_to_pil(item)
+                if pil is None:
+                    continue
+                metadata = json.dumps(
+                    {
+                        "generation_mode": "imagerouter-upscale",
+                        "imagerouter_model": mid,
+                        "upscale_scale": scale,
+                        "upscale_requested_size": size,
+                        "source_image": info["init_image"],
+                    },
+                    ensure_ascii=False,
+                )
+                dto = services.images.create(
+                    image=pil,
+                    image_origin=ResourceOrigin.INTERNAL,
+                    image_category=ImageCategory.GENERAL,
+                    board_id=info["board_id"],
+                    metadata=metadata,
+                )
+                saved.append(dto)
+                print(f"[imagerouter] upscale saved {dto.image_name}", flush=True)
+                events.dispatch(
+                    InvocationCompleteEvent(
+                        queue_id=queue_id,
+                        item_id=0,
+                        batch_id=batch_id,
+                        origin=origin,
+                        destination=destination,
+                        session_id=session_id,
+                        invocation=SaveImageInvocation(
+                            id="imagerouter_save", image=ImageField(image_name=dto.image_name)
+                        ),
+                        invocation_source_id="imagerouter_save",
+                        result=ImageOutput.build(dto),
+                    )
+                )
+        if not saved:
+            raise _IRClientError("ImageRouter: ответ не содержит изображений", 502)
+    except Exception:
+        ticker_stop.set()
+        _inflight_dec(queue_id)
+        try:
+            events.dispatch(_status_event("failed", failed=1))
+        except Exception:  # noqa: BLE001
+            traceback.print_exc()
+        raise
+    ticker_stop.set()
     _inflight_dec(queue_id)
 
     events.dispatch(_status_event("completed", completed=len(saved)))
@@ -1129,8 +1662,25 @@ class ImageRouterCanvasMiddleware:
 
         if path.startswith("/api/v2/models/i/") and method in ("GET", "DELETE"):
             key = unquote(path[len("/api/v2/models/i/"):].rstrip("/"))
-            if key.startswith(IR_KEY_PREFIX):
+            if key.startswith(IR_UPSCALE_KEY_PREFIX):
+                # spandrel-фейки моделей апскейлинга (роль отличается от main)
                 if method == "GET":
+                    m = _ir_model_by_id(key[len(IR_UPSCALE_KEY_PREFIX):])
+                    if m:
+                        await self._send_json(send, _ir_upscale_fake_config(m))
+                        return
+                else:  # DELETE
+                    await self._send_json(
+                        send,
+                        {"detail": "Модели ImageRouter предоставляются через API и не удаляются локально."},
+                        status=400,
+                    )
+                    return
+            elif key.startswith(IR_KEY_PREFIX):
+                if method == "GET":
+                    if key == TILE_CONTROLNET_FAKE_KEY:
+                        await self._send_json(send, _ir_tile_fake())
+                        return
                     m = _ir_model_by_id(key[len(IR_KEY_PREFIX):])
                     if m:
                         await self._send_json(send, _ir_fake_config(m))
@@ -1165,7 +1715,14 @@ class ImageRouterCanvasMiddleware:
             except ValueError:
                 payload = None
             batch = (payload or {}).get("batch") or {}
-            if _extract_ir_info(batch)["model_key"]:
+            info = _extract_ir_info(batch)
+            # граф апскейлинга проверяем ПЕРВЫМ: во вкладке Upscaling в графе есть
+            # и main-модель (sdxl_loader с imagerouter/-ключом), а quick-action
+            # контекстного меню строит граф вовсе без main-модели
+            handler = _handle_upscale_generation if info.get("is_upscale") else (
+                _handle_canvas_generation if info["model_key"] else None
+            )
+            if handler is not None:
                 # /api/v1/queue/{queue_id}/enqueue_batch -> queue_id в пятом сегменте
                 queue_id = path.split("/")[4]
                 # диагностический дамп последнего перехваченного графа
@@ -1176,8 +1733,12 @@ class ImageRouterCanvasMiddleware:
                 except Exception:
                     pass
                 try:
-                    result = await asyncio.to_thread(_handle_canvas_generation, queue_id, payload)
+                    result = await asyncio.to_thread(handler, queue_id, payload)
                 except _IRClientError as e:
+                    # 06.09: ошибки улетали тостом в UI, не оставляя следа в
+                    # ir_server.log — при разборе «что реально ушло» приходилось
+                    # гадать; теперь каждое падение пишется в лог
+                    print(f"[imagerouter] FAILED: {e}", flush=True)
                     await self._send_json(send, _ir_error_body(str(e)), status=422)
                     return
                 except Exception as e:  # noqa: BLE001
