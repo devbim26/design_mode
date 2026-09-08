@@ -54,6 +54,8 @@ invokeai==6.2.0` их нужно запускать повторно в поря
    multipart-полем `image[]`; промпт дополняется `PROMPT_REFERENCE_NOTE`.
    Если исходника нет, а референсы есть — всё равно edits-эндпоинт.
    Проверено сквозным тестом 19.08 (nano-banana-2, HTTP 200).
+   ⚠️ С 06.09 multipart заменён JSON-массивом (п.26): multipart
+   доставлял модели только ПЕРВОЕ изображение.
 8. **Полоска генерации / статус очереди** (19.08 вечер): при облачной
    генерации UI не показывал прогресс — события `invocation_progress` не
    отправлялись, а пустая реальная очередь очищала прогресс на клиенте
@@ -824,6 +826,93 @@ invokeai==6.2.0` их нужно запускать повторно в поря
     оглавлением — `tests/make_test_pdf.py`. Отладка: `window.__pdf`
     в iframe (doc/page/selection/gotoPage).
 
+26. **Референсы доходят до модели: JSON-массив вместо multipart** (06.09,
+    поздний вечер; жалоба «добавил в Reference Image несколько фото, но
+    они не уходят вместе с промтом и картинкой из canvas»). Симптом:
+    генерация 22:03 прошла УСПЕШНО (в БД есть результат, режим
+    imagerouter-edit), но модель игнорировала референсы и рисовала
+    материал «из головы» — вместо кирпича и жёлтой штукатурки с
+    референсов вышли винтажные обои. КОРНЕВАЯ ПРИЧИНА (4 контрольных
+    запроса к /v1/openai/images/edits, nano-banana-2): multipart с
+    несколькими файлами — будь то image + image[], повторённое имя
+    image — доставляет модели ТОЛЬКО ПЕРВОЕ изображение, остальные
+    молча отбрасываются (HTTP 200, ошибки нет; «контактный лист» из
+    двух референов выходил двумя копиями первого). Проверка 19.08
+    (п.7) была с ОДНИМ референсом — поэтому грабля ждала пользователя.
+    Работает JSON-тело с "image": [data-URL, data-URL, ...] — доходят
+    все картинки. Фикс в `imagerouter_router.py` (деплой штатным
+    setup_imagerouter.py): при референсах edits уходит JSON-массивом
+    (база — PNG data-URL, альфа холста сохраняется; референсы — JPEG
+    1024/q85, как в п.22); маска → сразу маркер (шлюз mask отвергает);
+    к промпту добавляется PROMPT_REFERENCE_ROLES_NOTE (первая картинка
+    — исходник, остальные — референсы материалов); БЕЗ референсов —
+    прежний multipart-путь (не тронут). Диагностика: строки
+    [imagerouter] enqueue/edits json/saved/FAILED в ir_server.log
+    (раньше _IRClientError уходил тостом в UI, не оставляя следа в
+    логе — 22:03 пришлось разбирать по дампу); в метаданных результата
+    теперь ref_images. Эталон: docs/diag-edits-refs-json-0609.png;
+    живой диагностический скрипт tests/_diag_edits_refs_json.py
+    (~$0.07/запуск). E2E 06.09: реальный граф 22:03 (канвас + маска +
+    2 референса), отправленный POST-ом в enqueue_batch живого сервера,
+    — стены облицованы кирпичом и штукатуркой с референсов, геометрия
+    сохранена. ГРАБЛИ: (а) created_at в БД — UTC (22:04 локальное =
+    19:04 в БД; едва не сделан вывод «результат не сохранился»);
+    (б) шлюз ошибки отдаёт HTTP 200 с телом {"error": ...} — статус
+    коду доверять нельзя, только _api_error_message; (в) фикс чисто
+    серверный — F5 вкладке не нужен.
+
+27. **Облачный апскейлинг: вкладка Upscaling через ImageRouter + выбор
+    моделей администратором** (08.09; запрос пользователя «настрой
+    upscaling… в меню пользователя — модели, выбранные администратором»).
+    Спека/план: `docs/superpowers/specs|plans/2026-09-08-cloud-upscaling*`.
+    Всё серверное — в `imagerouter_router.py` (деплой штатным
+    setup_imagerouter.py, JS-бандлы НЕ тронуты), админ-UI — секция
+    «Апскейлинг» в imagerouter.html.
+    - **Механика вкладки 6.2** (разведка по бандлам): unified-апскейл
+      требует main sd-1/sdxl (фейки уже sdxl), tile-ControlNet (type=
+      controlnet, base=main, «tile» в имени — автоселект эффектом в `_Ke`)
+      и spandrel-модель (дропдаун = все type=spandrel_image_to_image,
+      предикат `RI`, автоселект первого + ПЕРСИСТИТ прежний выбор —
+      у «свежего» пользователя по умолчанию ПЕРВЫЙ элемент списка админа).
+      Граф `sSe`: spandrel_image_to_image_autoscale(модель+scale+image) →
+      unsharp → i2l → tiled_multi_diffusion(denoising_start=f(creativity))
+      + ДВА controlnet-узла (control_weight=f(structure) у ПЕРВОГО) → l2i.
+      Quick-action «Постобработка (Shift+U)» строит adhoc-граф с ОДНИМ
+      узлом spandrel_image_to_image (без main-модели) — поэтому is_upscale
+      определяется по spandrel-узлу, а не по main-ключу.
+    - **Ключи ролей разделены**: `imagerouter-upscale/<id>` для spandrel-
+      фейков — одна модель может быть main и апскейлером одновременно, а
+      GET /api/v2/models/i/{key} отдаёт один конфиг на ключ. Плюс фейк
+      `imagerouter/tile-controlnet` (base sdxl) — чисто декорация.
+    - **Выбор администратора**: `data/imagerouter_upscale.json` (в
+      INVOKEAI_ROOT/data — это data/data/ в проекте, per-company),
+      дефолт в коде DEFAULT_UPSCALE_MODELS (5 апскейлеров, все проверены
+      живыми edits-запросами 08.09). Эндпоинты GET/PUT
+      /api/v1/imagerouter/upscale-models (PUT валидирует: каталог +
+      вход-image). Админ-UI: чекбоксы (только модели со входом-image),
+      стрелки ↑↓ = порядок = модель по умолчанию первая, подсказка про F5.
+    - **Перехват**: `_extract_ir_info` ищет spandrel-узлы → is_upscale,
+      upscale_model_key, init_image, scale (adhoc → 2), board — из поля
+      board ЛЮБОГО узла (у апскейла доска на l2i, не save_image);
+      creativity = 1 − denoising_start, structure = control_weight
+      ПЕРВОГО controlnet (грабля: в графе их два, второй 0.21375 —
+      перезапись давала мусор). Обработчик `_handle_upscale_generation`:
+      JSON edits (image=[data-URL], промпт серверный EN c порогами
+      creativity/structure), size = _pick_upscale_size (явные sizes →
+      ближайший покрывающий; иначе snap64, кап стороны 2048), события
+      через общие фабрики `_queue_event_factories` (вынесены из
+      canvas-обработчика). Проверка эха НЕ применяется (честный апскейл
+      после даунскейла ≈ вход — ложное «эхо»).
+    - **ГРАБЛЯ (фактический размер)**: size — пожелание; clarity-2x/
+      swinir-2x/latent-2x/ccsr-2x дают ровно ×2 от входа (4x вернёт 2x),
+      P-Image-Upscale — 2048²/2896². Для большего — повторный прогон.
+    - E2E 08.09 (Playwright): вкладка без предупреждения, дропдаун =
+      выбор админа (5 дефолт / 2 / 6 при смене файла), апскейл 512×384 →
+      1024×768 в галерее, quick-action перехвачен (scale=2), админ-секция
+      сохраняет. Скриншоты docs/upscale-{models-dropdown,admin-section}.png.
+      Тесты: `tests/test_upscale_cloud.py` (инъекция, extraction двух
+      графов, size-picker, промпт, эндпоинты). Стоимость проверки ~$0.05.
+
 ## Проверка после изменений
 
 ```powershell
@@ -834,6 +923,7 @@ cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
 .\venv\Scripts\python.exe .\tests\test_mask_toggle.py   # тумблер Маска/Слой
 .\venv\Scripts\python.exe .\tests\test_ifc_sections.py  # сечения + человек (IFC)
 .\venv\Scripts\python.exe .\tests\test_ifc_ai_render.py # тень/контекст/камера (IFC)
+.\venv\Scripts\python.exe .\tests\test_upscale_cloud.py # облачный апскейлинг
 # синтаксис module-скрипта вьювера после правок ifcviewer.html:
 #   venv\Scripts\python.exe -c "import re,pathlib;s=pathlib.Path('ifc/ifcviewer.html').read_text(encoding='utf-8');pathlib.Path('ifc/_chk.mjs').write_text(re.search(r'<script type=\"module\">(.*?)</script>',s,re.S).group(1),encoding='utf-8')"
 #   node --check ifc/_chk.mjs && del ifc\_chk.mjs
