@@ -389,6 +389,50 @@ def patch_queue_buttons() -> bool:
 
 
 # ----------------------------------------------------------------------------
+# Лончпад вкладки Upscaling: блок «Creativity & Structure Defaults»
+# (кнопки-пресеты Conservative/Balanced/Creative/Artistic + две подсказки про
+# промт) убирается из рендера — это управление ЛОКАЛЬНОЙ tiled-диффузией
+# (Multi-Diffusion + tile-ControlNet), апскейлинг же полностью облачный.
+# Слайдеры Creativity/Structure в «Опции Расширенные» левой панели остаются —
+# посредник переводит их в пояснения промпта.
+# ----------------------------------------------------------------------------
+
+JS_UPSCALE_LAUNCHPAD_OLD = ')]})}),o.jsxs(ls,{gridTemplateColumns:"1fr 1fr",gap:8,alignItems:"start",children:[o.jsxs(be,{children:[o.jsx(W,{fontWeight:"semibold",fontSize:"sm",mb:3,children:"Creativity & Structure Defaults"}),o.jsxs(Fn,{size:"sm",orientation:"vertical",variant:"outline",w:"full",children:[o.jsx(pe,{colorScheme:s===-5&&i===5?"invokeBlue":void 0,justifyContent:"center",onClick:c,leftIcon:o.jsx(R_e,{}),children:"Conservative"}),o.jsx(pe,{colorScheme:s===0&&i===0?"invokeBlue":void 0,justifyContent:"center",onClick:d,leftIcon:o.jsx(D_e,{}),children:"Balanced"}),o.jsx(pe,{colorScheme:s===5&&i===-2?"invokeBlue":void 0,justifyContent:"center",onClick:h,leftIcon:o.jsx(E_e,{}),children:"Creative"}),o.jsx(pe,{colorScheme:s===8&&i===-5?"invokeBlue":void 0,justifyContent:"center",onClick:p,leftIcon:o.jsx(F_e,{}),children:"Artistic"})]})]}),o.jsxs(be,{children:[o.jsx(W,{variant:"subtext",fontSize:"sm",lineHeight:"1.6",children:e("ui.launchpad.upscaling.helpText.promptAdvice")}),o.jsx(W,{variant:"subtext",fontSize:"sm",lineHeight:"1.6",mt:3,children:e("ui.launchpad.upscaling.helpText.styleAdvice")})]})]})]})});'
+
+JS_UPSCALE_LAUNCHPAD_NEW = ')]})})]})});'
+
+
+def patch_upscale_launchpad() -> bool:
+    """Убирает блок «Creativity & Structure Defaults» с лончпада Upscaling."""
+    # маркер — displayName компонента (текст блока после патча исчезает)
+    targets = [
+        f for f in DIST.glob("assets/*.js")
+        if 'displayName="UpscalingLaunchpadPanel"' in f.read_text(encoding="utf-8")
+    ]
+    if len(targets) != 1:
+        print(f"ОШИБКА: бандл с лончпадом Upscaling найден {len(targets)} раз (ожидался 1)")
+        sys.exit(1)
+    f = targets[0]
+    s = f.read_text(encoding="utf-8")
+    if JS_UPSCALE_LAUNCHPAD_OLD not in s:
+        if JS_UPSCALE_LAUNCHPAD_NEW + 'Bae.displayName="UpscalingLaunchpadPanel"' in s:
+            print("Блок «Creativity & Structure Defaults» уже убран, пропуск")
+            return False
+        print("ОШИБКА: не найден блок лончпада Upscaling (частичная правка?)")
+        sys.exit(1)
+    if s.count(JS_UPSCALE_LAUNCHPAD_OLD) != 1:
+        print(f"ОШИБКА: блок лончпада найден {s.count(JS_UPSCALE_LAUNCHPAD_OLD)} раз (ожидался 1)")
+        sys.exit(1)
+    s = s.replace(JS_UPSCALE_LAUNCHPAD_OLD, JS_UPSCALE_LAUNCHPAD_NEW, 1)
+    bak = f.with_suffix(f.suffix + ".imagerouter-bak")
+    if not bak.exists():
+        shutil.copy2(f, bak)
+    f.write_text(s, encoding="utf-8")
+    print(f"Блок «Creativity & Structure Defaults» убран с лончпада Upscaling: {f.name} (бэкап: {bak.name})")
+    return True
+
+
+# ----------------------------------------------------------------------------
 # Prompt Enhancer: улучшение промта через VLM ImageRouter.
 #   deploy_prompt_enhancer — модуль инвокаций claude_expand_prompt /
 #   claude_analyze_image в пакет (новый файл, автоподхват __init__.py).
@@ -963,6 +1007,7 @@ def main() -> None:
     patch_left_panel()
     patch_canvas_control_layer()
     patch_queue_buttons()
+    patch_upscale_launchpad()
     patch_canvas_bridge()
     # Переименование m7="DevBIM" -> m7="Generate" обязано идти ДО
     # patch_prompt_enhance_button(): её якорь — 'const m7="Generate",pne=u.memo('.

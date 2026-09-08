@@ -457,7 +457,11 @@ Structure — запрос уходит в `/v1/openai/images/edits` с серв
   (ImageRouter)` (base sdxl) — вкладка требует его наличия, исполняется
   всё равно облако.
 - Слайдеры Creativity/Structure переводятся в пояснения промпта
-  (пороги), Tile Size/Tile Overlap игнорируются.
+  (пороги), Tile Size/Tile Overlap игнорируются. Блок
+  «Creativity & Structure Defaults» (пресеты Conservative/Balanced/
+  Creative/Artistic + подсказки про промт) удалён с лончпада вкладки —
+  это управление локальной tiled-диффузией (`patch_upscale_launchpad`
+  в setup_imagerouter.py).
 - **ГРАБЛЯ (фактический размер)**: модели апскейлят по-своему, запрошенный
   размер — лишь пожелание: clarity-2x/swinir-2x/latent-2x/ccsr-2x дают
   ровно ×2 от входа (запрос 4x вернёт 2x), P-Image-Upscale — 2048²/2896².
