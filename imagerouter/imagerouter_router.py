@@ -452,6 +452,100 @@ def put_upscale_models(body: UpscaleModelsBody) -> dict:
     return {"models": valid, "skipped": skipped}
 
 
+# --- Апскейлинг: режимы и форматы вывода для выбранных моделей ---
+
+# output_format — глобальный параметр generations/edits API ImageRouter
+# (docs.imagerouter.io): webp (дефолт шлюза), jpeg, png. В галерее храним
+# без потерь, поэтому дефолт выбора — png.
+IR_OUTPUT_FORMATS = ["png", "jpeg", "webp"]
+IR_DEFAULT_OUTPUT_FORMAT = "png"
+
+
+def _upscale_modes(m: dict) -> list[dict]:
+    """Доступные режимы апскейла модели по каталогу: явные размеры
+    parameters.size → режим на каждый размер; суффикс id «…-<n>x» →
+    единственный честный множитель (модели -2x игнорируют больший scale);
+    прочий custom → 2×/4× (size шлюзом honoring, кап стороны 2048)."""
+    mid = str(m.get("id") or "")
+    params = m.get("parameters") or {}
+    sizes = [s for s in (params.get("size") or []) if isinstance(s, str) and s not in ("auto", "custom")]
+    out: list[dict] = []
+    if sizes:
+        for s in sizes:
+            try:
+                a, b = s.lower().split("x")
+                out.append({"id": s, "label": f"{int(a)}×{int(b)}", "size": f"{int(a)}x{int(b)}"})
+            except ValueError:
+                continue
+        if out:
+            return out
+    mm = re.search(r"-(\d+)x$", mid.lower())
+    if mm:
+        n = max(1, min(int(mm.group(1)), 8))
+        return [{"id": f"{n}x", "label": f"{n}×", "scale": n}]
+    return [
+        {"id": "2x", "label": "2×", "scale": 2},
+        {"id": "4x", "label": "4×", "scale": 4},
+    ]
+
+
+def _upscale_mode_by_id(mid: str, mode_id: Optional[str]) -> Optional[dict]:
+    """Найти режим модели по id (None — режим не задан/не найден)."""
+    if not mode_id:
+        return None
+    m = _ir_model_by_id(mid)
+    if m is None:
+        return None
+    for mo in _upscale_modes(m):
+        if mo["id"] == mode_id:
+            return mo
+    return None
+
+
+def _upscale_request_params(mid: str, info: dict, width: int, height: int) -> tuple:
+    """(scale, size, size_label, format) для edits-запроса. Режим из селектора
+    вкладки первичнее слайдерного scale: у моделей с явными размерами берём
+    точный размер режима, у факторных — их честный множитель (-2x-модели
+    игнорируют больший scale). Без режима — прежнее поведение (совместимость
+    с quick-action). Формат валидируется по белому списку API."""
+    scale = float(info.get("upscale_scale") or 2)
+    mode_obj = _upscale_mode_by_id(mid, info.get("upscale_mode"))
+    size: Optional[str] = None
+    size_label: Optional[str] = None
+    if mode_obj is not None and mode_obj.get("size"):
+        size = str(mode_obj["size"])
+        size_label = str(mode_obj.get("label") or size)
+    elif mode_obj is not None and mode_obj.get("scale"):
+        scale = float(mode_obj["scale"])
+    size = size or _pick_upscale_size(mid, width, height, scale)
+    fmt = str(info.get("upscale_format") or IR_DEFAULT_OUTPUT_FORMAT)
+    if fmt not in IR_OUTPUT_FORMATS:
+        fmt = IR_DEFAULT_OUTPUT_FORMAT
+    return scale, size, size_label, fmt
+
+
+@imagerouter_router.get("/upscale-options")
+def get_upscale_options() -> dict:
+    """Режимы и форматы вывода для моделей апскейлинга из выбора админа
+    (тот же фильтр, что инъектирует spandrel-фейки, — списки совпадают
+    с дропдауном «Модель увеличения» один-в-один)."""
+    items: list[dict] = []
+    for mid in _load_upscale_selection():
+        m = _ir_model_by_id(mid)
+        if m is None or not _supports_image_input(mid):
+            continue
+        items.append(
+            {
+                "id": mid,
+                "name": mid.split("/")[-1],
+                "modes": _upscale_modes(m),
+                "formats": list(IR_OUTPUT_FORMATS),
+                "default_format": IR_DEFAULT_OUTPUT_FORMAT,
+            }
+        )
+    return {"models": items}
+
+
 # --- Основные модели (генерация/правка): выбор администратора ---
 
 
@@ -721,13 +815,20 @@ def _pick_upscale_size(mid: str, width: int, height: int, scale: float) -> Optio
     return f"{target_w}x{target_h}"
 
 
-def _upscale_prompt(scale: float, creativity: Optional[float] = None, structure: Optional[float] = None) -> str:
+def _upscale_prompt(
+    scale: Optional[float] = None,
+    creativity: Optional[float] = None,
+    structure: Optional[float] = None,
+    size_label: Optional[str] = None,
+) -> str:
     """Серверный промпт для облачного апскейла (у вкладки поля промпта нет).
+    Цель — множитель («2x») или явный размер («2048×2048» из режима модели).
     Регуляторы вкладки переводятся в мягкие пояснения: creativity — доля
     перерисовки (1 - denoising_start, слайдер 0 ≈ 0.5), structure — вес
     tile-ControlNet (0.3..0.625)."""
+    target = f"{size_label} resolution" if size_label else f"approximately {int(round(scale or 2))}x higher resolution"
     p = (
-        f"Upscale this image to approximately {int(round(scale))}x higher resolution. "
+        f"Upscale this image to {target}. "
         "Increase sharpness and refine fine details, textures and edges. "
         "Keep the composition, geometry, colors and content exactly the same. "
         "Do not add, remove or alter any objects."
@@ -909,6 +1010,10 @@ def _extract_ir_info(batch: dict) -> dict:
         # (больше = творческая свобода), structure = control_weight тайла
         "upscale_creativity": None,
         "upscale_structure": None,
+        # выбор облачных селекторов вкладки: режим («2x»/«2048x2048») и
+        # формат вывода — доп. поля spandrel-узла от патченого билдера
+        "upscale_mode": None,
+        "upscale_format": None,
     }
     for node in nodes.values():
         if not isinstance(node, dict):
@@ -925,6 +1030,10 @@ def _extract_ir_info(batch: dict) -> dict:
             sc = node.get("scale")
             if isinstance(sc, (int, float)) and sc > 0:
                 info["upscale_scale"] = float(sc)
+            if info.get("upscale_mode") is None and isinstance(node.get("upscale_mode"), str) and node["upscale_mode"]:
+                info["upscale_mode"] = node["upscale_mode"]
+            if info.get("upscale_format") is None and isinstance(node.get("output_format"), str) and node["output_format"]:
+                info["upscale_format"] = node["output_format"]
             continue
         if ntype == "tiled_multi_diffusion_denoise_latents":
             ds = node.get("denoising_start")
@@ -1522,6 +1631,7 @@ def _handle_upscale_generation(queue_id: str, payload: dict) -> dict:
     scale = float(info.get("upscale_scale") or 2)
     print(
         f"[imagerouter] upscale enqueue: model={mid} scale={scale} "
+        f"mode={info.get('upscale_mode')} format={info.get('upscale_format')} "
         f"init={info['init_image']} creativity={info.get('upscale_creativity')} "
         f"structure={info.get('upscale_structure')}",
         flush=True,
@@ -1588,11 +1698,24 @@ def _handle_upscale_generation(queue_id: str, payload: dict) -> dict:
             init_pil = services.images.get_pil_image(info["init_image"])
         except Exception as e:  # noqa: BLE001
             raise _IRClientError(f"ImageRouter: не удалось загрузить исходное изображение ({e})", 500) from e
-        size = _pick_upscale_size(mid, init_pil.width, init_pil.height, scale)
-        prompt = _upscale_prompt(scale, info.get("upscale_creativity"), info.get("upscale_structure"))
+        # Режим из селектора вкладки первичнее слайдерного scale: у моделей
+        # с явными размерами берём точный размер режима, у факторных — их
+        # честный множитель (-2x игнорирует больший scale).
+        scale, size, size_label, fmt = _upscale_request_params(mid, info, init_pil.width, init_pil.height)
+        prompt = _upscale_prompt(
+            None if size_label else scale,
+            info.get("upscale_creativity"),
+            info.get("upscale_structure"),
+            size_label,
+        )
         for i in range(runs):
             run_state["run"] = i + 1
-            body: dict[str, Any] = {"model": mid, "prompt": prompt, "image": [_pil_to_durl(init_pil)]}
+            body: dict[str, Any] = {
+                "model": mid,
+                "prompt": prompt,
+                "image": [_pil_to_durl(init_pil)],
+                "output_format": fmt,
+            }
             if size:
                 body["size"] = size
             resp = requests.post(

@@ -433,6 +433,129 @@ def patch_upscale_launchpad() -> bool:
 
 
 # ----------------------------------------------------------------------------
+# Upscaling: панель вкладки под облачные модели (09.09).
+#
+# Убираются пункты локального пайплайна (граф всё равно перехватывает
+# мидлварь ImageRouter):
+#   - аккордеоны «Генерация» (Wae: main-модель/LoRA/планировщик/шаги) и
+#     «Опции Расширенные» (Uae: VAE/precision/clip-skip/seed);
+#   - внутри «Увеличить»: блок main-модели+tile-ControlNet (_Ke) и
+#     «Advanced Options» со слайдерами Creativity/Structure (pKe/bKe).
+# Слайдер «Масштаб» (Yae, 2–8×) заменяется селекторами «Режим увеличения»
+# (режимы выбранной модели из GET /api/v1/imagerouter/upscale-options) и
+# «Формат изображения» (png/jpeg/webp — параметр output_format edits-API,
+# выбор персистится в localStorage). Билдер графа (sSe) дополнительно
+# кладёт в spandrel-узел upscale_mode/output_format из window-глобалов
+# (undefined → поля исчезают из JSON: quick-action не затронут).
+# ----------------------------------------------------------------------------
+
+# ParametersPanelUpscale: [промпты, Увеличить, Генерация, ОпцииРасширенные] -> первые два
+JS_UP_PANEL_OLD = 'children:[o.jsx(zae,{}),o.jsx(Qae,{}),o.jsx(Wae,{}),o.jsx(Uae,{})]'
+JS_UP_PANEL_NEW = 'children:[o.jsx(zae,{}),o.jsx(Qae,{})]'
+
+# UpscaleSettingsAccordion: без main-модели/tile-ControlNet и без Advanced Options
+JS_UP_ADV_OLD = (
+    '}),o.jsx(_Ke,{})]}),o.jsx(xC,{label:e("accordions.advanced.options"),isOpen:i,onToggle:a,'
+    'children:o.jsxs(E,{gap:4,pb:4,flexDir:"column",children:[o.jsx(pKe,{}),o.jsx(bKe,{})]})})'
+)
+JS_UP_ADV_NEW = '})]})'
+
+# Слайдер Scale -> селекторы режима и формата. Идентификаторы бандла:
+# u=React, o=jsx-runtime, E=Box, K=dispatch, T=selector, Pve/Lve — scale
+# стейта, qE — исходная картинка (ImageDTO), S$ — выбранная модель апскейла.
+JS_UP_SLIDER_OLD = (
+    'Yae=u.memo(()=>{const e=K(),{t}=M(),n=T(Pve),s=u.useCallback(i=>{e(Lve(i))},[e]);'
+    'return o.jsxs(te,{orientation:"vertical",gap:0,children:[o.jsx(He,{feature:"scale",'
+    'children:o.jsx(se,{m:0,children:t("upscaling.scale")})}),o.jsxs(E,{w:"full",gap:4,'
+    'children:[o.jsx(nt,{min:2,max:8,value:n,onChange:s,marks:CKe,formatValue:sF,defaultValue:4}),'
+    'o.jsx(Ee,{maxW:20,value:n,onChange:s,defaultValue:4,min:1,max:16,step:.5,format:sF})]})]})});'
+    'Yae.displayName="UpscaleScaleSlider";'
+)
+JS_UP_SLIDER_NEW = (
+    'Yae=u.memo(()=>{const e=K(),n=T(Pve),img=T(qE),mdl=T(S$),'
+    '[opts,setOpts]=u.useState(null),'
+    '[fmt,setFmt]=u.useState(()=>{try{return localStorage.getItem("devbimUpscaleFormat")||"png"}'
+    'catch(err){return"png"}}),'
+    '[mode,setMode]=u.useState(null);'
+    'u.useEffect(()=>{fetch("/api/v1/imagerouter/upscale-options").then(r=>r.json())'
+    '.catch(()=>null).then(d=>setOpts(d||null))},[]);'
+    'const mid=mdl&&mdl.key?String(mdl.key).replace("imagerouter-upscale/",""):null,'
+    'mo=opts&&mid?(opts.models||[]).find(x=>x.id===mid):null,'
+    'modes=mo&&mo.modes&&mo.modes.length?mo.modes:[{id:"2x",label:"2\\u00d7",scale:2}],'
+    'formats=mo&&mo.formats?mo.formats:["png","jpeg","webp"],'
+    'curMode=mode&&modes.some(m=>m.id===mode)?mode:modes[0].id,'
+    'cur=modes.find(m=>m.id===curMode)||modes[0];'
+    'u.useEffect(()=>{window.__devbimUpscaleFormat=fmt;'
+    'try{localStorage.setItem("devbimUpscaleFormat",fmt)}catch(err){}},[fmt]);'
+    'u.useEffect(()=>{window.__devbimUpscaleMode=cur.id;'
+    'let sc=cur.scale!=null?cur.scale:0;'
+    'if(cur.size&&img){const p=String(cur.size).split("x");'
+    'sc=Math.max(1,Math.round(Math.max(parseInt(p[0],10)/img.width,'
+    'parseInt(p[1],10)/img.height)*2)/2)}'
+    'if(sc&&sc!==n)e(Lve(sc))},[cur.id,cur.size,img&&img.width,img&&img.height]);'
+    'const lab={color:"#9B9BB0",fontSize:"12px",marginBottom:"4px"},'
+    'sel={width:"100%",background:"#282832",color:"#E6E6F0",border:"1px solid #4A4A58",'
+    'borderRadius:"6px",padding:"6px 8px"};'
+    'return o.jsxs(E,{flexDir:"column",gap:4,w:"full",children:['
+    'o.jsxs(E,{flexDir:"column",gap:1,w:"full",children:['
+    'o.jsx("div",{style:lab,children:"Режим увеличения"}),'
+    'o.jsx("select",{value:curMode,onChange:ev=>setMode(ev.target.value),style:sel,'
+    'children:modes.map(m=>o.jsx("option",{value:m.id,children:m.label},m.id))})]}),'
+    'o.jsxs(E,{flexDir:"column",gap:1,w:"full",children:['
+    'o.jsx("div",{style:lab,children:"Формат изображения"}),'
+    'o.jsx("select",{value:fmt,onChange:ev=>setFmt(ev.target.value),style:sel,'
+    'children:formats.map(f=>o.jsx("option",{value:f,children:String(f).toUpperCase()},f))})]})'
+    ']})});Yae.displayName="UpscaleScaleSlider";'
+)
+
+# Билдер графа вкладки: spandrel-узел несёт выбор селекторов
+JS_UP_GRAPH_OLD = (
+    'v.addNode({type:"spandrel_image_to_image_autoscale",id:Q("spandrel_autoscale"),'
+    'image:c,image_to_image_model:l,fit_to_multiple_of_8:!0,scale:m})'
+)
+JS_UP_GRAPH_NEW = (
+    'v.addNode({type:"spandrel_image_to_image_autoscale",id:Q("spandrel_autoscale"),'
+    'image:c,image_to_image_model:l,fit_to_multiple_of_8:!0,scale:m,'
+    'upscale_mode:window.__devbimUpscaleMode,output_format:window.__devbimUpscaleFormat})'
+)
+
+JS_UPSCALE_PANEL_PATCHES = (
+    (JS_UP_PANEL_OLD, JS_UP_PANEL_NEW, "аккордеоны панели"),
+    (JS_UP_ADV_OLD, JS_UP_ADV_NEW, "локальный блок «Увеличить»"),
+    (JS_UP_SLIDER_OLD, JS_UP_SLIDER_NEW, "слайдер Scale"),
+    (JS_UP_GRAPH_OLD, JS_UP_GRAPH_NEW, "билдер графа"),
+)
+
+
+def patch_upscale_cloud_panel() -> bool:
+    """Панель вкладки Upscaling под облачные модели: без локальных пунктов,
+    селекторы режима и формата из /upscale-options."""
+    targets = [
+        f for f in DIST.glob("assets/*.js")
+        if 'displayName="ParametersPanelUpscale"' in f.read_text(encoding="utf-8")
+    ]
+    if len(targets) != 1:
+        print(f"ОШИБКА: бандл с панелью Upscaling найден {len(targets)} раз (ожидался 1)")
+        sys.exit(1)
+    f = targets[0]
+    s = f.read_text(encoding="utf-8")
+    if "window.__devbimUpscaleMode" in s:
+        print("Панель Upscaling уже облачная, пропуск")
+        return False
+    for old, new, title in JS_UPSCALE_PANEL_PATCHES:
+        if s.count(old) != 1:
+            print(f"ОШИБКА: фрагмент «{title}» найден {s.count(old)} раз (ожидался 1)")
+            sys.exit(1)
+        s = s.replace(old, new, 1)
+    bak = f.with_suffix(f.suffix + ".imagerouter-bak")
+    if not bak.exists():
+        shutil.copy2(f, bak)
+    f.write_text(s, encoding="utf-8")
+    print(f"Панель Upscaling адаптирована под облако: {f.name} (бэкап: {bak.name})")
+    return True
+
+
+# ----------------------------------------------------------------------------
 # Prompt Enhancer: улучшение промта через VLM ImageRouter.
 #   deploy_prompt_enhancer — модуль инвокаций claude_expand_prompt /
 #   claude_analyze_image в пакет (новый файл, автоподхват __init__.py).
@@ -1008,6 +1131,7 @@ def main() -> None:
     patch_canvas_control_layer()
     patch_queue_buttons()
     patch_upscale_launchpad()
+    patch_upscale_cloud_panel()
     patch_canvas_bridge()
     # Переименование m7="DevBIM" -> m7="Generate" обязано идти ДО
     # patch_prompt_enhance_button(): её якорь — 'const m7="Generate",pne=u.memo('.

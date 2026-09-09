@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Тесты облачного апскейлинга (вкладка Upscaling через ImageRouter):
 инъекция fake-моделей, разбор графа, подбор размера, промпт, эндпоинты
-выбора администратора.
+выбора администратора, режимы и форматы вывода (селекторы вкладки).
 
 Запуск: venv\\Scripts\\python.exe tests\\test_upscale_cloud.py
 """
@@ -46,9 +46,20 @@ def setup_catalog():
 
 # --- граф вкладки Upscaling (упрощение структуры sSe из App-бандла) ---
 
-def upscale_batch(scale=4, creativity=0.0, structure=0.0, board="b1", init="init_img.png"):
+def upscale_batch(scale=4, creativity=0.0, structure=0.0, board="b1", init="init_img.png", mode=None, fmt=None):
     denoising_start = (creativity * -1 + 10) * 4.99 / 100
     control_weight = (structure + 10) * 0.0325 + 0.3
+    spandrel = {
+        "type": "spandrel_image_to_image_autoscale",
+        "image_to_image_model": {"key": "imagerouter-upscale/prunaai/P-Image-Upscale", "name": "P-Image-Upscale"},
+        "image": {"image_name": init},
+        "scale": scale,
+    }
+    # доп. поля от патченого билдера графа (селекторы режима/формата вкладки)
+    if mode is not None:
+        spandrel["upscale_mode"] = mode
+    if fmt is not None:
+        spandrel["output_format"] = fmt
     return {
         "batch": {
             "runs": 1,
@@ -57,12 +68,7 @@ def upscale_batch(scale=4, creativity=0.0, structure=0.0, board="b1", init="init
             "graph": {
                 "id": "g1",
                 "nodes": {
-                    "spandrel": {
-                        "type": "spandrel_image_to_image_autoscale",
-                        "image_to_image_model": {"key": "imagerouter-upscale/prunaai/P-Image-Upscale", "name": "P-Image-Upscale"},
-                        "image": {"image_name": init},
-                        "scale": scale,
-                    },
+                    "spandrel": spandrel,
                     "denoise": {
                         "type": "tiled_multi_diffusion_denoise_latents",
                         "denoising_start": denoising_start,
@@ -222,6 +228,66 @@ def main():
     assert [m["id"] for m in st2["models"]] == res["models"]
     assert st2["models"][0]["available"] is True and st2["models"][0]["image_input"] is True
     print("OK эндпоинты выбора администратора")
+
+    # --- 7. режимы моделей из каталога ---
+
+    # явные размеры -> режим на каждый размер
+    modes = ir._upscale_modes(CATALOG[0])
+    assert [m["id"] for m in modes] == ["2048x2048", "2896x2896"], modes
+    assert modes[0]["size"] == "2048x2048" and modes[1]["label"] == "2896\u00d72896", modes
+    # суффикс id -2x -> единственный честный множитель
+    modes = ir._upscale_modes(CATALOG[1])
+    assert modes == [{"id": "2x", "label": "2\u00d7", "scale": 2}], modes
+    # custom без суффикса -> фолбэк 2x/4x
+    modes = ir._upscale_modes({"id": "some/plain-model", "parameters": {"size": ["custom"]}})
+    assert [m["id"] for m in modes] == ["2x", "4x"], modes
+    # поиск режима
+    assert ir._upscale_mode_by_id("philz1337x/clarity-2x", "2x")["scale"] == 2
+    assert ir._upscale_mode_by_id("philz1337x/clarity-2x", "9x") is None
+    assert ir._upscale_mode_by_id("philz1337x/clarity-2x", None) is None
+    print("OK режимы моделей")
+
+    # --- 8. эндпоинт режимов/форматов (селекторы вкладки) ---
+
+    opts = ir.get_upscale_options()
+    ids = [m["id"] for m in opts["models"]]
+    # тот же фильтр, что у инъекции spandrel-фейков: выбор админа минус
+    # недоступные и без входа-image
+    assert ids == ["prunaai/P-Image-Upscale", "philz1337x/clarity-2x"], ids
+    by_id = {m["id"]: m for m in opts["models"]}
+    assert [m["id"] for m in by_id["prunaai/P-Image-Upscale"]["modes"]] == ["2048x2048", "2896x2896"]
+    assert by_id["philz1337x/clarity-2x"]["modes"] == [{"id": "2x", "label": "2\u00d7", "scale": 2}]
+    for m in opts["models"]:
+        assert m["formats"] == ["png", "jpeg", "webp"], m
+        assert m["default_format"] == "png"
+    print("OK эндпоинт upscale-options")
+
+    # --- 9. параметры запроса: режим первичнее слайдера, формат с валидацией ---
+
+    info = ir._extract_ir_info(upscale_batch(scale=4, mode="2896x2896", fmt="jpeg")["batch"])
+    assert info["upscale_mode"] == "2896x2896" and info["upscale_format"] == "jpeg"
+    # явный размер режима -> точный size, без подбора
+    scale, size, size_label, fmt = ir._upscale_request_params("prunaai/P-Image-Upscale", info, 1024, 768)
+    assert size == "2896x2896" and size_label == "2896\u00d72896", (size, size_label)
+    assert fmt == "jpeg"
+    p = ir._upscale_prompt(size_label=size_label)
+    assert "2896\u00d72896 resolution" in p, p
+    # факторный режим перекрывает слайдерный scale=4 -> честные 2x
+    info = ir._extract_ir_info(
+        {"graph": {"nodes": {
+            "s": {"type": "spandrel_image_to_image", "scale": 4, "upscale_mode": "2x", "output_format": "bmp",
+                  "image_to_image_model": {"key": "imagerouter-upscale/philz1337x/clarity-2x"},
+                  "image": {"image_name": "x.png"}}}}}
+    )
+    scale, size, size_label, fmt = ir._upscale_request_params("philz1337x/clarity-2x", info, 512, 384)
+    assert scale == 2.0, scale
+    assert size == "1024x768", size  # 512*2/384*2 со снапом 64
+    assert fmt == "png", fmt  # bmp не в белом списке -> png
+    # без режима — прежнее поведение (quick-action: scale из графа/дефолт 2)
+    info2 = ir._extract_ir_info(adhoc_batch()["batch"])
+    scale, size, size_label, fmt = ir._upscale_request_params("philz1337x/clarity-2x", info2, 512, 384)
+    assert scale == 2.0 and size == "1024x768" and size_label is None and fmt == "png"
+    print("OK параметры запроса (режим/формат)")
 
     print("\nВСЕ ТЕСТЫ OK")
 
