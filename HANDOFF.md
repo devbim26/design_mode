@@ -1161,6 +1161,70 @@ invokeai==6.2.0` их нужно запускать повторно в поря
       фильтрация инъекцией, возврат default). Скриншот
       docs/upscale-panel-models-manager.png.
 
+32. **«Текст» (T): текстовый слой на холсте** (10.09; запрос
+    пользователя «пишу текст — формируется на отдельном слое… поменять
+    цвет… размер изменением размеров слоя или вводя размер шрифта»).
+    Спека: `docs/superpowers/specs/2026-09-10-canvas-text-layer-design.md`.
+    - **Решение**: отдельный тип entity в минифицированном бандле не
+      создать — текстовый слой = растровый слой с одним объектом-
+      картинкой (`image_devbimtext_*`), который виджет создаёт и
+      ПЕРЕРИСОВЫВАЕТ. Настройки (текст/цвет/размер/гарнитура/жирность)
+      в localStorage `devbimTextLayers` ПО ID СЛОЯ — переживают F5 и
+      bbox-растеризацию (у которой меняется лишь id объекта, слой тот
+      же). Размер меняется BOTH способами: вводом размера шрифта
+      (перерисовка) И штатным bbox (B).
+    - **Виджет** `imagerouter/devbim_text_tool.js` → `dist/devbim-
+      text-tool.js` + script в index.html (`deploy_text_tool()` в
+      setup_imagerouter.py, бэкап `index.html.texttool-bak`,
+      идемпотентно; бандлы НЕ тронуты — достаточно F5). Кнопка T (иконка
+      «type», 1em) в рейке инструментов (поиск рейки по «(B)»+«(E)»);
+      панель fixed bottom:142px (над пилюлей Mask/Layer на 96px, где
+      142px — как ✂-пилюля): textarea (многострочно), color+hex,
+      размер 8–512 px, Sans/Serif/Mono, «Ж», «Добавить»/«Применить»+
+      «Новый слой»; Esc — закрыть, Ctrl+Enter — применить. RU/EN.
+      Живое превью НОВОГО текста — div-оверлей (pointer-events:none,
+      rAF) в центре видимой области с зум-скейлом; при правке существ.
+      слоя превью выключено (под ним реальный объект). Отладка:
+      `window.__devbimText` (state/open/close/add/apply/registry).
+    - **Создание** — ОДИН диспатч `addRasterLayer({isSelected:false,
+      overrides:{name, objects:[…], position}})` (путь sentImageToCanvas:
+      overrides проходят deepmerge Wi, проверено). Позиция — центр
+      видимой области в doc-координатах (clamp в документ). Имя слоя
+      `T · первая строка ≤24 симв.` (видно в списке слоёв). Konva
+      показывает картинку объекта в НАТУРАЛЬНОМ размере (image.width/
+      height из DTO; поля width/height самого объекта рендером
+      ИГНОРИРУЮТСЯ — проверено по бандлу) → растр рендерится ровно
+      1:1 в документных пикселях (offscreen canvas, textBaseline top,
+      межстрочный 1.25, pad max(2,12%)). Upload — как у ✂ (QUERY-
+      параметры!). **Правка** — raw-диспетчи `canvas/entityRasterized`
+      (replaceObjects:true, позиция слоя сохраняется) +
+      `canvas/entityNameChanged` (имя вслед за текстом); один тик =
+      один шаг undo. Подписка на store: выделение текстового слоя при
+      открытой панели автоматически переключает её в режим правки.
+      **Плавный драг**: своя обёртка `getPositionGridSize` (флаг
+      `__devbimTextSmooth`, цепочкой после ✂-обёртки `__devbimSmooth` —
+      сосуществуют): пока тащат наш слой (id в реестре ИЛИ префикс
+      объекта) — сетка 1 px, остальные слои снапятся штатно (64).
+    - ГРАБЛИ (E2E 10.09): (а) кэш абсолютного трансформа stage бывает
+      отравлен NaN при чистых attrs (getAbsoluteTransform() → NaN до
+      РЕАЛЬНОГО изменения атрибута; повтор с тем же значением Konva
+      шорткатит) — виджет считает doc↔screen по АТРИБУТАМ
+      stage.scaleX()/x()/y() + isFinite-фолбэк в центр документа;
+      ✂-виджет (toDoc через invert) не тронут; (б) панель fixed
+      перекрывает канвас — мышь уходит в панель, Konva молча не
+      получает события (драг «не работает» без ошибок!) — закрыть
+      панель перед работой с канвасом; (в) синтетические
+      setPointersPositions({x,y}) без clientX/clientY → NaN в
+      getPointerPosition → getImageData-ошибка в getIntersection —
+      артефакт тестирования, не баг приложения.
+    - E2E 10.09: создание (96px/#38BDF8/жирный → растр 630×144,
+      4765 голубых пикселей), правка (48/#ff3333 → 308×72, 1153
+      красных, имя слоя обновилось), драг V: (198,384)→(542,214)
+      = +344/−170 doc при экранной +72/−37 (не кратно 64), F5 — всё
+      живо (слой/имя/позиция/реестр/правка). Скриншоты
+      `docs/text-tool-{panel-preview,created,final}.png`. Тесты:
+      `tests/test_text_tool.py` (+ в блок «Проверка после изменений»).
+
 ## Проверка после изменений
 
 ```powershell
@@ -1170,6 +1234,7 @@ cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
 .\venv\Scripts\python.exe .\setup_pdfviewer.py          # вкладка PDF (идемпотентно)
 .\venv\Scripts\python.exe .\tests\test_mask_toggle.py   # тумблер Маска/Слой
 .\venv\Scripts\python.exe .\tests\test_cut_tool.py      # ✂ вырезание по контуру
+.\venv\Scripts\python.exe .\tests\test_text_tool.py    # T текстовый слой
 .\venv\Scripts\python.exe .\tests\test_ifc_sections.py  # сечения + человек (IFC)
 .\venv\Scripts\python.exe .\tests\test_ifc_ai_render.py # тень/контекст/камера (IFC)
 .\venv\Scripts\python.exe .\tests\test_upscale_cloud.py # облачный апскейлинг
