@@ -59,6 +59,8 @@ ADMIN_JS_DST = DIST / "devbim-admin.js"
 MASK_TOGGLE_SRC = SRC / "devbim_mask_toggle.js"
 MASK_TOGGLE_NAME = "devbim-mask-toggle.js"
 
+CUT_TOOL_SRC = SRC / "devbim_cut_tool.js"
+CUT_TOOL_NAME = "devbim-cut-tool.js"
 
 PE_SRC = SRC / "prompt_enhancer.py"
 PE_DST = SP / "invokeai" / "app" / "invocations" / "devbim_prompt_enhancer.py"
@@ -132,6 +134,38 @@ def deploy_mask_toggle(dist: Path | None = None) -> bool:
     index.write_text(s.replace("</head>", tag, 1), encoding="utf-8")
     print("index.html подключает", MASK_TOGGLE_NAME + f" (бэкап: {bak.name})")
     print("Тумблер развернут:", dst)
+    return True
+
+
+def deploy_cut_tool(dist: Path | None = None) -> bool:
+    """Деплой инструмента «Вырезать по контуру» (✂): копия в dist/ +
+    script в index.html. Виджет вставляет кнопку в рейку инструментов
+    холста (мост __devbimCanvasBridge из patch_canvas_bridge)."""
+    dist = dist or DIST
+    dst = dist / CUT_TOOL_NAME
+    index = dist / "index.html"
+    if not CUT_TOOL_SRC.exists():
+        print("ОШИБКА: нет источника", CUT_TOOL_SRC)
+        sys.exit(1)
+    if not index.exists():
+        print("ОШИБКА: нет index.html в", dist)
+        sys.exit(1)
+    shutil.copy2(CUT_TOOL_SRC, dst)
+    s = index.read_text(encoding="utf-8")
+    if CUT_TOOL_NAME in s:
+        print("index.html уже подключает", CUT_TOOL_NAME + ", пропуск")
+        print("Инструмент развернут:", dst)
+        return False
+    if "</head>" not in s:
+        print("ОШИБКА: в index.html нет </head>")
+        sys.exit(1)
+    bak = index.with_suffix(".html.cuttool-bak")
+    if not bak.exists():
+        shutil.copy2(index, bak)
+    tag = f'  <script src="/{CUT_TOOL_NAME}" defer></script>\n</head>'
+    index.write_text(s.replace("</head>", tag, 1), encoding="utf-8")
+    print("index.html подключает", CUT_TOOL_NAME + f" (бэкап: {bak.name})")
+    print("Инструмент развернут:", dst)
     return True
 
 
@@ -1194,13 +1228,14 @@ def patch_index_html() -> bool:
 
 def main() -> None:
     for p in (SRC / "imagerouter_router.py", SRC / "imagerouter.html", SRC / "devbim_admin.js",
-              MASK_TOGGLE_SRC, PE_SRC, DIST, API_APP.parent):
+              MASK_TOGGLE_SRC, CUT_TOOL_SRC, PE_SRC, DIST, API_APP.parent):
         if not p.exists():
             print("Не найдено:", p)
             sys.exit(1)
     ensure_env_file()
     deploy_files()
     deploy_mask_toggle()
+    deploy_cut_tool()
     patch_api_app()
     patch_js()
     patch_left_panel()
