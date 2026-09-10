@@ -62,6 +62,9 @@ MASK_TOGGLE_NAME = "devbim-mask-toggle.js"
 CUT_TOOL_SRC = SRC / "devbim_cut_tool.js"
 CUT_TOOL_NAME = "devbim-cut-tool.js"
 
+TEXT_TOOL_SRC = SRC / "devbim_text_tool.js"
+TEXT_TOOL_NAME = "devbim-text-tool.js"
+
 PE_SRC = SRC / "prompt_enhancer.py"
 PE_DST = SP / "invokeai" / "app" / "invocations" / "devbim_prompt_enhancer.py"
 
@@ -165,6 +168,38 @@ def deploy_cut_tool(dist: Path | None = None) -> bool:
     tag = f'  <script src="/{CUT_TOOL_NAME}" defer></script>\n</head>'
     index.write_text(s.replace("</head>", tag, 1), encoding="utf-8")
     print("index.html подключает", CUT_TOOL_NAME + f" (бэкап: {bak.name})")
+    print("Инструмент развернут:", dst)
+    return True
+
+
+def deploy_text_tool(dist: Path | None = None) -> bool:
+    """Деплой инструмента «Текст» (T): копия в dist/ + script в index.html.
+    Виджет вставляет кнопку в рейку инструментов холста и создаёт
+    текстовые растровые слои (мост __devbimCanvasBridge)."""
+    dist = dist or DIST
+    dst = dist / TEXT_TOOL_NAME
+    index = dist / "index.html"
+    if not TEXT_TOOL_SRC.exists():
+        print("ОШИБКА: нет источника", TEXT_TOOL_SRC)
+        sys.exit(1)
+    if not index.exists():
+        print("ОШИБКА: нет index.html в", dist)
+        sys.exit(1)
+    shutil.copy2(TEXT_TOOL_SRC, dst)
+    s = index.read_text(encoding="utf-8")
+    if TEXT_TOOL_NAME in s:
+        print("index.html уже подключает", TEXT_TOOL_NAME + ", пропуск")
+        print("Инструмент развернут:", dst)
+        return False
+    if "</head>" not in s:
+        print("ОШИБКА: в index.html нет </head>")
+        sys.exit(1)
+    bak = index.with_suffix(".html.texttool-bak")
+    if not bak.exists():
+        shutil.copy2(index, bak)
+    tag = f'  <script src="/{TEXT_TOOL_NAME}" defer></script>\n</head>'
+    index.write_text(s.replace("</head>", tag, 1), encoding="utf-8")
+    print("index.html подключает", TEXT_TOOL_NAME + f" (бэкап: {bak.name})")
     print("Инструмент развернут:", dst)
     return True
 
@@ -1228,7 +1263,7 @@ def patch_index_html() -> bool:
 
 def main() -> None:
     for p in (SRC / "imagerouter_router.py", SRC / "imagerouter.html", SRC / "devbim_admin.js",
-              MASK_TOGGLE_SRC, CUT_TOOL_SRC, PE_SRC, DIST, API_APP.parent):
+              MASK_TOGGLE_SRC, CUT_TOOL_SRC, TEXT_TOOL_SRC, PE_SRC, DIST, API_APP.parent):
         if not p.exists():
             print("Не найдено:", p)
             sys.exit(1)
@@ -1236,6 +1271,7 @@ def main() -> None:
     deploy_files()
     deploy_mask_toggle()
     deploy_cut_tool()
+    deploy_text_tool()
     patch_api_app()
     patch_js()
     patch_left_panel()
