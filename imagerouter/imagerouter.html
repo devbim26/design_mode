@@ -374,7 +374,9 @@ $("refresh").addEventListener("click", loadModels);
 function loadUpscale(){
   api("/upscale-models").then(function(data){
     state.upscale = (data.models || []).map(function(it){ return it.id; });
-    if (data.defaults_used)
+    if (data.inherited_from_main)
+      setMsg("up-msg", "Показан выбор из секции «Генерация и правка» — в апскейлинге те же модели, что в менеджере. Сохраните, чтобы закрепить отдельный список", "");
+    else if (data.defaults_used)
       setMsg("up-msg", "Показан список по умолчанию — сохраните, чтобы закрепить свой выбор", "");
     renderUpscale();
   }).catch(function(e){

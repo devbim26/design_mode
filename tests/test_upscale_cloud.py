@@ -229,6 +229,41 @@ def main():
     assert st2["models"][0]["available"] is True and st2["models"][0]["image_input"] is True
     print("OK эндпоинты выбора администратора")
 
+    # --- 6b. наследование: нет файла выбора — апскейл берёт выбор «Генерация и правка» ---
+
+    # файл выбора есть (создан PUT выше) -> источник file
+    ids, src = ir._upscale_selection_source()
+    assert src == "file" and ids == ["prunaai/P-Image-Upscale", "philz1337x/clarity-2x"], (ids, src)
+    # файла нет, есть main-выбор -> унаследован (модели апскейла = модели менеджера)
+    (tmp / "data" / "imagerouter_upscale.json").unlink()
+    (tmp / "data" / "imagerouter_main_models.json").write_text(
+        json.dumps({"models": ["prunaai/P-Image-Upscale", "text/only-model", "prunaai/P-Image-Upscale"]}),
+        encoding="utf-8",
+    )
+    ids, src = ir._upscale_selection_source()
+    assert src == "main" and ids == ["prunaai/P-Image-Upscale", "text/only-model"], (ids, src)
+    st = ir.get_upscale_models()
+    assert st["selection_source"] == "main", st
+    assert st["inherited_from_main"] is True and st["defaults_used"] is False, st
+    assert [m["id"] for m in st["models"]] == ids, st
+    # инъекция фильтрует унаследованный список по каталогу и вход-image
+    data = {"models": []}
+    ir._add_ir_models(data)
+    keys = {m["key"] for m in data["models"]}
+    assert "imagerouter-upscale/prunaai/P-Image-Upscale" in keys, keys
+    assert "imagerouter-upscale/text/only-model" not in keys, keys  # без входа-image
+    # нет обоих файлов -> дефолт из кода
+    (tmp / "data" / "imagerouter_main_models.json").unlink()
+    ids, src = ir._upscale_selection_source()
+    assert src == "default" and ids == ir.DEFAULT_UPSCALE_MODELS, (ids, src)
+    st = ir.get_upscale_models()
+    assert st["defaults_used"] is True and st["inherited_from_main"] is False, st
+    # восстановить сохранённый выбор для секции режимов ниже
+    (tmp / "data" / "imagerouter_upscale.json").write_text(
+        json.dumps({"models": ["prunaai/P-Image-Upscale", "philz1337x/clarity-2x"]}), encoding="utf-8"
+    )
+    print("OK наследование выбора от «Генерация и правка»")
+
     # --- 7. режимы моделей из каталога ---
 
     # явные размеры -> режим на каждый размер

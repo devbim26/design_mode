@@ -117,7 +117,9 @@ MAX_RUNS = 10
 
 # Файл выбора: <INVOKEAI_ROOT>/data/imagerouter_upscale.json (per-company, как
 # imagerouter.json). Первый элемент списка — модель по умолчанию (клиент
-# авто-выбирает первый spandrel-конфиг из /api/v2/models/).
+# авто-выбирает первый spandrel-конфиг из /api/v2/models/). Файла нет —
+# наследуется выбор «Генерация и правка» (модели апскейлинга = модели
+# менеджера, решение 09.09); нет и его — дефолт ниже.
 DEFAULT_UPSCALE_MODELS = [
     "philz1337x/clarity-2x",
     "jingyunliang/swinir-2x",
@@ -131,19 +133,33 @@ def _upscale_store_path() -> Path:
     return Path(get_config().root_path) / "data" / "imagerouter_upscale.json"
 
 
-def _load_upscale_selection() -> list[str]:
+def _upscale_selection_source() -> tuple[list[str], str]:
+    """(список id, источник) для моделей апскейлинга. Источники:
+    «file» — сохранённый выбор администратора (пустой список = отключить
+    апскейл); «main» — файла нет, наследуем выбор «Генерация и правка»
+    (в апскейлинге те же модели, что пользователь видит в менеджере,
+    решение 09.09); «default» — нет обоих файлов, дефолт из кода."""
     p = _upscale_store_path()
     try:
         ids = json.loads(p.read_text(encoding="utf-8")).get("models")
     except Exception:
         ids = None
+    src = "file"
     if not isinstance(ids, list):
-        return list(DEFAULT_UPSCALE_MODELS)
+        main_ids = _load_main_selection()
+        if main_ids is not None:
+            ids, src = main_ids, "main"
+        else:
+            ids, src = list(DEFAULT_UPSCALE_MODELS), "default"
     out: list[str] = []
     for mid in ids:
         if isinstance(mid, str) and mid and mid not in out:
             out.append(mid)
-    return out
+    return out, src
+
+
+def _load_upscale_selection() -> list[str]:
+    return _upscale_selection_source()[0]
 
 
 def _save_upscale_selection(models: list[str]) -> None:
@@ -418,8 +434,10 @@ class UpscaleModelsBody(BaseModel):
 @imagerouter_router.get("/upscale-models")
 def get_upscale_models() -> dict:
     """Текущий выбор + справочные данные из каталога (цена, вход-image).
-    defaults_used=True — файл ещё не создавался, отдан список по умолчанию."""
-    ids = _load_upscale_selection()
+    selection_source: file — сохранённый выбор; main — унаследован из
+    «Генерация и правка» (файл выбора не создавался); default — дефолт
+    из кода (нет обоих файлов)."""
+    ids, src = _upscale_selection_source()
     items: list[dict] = []
     for mid in ids:
         m = _ir_model_by_id(mid)
@@ -431,7 +449,12 @@ def get_upscale_models() -> dict:
                 "image_input": _supports_image_input(mid) if m else None,
             }
         )
-    return {"models": items, "defaults_used": not _upscale_store_path().exists()}
+    return {
+        "models": items,
+        "selection_source": src,
+        "defaults_used": src == "default",
+        "inherited_from_main": src == "main",
+    }
 
 
 @imagerouter_router.put("/upscale-models")

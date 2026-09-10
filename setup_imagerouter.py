@@ -59,6 +59,7 @@ ADMIN_JS_DST = DIST / "devbim-admin.js"
 MASK_TOGGLE_SRC = SRC / "devbim_mask_toggle.js"
 MASK_TOGGLE_NAME = "devbim-mask-toggle.js"
 
+
 PE_SRC = SRC / "prompt_enhancer.py"
 PE_DST = SP / "invokeai" / "app" / "invocations" / "devbim_prompt_enhancer.py"
 
@@ -447,6 +448,10 @@ def patch_upscale_launchpad() -> bool:
 # выбор персистится в localStorage). Билдер графа (sSe) дополнительно
 # кладёт в spandrel-узел upscale_mode/output_format из window-глобалов
 # (undefined → поля исчезают из JSON: quick-action не затронут).
+# v2 (09.09, «модели как в менеджере»): над селекторами — три поля только
+# для чтения по текущему изображению вкладки: Ширина/Высота (ImageDTO) и
+# Качество = размер файла оригинала в КБ (HEAD по image_url, «1 234 К»);
+# отладочный window-глобал __devbimUpscaleImgInfo.
 # ----------------------------------------------------------------------------
 
 # ParametersPanelUpscale: [промпты, Увеличить, Генерация, ОпцииРасширенные] -> первые два
@@ -471,7 +476,8 @@ JS_UP_SLIDER_OLD = (
     'o.jsx(Ee,{maxW:20,value:n,onChange:s,defaultValue:4,min:1,max:16,step:.5,format:sF})]})]})});'
     'Yae.displayName="UpscaleScaleSlider";'
 )
-JS_UP_SLIDER_NEW = (
+# v1 (09.09 утро, без полей изображения) — источник для перепатчивания
+JS_UP_SLIDER_NEW_V1 = (
     'Yae=u.memo(()=>{const e=K(),n=T(Pve),img=T(qE),mdl=T(S$),'
     '[opts,setOpts]=u.useState(null),'
     '[fmt,setFmt]=u.useState(()=>{try{return localStorage.getItem("devbimUpscaleFormat")||"png"}'
@@ -507,6 +513,65 @@ JS_UP_SLIDER_NEW = (
     'children:formats.map(f=>o.jsx("option",{value:f,children:String(f).toUpperCase()},f))})]})'
     ']})});Yae.displayName="UpscaleScaleSlider";'
 )
+# v2 (09.09, «модели как в менеджере»): + поля Ширина/Высота/Качество по
+# текущему изображению вкладки; качество — размер файла оригинала (HEAD по
+# image_url, ImageRecord не несёт file_size), формат «1 234 К» (ru-RU).
+JS_UP_SLIDER_NEW = (
+    'Yae=u.memo(()=>{const e=K(),n=T(Pve),img=T(qE),mdl=T(S$),'
+    '[opts,setOpts]=u.useState(null),'
+    '[fmt,setFmt]=u.useState(()=>{try{return localStorage.getItem("devbimUpscaleFormat")||"png"}'
+    'catch(err){return"png"}}),'
+    '[mode,setMode]=u.useState(null),[kb,setKb]=u.useState(null);'
+    'u.useEffect(()=>{fetch("/api/v1/imagerouter/upscale-options").then(r=>r.json())'
+    '.catch(()=>null).then(d=>setOpts(d||null))},[]);'
+    'u.useEffect(()=>{setKb(null);'
+    'if(img&&img.image_url){fetch(img.image_url,{method:"HEAD"})'
+    '.then(r=>{const l=parseInt(r.headers.get("content-length")||"0",10);setKb(l>0?l:null)})'
+    '.catch(()=>{})}},[img&&img.image_name]);'
+    'u.useEffect(()=>{try{window.__devbimUpscaleImgInfo={width:img&&img.width,'
+    'height:img&&img.height,kb:kb}}catch(err){}},[img&&img.image_name,kb]);'
+    'const mid=mdl&&mdl.key?String(mdl.key).replace("imagerouter-upscale/",""):null,'
+    'mo=opts&&mid?(opts.models||[]).find(x=>x.id===mid):null,'
+    'modes=mo&&mo.modes&&mo.modes.length?mo.modes:[{id:"2x",label:"2\\u00d7",scale:2}],'
+    'formats=mo&&mo.formats?mo.formats:["png","jpeg","webp"],'
+    'curMode=mode&&modes.some(m=>m.id===mode)?mode:modes[0].id,'
+    'cur=modes.find(m=>m.id===curMode)||modes[0];'
+    'u.useEffect(()=>{window.__devbimUpscaleFormat=fmt;'
+    'try{localStorage.setItem("devbimUpscaleFormat",fmt)}catch(err){}},[fmt]);'
+    'u.useEffect(()=>{window.__devbimUpscaleMode=cur.id;'
+    'let sc=cur.scale!=null?cur.scale:0;'
+    'if(cur.size&&img){const p=String(cur.size).split("x");'
+    'sc=Math.max(1,Math.round(Math.max(parseInt(p[0],10)/img.width,'
+    'parseInt(p[1],10)/img.height)*2)/2)}'
+    'if(sc&&sc!==n)e(Lve(sc))},[cur.id,cur.size,img&&img.width,img&&img.height]);'
+    'const lab={color:"#9B9BB0",fontSize:"12px",marginBottom:"4px"},'
+    'sel={width:"100%",background:"#282832",color:"#E6E6F0",border:"1px solid #4A4A58",'
+    'borderRadius:"6px",padding:"6px 8px"},'
+    'val={background:"#22222C",color:"#E6E6F0",border:"1px solid #4A4A58",'
+    'borderRadius:"6px",padding:"6px 8px",fontSize:"13px",textAlign:"center"};'
+    'const kbTxt=img==null?"—":(kb==null?"…":'
+    '(Math.max(1,Math.round(kb/1024)).toLocaleString("ru-RU")+" К"));'
+    'return o.jsxs(E,{flexDir:"column",gap:4,w:"full",children:['
+    'o.jsx(E,{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:4,w:"full",children:['
+    'o.jsxs(E,{flexDir:"column",gap:1,children:['
+    'o.jsx("div",{style:lab,children:"Ширина"}),'
+    'o.jsx("div",{style:val,children:img?img.width+" px":"—"})]}),'
+    'o.jsxs(E,{flexDir:"column",gap:1,children:['
+    'o.jsx("div",{style:lab,children:"Высота"}),'
+    'o.jsx("div",{style:val,children:img?img.height+" px":"—"})]}),'
+    'o.jsxs(E,{flexDir:"column",gap:1,children:['
+    'o.jsx("div",{style:lab,children:"Качество"}),'
+    'o.jsx("div",{style:val,children:kbTxt})]})]}),'
+    'o.jsxs(E,{flexDir:"column",gap:1,w:"full",children:['
+    'o.jsx("div",{style:lab,children:"Режим увеличения"}),'
+    'o.jsx("select",{value:curMode,onChange:ev=>setMode(ev.target.value),style:sel,'
+    'children:modes.map(m=>o.jsx("option",{value:m.id,children:m.label},m.id))})]}),'
+    'o.jsxs(E,{flexDir:"column",gap:1,w:"full",children:['
+    'o.jsx("div",{style:lab,children:"Формат изображения"}),'
+    'o.jsx("select",{value:fmt,onChange:ev=>setFmt(ev.target.value),style:sel,'
+    'children:formats.map(f=>o.jsx("option",{value:f,children:String(f).toUpperCase()},f))})]})'
+    ']})});Yae.displayName="UpscaleScaleSlider";'
+)
 
 # Билдер графа вкладки: spandrel-узел несёт выбор селекторов
 JS_UP_GRAPH_OLD = (
@@ -529,7 +594,10 @@ JS_UPSCALE_PANEL_PATCHES = (
 
 def patch_upscale_cloud_panel() -> bool:
     """Панель вкладки Upscaling под облачные модели: без локальных пунктов,
-    селекторы режима и формата из /upscale-options."""
+    селекторы режима и формата из /upscale-options + поля Ширина/Высота/
+    Качество текущего изображения (v2). Идемпотентно: бандл с v1
+    (маркер __devbimUpscaleMode без __devbimUpscaleImgInfo) перепатчивается
+    только в части селекторов, свежий — всеми четырьмя заменами."""
     targets = [
         f for f in DIST.glob("assets/*.js")
         if 'displayName="ParametersPanelUpscale"' in f.read_text(encoding="utf-8")
@@ -539,14 +607,22 @@ def patch_upscale_cloud_panel() -> bool:
         sys.exit(1)
     f = targets[0]
     s = f.read_text(encoding="utf-8")
-    if "window.__devbimUpscaleMode" in s:
-        print("Панель Upscaling уже облачная, пропуск")
+    if "__devbimUpscaleImgInfo" in s:
+        print("Панель Upscaling уже с полями изображения (v2), пропуск")
         return False
-    for old, new, title in JS_UPSCALE_PANEL_PATCHES:
-        if s.count(old) != 1:
-            print(f"ОШИБКА: фрагмент «{title}» найден {s.count(old)} раз (ожидался 1)")
+    if "window.__devbimUpscaleMode" in s:
+        # v1 применён: остальные три замены уже в бандле, допатчиваем селекторы
+        cnt = s.count(JS_UP_SLIDER_NEW_V1)
+        if cnt != 1:
+            print(f"ОШИБКА: блок селекторов v1 найден {cnt} раз (ожидался 1)")
             sys.exit(1)
-        s = s.replace(old, new, 1)
+        s = s.replace(JS_UP_SLIDER_NEW_V1, JS_UP_SLIDER_NEW, 1)
+    else:
+        for old, new, title in JS_UPSCALE_PANEL_PATCHES:
+            if s.count(old) != 1:
+                print(f"ОШИБКА: фрагмент «{title}» найден {s.count(old)} раз (ожидался 1)")
+                sys.exit(1)
+            s = s.replace(old, new, 1)
     bak = f.with_suffix(f.suffix + ".imagerouter-bak")
     if not bak.exists():
         shutil.copy2(f, bak)
