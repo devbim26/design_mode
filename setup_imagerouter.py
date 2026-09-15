@@ -28,6 +28,12 @@
        (dist/devbim-admin.js, проверка через POST /api/v1/imagerouter/admin-auth);
      - переключение на вкладку «models» из любых мест UI (кнопка в выборе
        модели, горячие клавиши) без пароля блокируется (патч switchToTab).
+  8. Кнопки «Prompt Assistant» (✨, улучшение промта) и «3D Design»
+     (заглушка) в правом углу баннера DevBIM: виджет
+     dist/devbim-topright-buttons.js + script в index.html; клик по
+     «Prompt Assistant» идёт через глобал __devbimPromptEnhance (патч
+     App-бандла, хост DevbimPEWatch в ряду Generate). Высота кнопок 36px —
+     как у Generate.
 
 Секреты (ключ ImageRouter, админский пароль) читаются сервером из .env
 в корне проекта; скрипт создаёт .env по шаблону, если его ещё нет.
@@ -64,6 +70,9 @@ CUT_TOOL_NAME = "devbim-cut-tool.js"
 
 TEXT_TOOL_SRC = SRC / "devbim_text_tool.js"
 TEXT_TOOL_NAME = "devbim-text-tool.js"
+
+TOPRIGHT_SRC = SRC / "devbim_topright_buttons.js"
+TOPRIGHT_NAME = "devbim-topright-buttons.js"
 
 PE_SRC = SRC / "prompt_enhancer.py"
 PE_DST = SP / "invokeai" / "app" / "invocations" / "devbim_prompt_enhancer.py"
@@ -201,6 +210,38 @@ def deploy_text_tool(dist: Path | None = None) -> bool:
     index.write_text(s.replace("</head>", tag, 1), encoding="utf-8")
     print("index.html подключает", TEXT_TOOL_NAME + f" (бэкап: {bak.name})")
     print("Инструмент развернут:", dst)
+    return True
+
+
+def deploy_topright_buttons(dist: Path | None = None) -> bool:
+    """Деплой кнопок «Prompt Assistant» / «3D Design»: копия в dist/ +
+    script в index.html. Виджет ставит группу в правый угол баннера DevBIM
+    и кликает в window.__devbimPromptEnhance (патч App-бандла v2)."""
+    dist = dist or DIST
+    dst = dist / TOPRIGHT_NAME
+    index = dist / "index.html"
+    if not TOPRIGHT_SRC.exists():
+        print("ОШИБКА: нет источника", TOPRIGHT_SRC)
+        sys.exit(1)
+    if not index.exists():
+        print("ОШИБКА: нет index.html в", dist)
+        sys.exit(1)
+    shutil.copy2(TOPRIGHT_SRC, dst)
+    s = index.read_text(encoding="utf-8")
+    if TOPRIGHT_NAME in s:
+        print("index.html уже подключает", TOPRIGHT_NAME + ", пропуск")
+        print("Кнопки развернуты:", dst)
+        return False
+    if "</head>" not in s:
+        print("ОШИБКА: в index.html нет </head>")
+        sys.exit(1)
+    bak = index.with_suffix(".html.topright-bak")
+    if not bak.exists():
+        shutil.copy2(index, bak)
+    tag = f'  <script src="/{TOPRIGHT_NAME}" defer></script>\n</head>'
+    index.write_text(s.replace("</head>", tag, 1), encoding="utf-8")
+    print("index.html подключает", TOPRIGHT_NAME + f" (бэкап: {bak.name})")
+    print("Кнопки развернуты:", dst)
     return True
 
 
@@ -730,7 +771,8 @@ def deploy_prompt_enhancer() -> bool:
     return True
 
 
-# Кнопка Prompt Enhance: компонент + вставка в контейнер Generate (слот 60px).
+# Кнопка Prompt Enhance V1 (06.09): голубая кнопка ✨ 56×40px в слоте 60px
+# справа от жёлтой Generate. Оставлена для миграции уже пропатченных бандлов.
 # Je — стор-хук (как у штатной кнопки расширения), ie(ci.$state) — стор
 # Prompt Expansion, lb — штатный enqueue-and-wait, KC — иконка-искра.
 JS_PE_BTN = (
@@ -743,13 +785,34 @@ JS_PE_BTN = (
     '_hover:{background:"#5CC8FA"},_disabled:{background:"#38BDF8",opacity:.5}},'
     'children:o.jsx(KC,{size:16})})})});'
 )
+# V2 (15.09, по запросу пользователя): кнопки «Prompt Assistant» и «3D Design»
+# рисует виджет devbim_topright_buttons.js в правом углу баннера DevBIM.
+# В бандле остаётся только хост: глобальный триггер __devbimPromptEnhance
+# (ci.setPending + lb — штатный флоу Prompt Expansion) и невидимый наблюдатель
+# DevbimPEWatch в ряду Generate, который при каждом рендере обновляет
+# window.__devbimPEStore (стор для lb) и window.__devbimPEPending (занятость).
+# Фолбэк стора — менеджер холста (window.__devbimCanvasBridge, патч 05.09):
+# клик работает и до первого монтирования ряда Generate.
+JS_PE_HOST_V2 = (
+    'window.__devbimPromptEnhance=function(){try{'
+    'var s=window.__devbimPEStore;'
+    'if(!s){try{var m=window.__devbimCanvasBridge&&window.__devbimCanvasBridge.getManager();'
+    'if(m&&m.stateApi&&m.stateApi.store)s=m.stateApi.store}catch(e2){}}'
+    'if(!s)return!1;ci.setPending(),lb(s);return!0'
+    '}catch(err){return!1}};'
+    'const DevbimPEWatch=u.memo(()=>{var s=Je(),t=ie(ci.$state);'
+    'return window.__devbimPEStore=s,window.__devbimPEPending=!!(t&&t.isPending),null});'
+)
 JS_PE_PREFIX_OLD = 'const m7="Generate",pne=u.memo('
 JS_PE_TAIL_OLD = 'o.jsx(mt,{})]})})]})});pne.displayName="InvokeQueueBackButton"'
-JS_PE_TAIL_NEW = 'o.jsx(mt,{})]})}),o.jsx(DevbimPEBtn,{})]})});pne.displayName="InvokeQueueBackButton"'
+JS_PE_TAIL_NEW = 'o.jsx(mt,{})]})}),o.jsx(DevbimPEWatch,{})]})});pne.displayName="InvokeQueueBackButton"'
+JS_PE_BTN_USE = 'o.jsx(DevbimPEBtn,{})'
+JS_PE_WATCH_USE = 'o.jsx(DevbimPEWatch,{})'
 
 
 def patch_prompt_enhance_button(bundle: Path | None = None) -> bool:
-    """Голубая кнопка «Prompt Enhance» справа от жёлтой Generate."""
+    """Хост Prompt Enhance в ряду Generate + глобал для виджета кнопок
+    «Prompt Assistant» / «3D Design» (правый угол баннера DevBIM)."""
     if bundle is None:
         targets = [
             f for f in DIST.glob("assets/*.js")
@@ -760,19 +823,30 @@ def patch_prompt_enhance_button(bundle: Path | None = None) -> bool:
             sys.exit(1)
         bundle = targets[0]
     s = bundle.read_text(encoding="utf-8")
-    if "DevbimPEBtn" in s:
-        print("Кнопка Prompt Enhance уже установлена, пропуск")
+    if "DevbimPEWatch" in s:
+        print("Хост Prompt Enhance v2 уже установлен, пропуск")
         return False
+    bak = bundle.with_suffix(bundle.suffix + ".imagerouter-bak")
+    if "DevbimPEBtn" in s:  # миграция V1 (кнопка ✨ в ряду Generate) -> V2
+        if s.count(JS_PE_BTN) != 1 or s.count(JS_PE_BTN_USE) != 1:
+            print("ОШИБКА: фрагменты V1 кнопки Prompt Enhance найдены не по одному разу — структура изменилась")
+            sys.exit(1)
+        s = s.replace(JS_PE_BTN, JS_PE_HOST_V2, 1)
+        s = s.replace(JS_PE_BTN_USE, JS_PE_WATCH_USE, 1)
+        if not bak.exists():
+            shutil.copy2(bundle, bak)
+        bundle.write_text(s, encoding="utf-8")
+        print(f"Кнопка Prompt Enhance мигрирована V1 -> V2 (хост для виджета): {bundle.name} (бэкап: {bak.name})")
+        return True
     if s.count(JS_PE_PREFIX_OLD) != 1 or s.count(JS_PE_TAIL_OLD) != 1:
         print("ОШИБКА: якоря кнопки Generate найдены не по одному разу — структура изменилась")
         sys.exit(1)
-    s = s.replace(JS_PE_PREFIX_OLD, JS_PE_BTN + JS_PE_PREFIX_OLD, 1)
+    s = s.replace(JS_PE_PREFIX_OLD, JS_PE_HOST_V2 + JS_PE_PREFIX_OLD, 1)
     s = s.replace(JS_PE_TAIL_OLD, JS_PE_TAIL_NEW, 1)
-    bak = bundle.with_suffix(bundle.suffix + ".imagerouter-bak")
     if not bak.exists():
         shutil.copy2(bundle, bak)
     bundle.write_text(s, encoding="utf-8")
-    print(f"Кнопка Prompt Enhance установлена у Generate: {bundle.name} (бэкап: {bak.name})")
+    print(f"Хост Prompt Enhance v2 установлен у Generate: {bundle.name} (бэкап: {bak.name})")
     return True
 
 
@@ -1263,7 +1337,7 @@ def patch_index_html() -> bool:
 
 def main() -> None:
     for p in (SRC / "imagerouter_router.py", SRC / "imagerouter.html", SRC / "devbim_admin.js",
-              MASK_TOGGLE_SRC, CUT_TOOL_SRC, TEXT_TOOL_SRC, PE_SRC, DIST, API_APP.parent):
+              MASK_TOGGLE_SRC, CUT_TOOL_SRC, TEXT_TOOL_SRC, TOPRIGHT_SRC, PE_SRC, DIST, API_APP.parent):
         if not p.exists():
             print("Не найдено:", p)
             sys.exit(1)
@@ -1272,6 +1346,7 @@ def main() -> None:
     deploy_mask_toggle()
     deploy_cut_tool()
     deploy_text_tool()
+    deploy_topright_buttons()
     patch_api_app()
     patch_js()
     patch_left_panel()

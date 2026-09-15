@@ -179,10 +179,13 @@ def test_patch_prompt_enhance_button():
         assert sir.patch_prompt_enhance_button(b) is True
         assert sir.patch_prompt_enhance_button(b) is False  # идемпотентно
         s = b.read_text(encoding="utf-8")
-        assert s.count("DevbimPEBtn") >= 2  # определение + использование
+        # V2: хост — глобальный триггер + наблюдатель DevbimPEWatch в ряду
+        # Generate (кнопки рисует виджет devbim_topright_buttons.js)
+        assert s.count("DevbimPEWatch") == 2  # определение + использование
         assert s.count('const m7="Generate",pne=u.memo(') == 1  # якорь сохранён
-        assert s.index("const DevbimPEBtn") < s.index('const m7="Generate"')
-        assert s.count("o.jsx(DevbimPEBtn,{})") == 1
+        assert s.index("window.__devbimPromptEnhance=") < s.index('const m7="Generate"')
+        assert s.count("o.jsx(DevbimPEWatch,{})") == 1
+        assert "window.__devbimPEStore" in s and "window.__devbimPEPending" in s
         assert (Path(td) / "App-fake.js.imagerouter-bak").exists()
     print("OK: патч кнопки Prompt Enhance идемпотентен")
 
