@@ -57,6 +57,21 @@ JS_TABCONTENT_OLD = 'i&&e==="workflows"&&o.jsx(lue,{})'
 JS_TABCONTENT_NEW = 'i&&e==="workflows"&&o.jsx(lue,{}),e==="ifc"&&o.jsx(IFE,{})'
 
 # --- App-бандл: компонент панели (вставляется перед AppContent) ---
+# V2: как PDFE/PDFV, IFE захватывает Je() (redux-store {dispatch,getState})
+# в window.__devbimIfcCtx — иначе «📸 To Canvas» из ПОЛНОЦЕННОЙ вкладки IFC
+# падает «canvas context unavailable»: мост __devbimIfc.toCanvas работает
+# только пока какая-то смонтированная панель держит контекст, а раньше его
+# держали лишь IFCV (embed-панель на холсте) и PDFE/PDFV. Вкладки ifc и
+# canvas не активны одновременно — за глобаль не спорят.
+JS_IFC_PANEL_V2 = (
+    'const IFE=u.memo(()=>{const e=Je();'
+    'u.useEffect(()=>{window.__devbimIfcCtx=e;return()=>{window.__devbimIfcCtx=null}},[e]);'
+    'u.useEffect(()=>()=>Fe.unregisterTab("ifc"),[]);'
+    'return o.jsx(yf,{tab:"ifc",children:o.jsx("iframe",{src:"/ifcviewer.html",'
+    'title:"IFC",style:{width:"100%",height:"100%",border:"none"}})});});'
+    'IFE.displayName="IFCTab";'
+)
+# первая версия — без захвата контекста (мигрируется на V2 повторным запуском)
 JS_IFC_PANEL = (
     'const IFE=u.memo(()=>(u.useEffect(()=>()=>Fe.unregisterTab("ifc"),[]),'
     'o.jsx(yf,{tab:"ifc",children:o.jsx("iframe",{src:"/ifcviewer.html",'
@@ -203,7 +218,14 @@ def patch_app_bundle() -> bool:
 
     # 1) вкладка «IFC» в левой рейке
     if JS_TABCONTENT_NEW in s:
-        print("App-бандл: вкладка IFC уже на месте, пропуск")
+        if JS_IFC_PANEL_V2 in s:
+            print("App-бандл: вкладка IFC уже на месте, пропуск")
+        elif JS_IFC_PANEL in s:
+            # миграция IFE v1 (без захвата __devbimIfcCtx) -> v2
+            s = s.replace(JS_IFC_PANEL, JS_IFC_PANEL_V2, 1)
+            print("App-бандл: IFE обновлён (захват __devbimIfcCtx для To Canvas из вкладки IFC)")
+        else:
+            print("App-бандл: вкладка IFC уже на месте (IFE не найден), пропуск")
     else:
         for old, new, title in (
             (JS_NAVBAR_OLD, JS_NAVBAR_NEW, "кнопка «IFC» в левой рейке"),
@@ -216,7 +238,7 @@ def patch_app_bundle() -> bool:
         if s.count(JS_APPCONTENT_ANCHOR) < 1 or "AppContent" not in s:
             print("ОШИБКА: не найдена точка вставки компонента IFC-панели")
             sys.exit(1)
-        s = s.replace(JS_APPCONTENT_ANCHOR, JS_IFC_PANEL + JS_APPCONTENT_ANCHOR, 1)
+        s = s.replace(JS_APPCONTENT_ANCHOR, JS_IFC_PANEL_V2 + JS_APPCONTENT_ANCHOR, 1)
         print("App-бандл: вкладка IFC добавлена")
 
     # 2) панель «IFC Viewer» на вкладке «Холст» + мост к холсту

@@ -227,13 +227,16 @@
   body.embed header, body.embed .side, body.embed footer{display:none}
   body.embed main{grid-template-columns:1fr}
   body.embed #navhelp{display:none}
+  /* snapbar — нижняя панель «To Canvas / To Assets» — видна в ОБЕИХ режимах:
+     в embed-панели на холсте и в полноценной вкладке IFC (как в PDF-вьювере);
+     селектор моделей нужен только embed-панели — в вкладке он есть в шапке */
   #snapbar{
-    display:none; align-items:center; gap:6px; flex-wrap:wrap;
+    display:flex; align-items:center; gap:6px; flex-wrap:wrap;
     position:absolute; left:50%; transform:translateX(-50%); bottom:10px;
     background:rgba(22,24,27,.92); border:1px solid var(--border); border-radius:8px;
     padding:6px 8px; max-width:calc(100% - 20px); z-index:5;
   }
-  body.embed #snapbar{display:flex}
+  body:not(.embed) #snapbar select{display:none}
   #snapbar button{padding:4px 10px; font-size:12px; font-weight:500}
   #snapbar select{max-width:200px; padding:4px 6px; font-size:12px}
   #etoast{
@@ -1577,7 +1580,8 @@ function rememberModel(name) {
 }
 
 function embedToast(msg, isErr, ms = 2600) {
-  if (!EMBED) return;
+  // работает в обоих режимах: embed-панель на холсте и полноценная вкладка
+  // (у вкладки есть ещё футер-статус, но тост важнее для действий панели)
   const t = $("etoast");
   t.textContent = msg;
   t.className = isErr ? "err" : "";
@@ -1698,12 +1702,44 @@ async function uploadImage(canvas, name, category = "general") {
   return await r.json(); // ImageDTO
 }
 
+// Контекст моста держит смонтированная вкладка (IFE v2). Если страница
+// приложения работает на СТАРОМ бандле (открыта до обновления и без F5),
+// контекста нет и toCanvas падает «canvas context unavailable» — добираем
+// redux-store через канвас-мост __devbimCanvasBridge (есть во всех бандлах
+// с 05.09). ВАЖНО: вся последовательность (поллинг менеджера, переключение
+// вкладки на «Холст», вызов моста) исполняется в контексте ПРИЛОЖЕНИЯ
+// (new parent.Function) — наш iframe при переключении вкладки отсоединяется,
+// и его таймеры/промисы умирают (проверено E2E 11.09).
+function toCanvasViaBridge(dto) {
+  const p = window.parent;
+  const api = p && p.__devbimIfc;
+  if (!api || !api.toCanvas) throw new Error("canvas bridge unavailable (reload the page)");
+  if (p.__devbimIfcCtx) return api.toCanvas(dto, false);   // быстрый путь: контекст есть
+  try {
+    if (!p.__devbimSendToCanvas) {
+      p.__devbimSendToCanvas = new p.Function("dto",
+        "var P=window;return (async function(){" +
+        "var tryStore=function(){try{" +
+        "var m=P.__devbimCanvasBridge&&P.__devbimCanvasBridge.getManager&&P.__devbimCanvasBridge.getManager();" +
+        "var s=m&&m.stateApi&&m.stateApi.store;" +
+        "if(s&&s.dispatch&&s.getState){P.__devbimIfcCtx=s;return true}}catch(e){}return false};" +
+        "if(!tryStore()){for(var n=0;n<40;n++){" +
+        "await new Promise(function(r){setTimeout(r,100)});" +
+        "if(tryStore())break;" +
+        "if(n===3&&P.__devbimSwitchTab){try{P.__devbimSwitchTab('canvas')}catch(e){}}}}" +
+        "if(!P.__devbimIfcCtx)throw new Error('canvas context unavailable — reload the page (F5)');" +
+        "return P.__devbimIfc.toCanvas(dto,false);})();");
+    }
+    return p.__devbimSendToCanvas(dto);
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
 async function sendSnapshot({ toCanvas = true } = {}) {
   if (!model) { embedToast("Load a model first", true); return; }
-  let api = null;
-  if (toCanvas) {
-    api = window.parent && window.parent.__devbimIfc;
-    if (!api) { embedToast("canvas bridge unavailable (reload the page)", true, 5000); return; }
+  if (toCanvas && !(window.parent && window.parent.__devbimIfc)) {
+    embedToast("canvas bridge unavailable (reload the page)", true, 5000); return;
   }
   const btn = toCanvas ? $("btn-snap") : $("btn-snap-assets");
   btn.disabled = true;
@@ -1713,7 +1749,7 @@ async function sendSnapshot({ toCanvas = true } = {}) {
     const name = "ifc-snapshot.png";
     const dto = await uploadImage(renderSnapshot(), name, toCanvas ? "general" : "user");
     if (toCanvas) {
-      await api.toCanvas(dto, false);
+      await toCanvasViaBridge(dto);
       embedToast("Snapshot placed on canvas — brush an inpaint mask, then Generate");
     } else {
       embedToast(`Snapshot saved to the gallery "Assets" tab (${name})`);
@@ -1726,10 +1762,11 @@ async function sendSnapshot({ toCanvas = true } = {}) {
   }
 }
 
-if (EMBED) {
-  $("btn-snap").addEventListener("click", () => sendSnapshot({ toCanvas: true }));
-  $("btn-snap-assets").addEventListener("click", () => sendSnapshot({ toCanvas: false }));
+// кнопки снимка активны в обоих режимах (вкладка IFC и embed-панель на холсте)
+$("btn-snap").addEventListener("click", () => sendSnapshot({ toCanvas: true }));
+$("btn-snap-assets").addEventListener("click", () => sendSnapshot({ toCanvas: false }));
 
+if (EMBED) {
   // список моделей с сервера в плавающей панели
   (async () => {
     const sel = $("embed-server-list");

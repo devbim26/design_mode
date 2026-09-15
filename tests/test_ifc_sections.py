@@ -111,6 +111,44 @@ def test_person_logic() -> None:
     assert "personModelName !== name" in js
 
 
+def test_snapbar_tab_mode() -> None:
+    """Нижняя панель «To Canvas / To Assets» видна и в ПОЛНОЦЕННОЙ вкладке
+    IFC (не только в embed-панели на холсте), кнопки подключены всегда,
+    тост работает в обоих режимах, IFE v2 держит __devbimIfcCtx."""
+    s = SRC.read_text(encoding="utf-8")
+    # CSS: snapbar показывается без embed-гейта; селектор моделей — только embed
+    assert "body:not(.embed) #snapbar select{display:none}" in s, \
+        "селектор моделей должен скрываться вне embed-режима"
+    assert re.search(r"#snapbar\{\s*display:flex", s), \
+        "snapbar должен быть видим по умолчанию (обе вкладки)"
+    assert "body.embed #snapbar{display:flex}" not in s, \
+        "старый embed-гейт snapbar удалён"
+    js = module_script(s)
+    # обработчики кнопок — до if (EMBED), т.е. работают в обоих режимах
+    handlers = js.find('$("btn-snap").addEventListener')
+    embed_block = js.find("if (EMBED) {")
+    assert handlers != -1 and embed_block != -1 and handlers < embed_block, \
+        "обработчики btn-snap/btn-snap-assets должны подключаться до if (EMBED)"
+    assert "if (!EMBED) return;" not in js, \
+        "тост embedToast не должен глушиться вне embed-режима"
+    assert "toCanvasViaBridge" in js and "__devbimSendToCanvas" in js, \
+        "фолбэк моста для старого App-бандла (страница без F5), исполнение в контексте приложения"
+    # setup: IFE v2 захватывает контекст моста «To Canvas»
+    import sys
+    sys.path.insert(0, str(BASE))
+    import setup_ifcviewer as si
+    assert "__devbimIfcCtx=e" in si.JS_IFC_PANEL_V2 and 'unregisterTab("ifc")' in si.JS_IFC_PANEL_V2
+    assert si.JS_IFC_PANEL_V2 != si.JS_IFC_PANEL and 'displayName="IFCTab"' in si.JS_IFC_PANEL
+    # деплой: в App-бандле стоит IFE v2
+    bundles = [f for f in (BASE / "venv" / "Lib" / "site-packages" / "invokeai" /
+                           "frontend" / "web" / "dist").glob("assets/*.js")
+               if 'displayName="TabContent"' in f.read_text(encoding="utf-8")]
+    assert len(bundles) == 1, f"App-бандл найден {len(bundles)} раз"
+    bundle = bundles[0].read_text(encoding="utf-8")
+    assert si.JS_IFC_PANEL_V2 in bundle, \
+        "в App-бандле нет IFE v2 (захват __devbimIfcCtx) — перезапустите setup_ifcviewer.py"
+
+
 if __name__ == "__main__":
     test_panel_markup()
     print("OK test_panel_markup")
@@ -122,6 +160,8 @@ if __name__ == "__main__":
     print("OK test_person_markup")
     test_person_logic()
     print("OK test_person_logic")
+    test_snapbar_tab_mode()
+    print("OK test_snapbar_tab_mode")
     test_deployed()
     print("OK test_deployed")
     print("ВСЕ ТЕСТЫ OK")

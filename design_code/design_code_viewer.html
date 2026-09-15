@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Design Code — DevBIM</title>
+<style>
+  :root{
+    --bg:#0c0d0f; --panel:#16181b; --panel2:#1d2024; --border:#2b2f35;
+    --text:#e8e9ea; --muted:#9aa0a6; --accent:#38BDF8; --accent-dim:#1a5f80;
+    --ok:#34d399; --err:#f87171;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{margin:0; background:var(--bg); color:var(--text);
+    font:13px/1.5 "Inter","Segoe UI",system-ui,Arial,sans-serif; overflow:hidden}
+
+  /* --- стартовый экран / модальное окно смены сайта --- */
+  #gate{position:absolute; inset:0; display:flex; align-items:center;
+    justify-content:center; background:radial-gradient(1200px 600px at 50% 35%, #131920 0%, var(--bg) 70%); z-index:30}
+  #gate[hidden]{display:none}
+  .card{width:400px; max-width:calc(100vw - 32px); background:var(--panel);
+    border:1px solid var(--border); border-radius:12px; padding:22px 24px;
+    box-shadow:0 18px 50px rgba(0,0,0,.5)}
+  .card .logo{font-size:19px; font-weight:700; letter-spacing:.2px}
+  .card .logo .bim{color:var(--accent)}
+  .card h1{font-size:15px; font-weight:600; margin:8px 0 2px}
+  .card p.hint{margin:0 0 16px; color:var(--muted); font-size:12px}
+  label{display:block; margin:12px 0 4px; color:var(--muted); font-size:11px;
+    text-transform:uppercase; letter-spacing:.6px}
+  input{width:100%; background:var(--bg); color:var(--text);
+    border:1px solid var(--border); border-radius:8px; padding:9px 11px;
+    font:inherit; outline:none}
+  input:focus{border-color:var(--accent)}
+  #err{color:var(--err); font-size:12px; min-height:16px; margin:10px 0 0}
+  .row{display:flex; gap:8px; margin-top:12px}
+  button{background:var(--accent); color:#04222f; border:none; border-radius:8px;
+    padding:9px 16px; font:inherit; font-weight:600; cursor:pointer}
+  button:hover{filter:brightness(1.1)}
+  button:disabled{opacity:.45; cursor:default}
+  button.ghost{background:transparent; color:var(--muted);
+    border:1px solid var(--border); font-weight:400}
+  button.ghost:hover{color:var(--text); filter:none}
+
+  /* --- плавающий тулбар над сайтом --- */
+  #bar{position:absolute; top:0; left:0; right:0; z-index:20; display:none;
+    align-items:center; gap:8px; padding:6px 10px;
+    background:rgba(13,14,16,.92); border-bottom:1px solid var(--border);
+    backdrop-filter:blur(6px)}
+  #bar.on{display:flex}
+  #bar .brand{font-weight:600; font-size:12px; white-space:nowrap; color:var(--accent)}
+  #bar .chip{font-size:11px; padding:2px 9px; border:1px solid var(--border);
+    border-radius:999px; color:var(--muted); white-space:nowrap;
+    max-width:340px; overflow:hidden; text-overflow:ellipsis}
+  #bar .spacer{flex:1}
+  #bar button{padding:4px 11px; border-radius:6px; font-size:12px}
+
+  #frameWrap{position:absolute; inset:0}
+  #frameWrap.on{top:37px}
+  iframe#site{width:100%; height:100%; border:none; display:block; background:#fff}
+
+  /* --- нижняя панель: фрагмент сайта -> холст/ассеты (как в PDF-вьювере).
+     Сайт внешний (cross-origin), изъять картинку из его iframe нельзя,
+     поэтому «📷 Capture» снимает вкладку через Screen Capture API,
+     кадр обрезается по области сайта и «замораживается» для рамки. --- */
+  #capbar{position:absolute; left:50%; transform:translateX(-50%); bottom:12px;
+    z-index:26; display:none; align-items:center; gap:8px; flex-wrap:wrap;
+    background:rgba(22,24,27,.95); border:1px solid var(--border); border-radius:10px;
+    padding:8px 10px; max-width:calc(100% - 20px);
+    box-shadow:0 4px 22px rgba(0,0,0,.55)}
+  #capbar.on{display:flex}
+  #capbar .info{font-size:12px; color:var(--muted); white-space:nowrap}
+  #capbar .info b{color:var(--accent); font-weight:600}
+  #capbar button{font-size:12.5px; padding:5px 12px}
+  #capbar .to-assets{color:var(--ok); border-color:var(--ok)}
+
+  /* замороженный кадр + рамка фрагмента (стиль PDF-вьювера) */
+  #freeze{position:absolute; inset:0; z-index:24; display:none;
+    align-items:center; justify-content:center; padding:46px 18px 66px;
+    background:rgba(8,9,11,.82)}
+  #freeze.on{display:flex}
+  #freezeBox{position:relative; max-width:100%; max-height:100%;
+    box-shadow:0 2px 18px rgba(0,0,0,.5)}
+  #freezeCanvas{display:block; max-width:100%; max-height:100%}
+  #selLayer{position:absolute; inset:0; overflow:hidden; cursor:crosshair;
+    touch-action:none}
+  #selRect{position:absolute; display:none; border:1.5px solid var(--accent);
+    background:rgba(56,189,248,.14); box-shadow:0 0 0 9999px rgba(0,0,0,.35)}
+  #selRect .size{position:absolute; left:0; top:-22px; font-size:11px; color:#04222f;
+    background:var(--accent); border-radius:4px; padding:1px 6px; white-space:nowrap}
+
+  #dcToast{position:absolute; left:50%; transform:translateX(-50%); top:44px;
+    z-index:27; display:none; max-width:calc(100% - 20px);
+    background:rgba(22,24,27,.95); border:1px solid var(--border); border-radius:6px;
+    padding:5px 12px; font-size:12px}
+  #dcToast.err{color:var(--err); border-color:var(--err)}
+</style>
+</head>
+<body>
+
+<div id="frameWrap"><iframe id="site" title="Design Code"></iframe></div>
+
+<div id="bar">
+  <span class="brand">Design Code</span>
+  <span class="chip" id="host"></span>
+  <span class="spacer"></span>
+  <button class="ghost" id="btnReload" title="Reload the site">&#x27F3; Reload</button>
+  <button class="ghost" id="btnTab" title="Open the site in a new browser tab">&#x2197; New tab</button>
+  <button class="ghost" id="btnChange" title="Change site URL or access code">&#x2699; Change site</button>
+</div>
+
+<div id="capbar">
+  <span class="info" id="capLiveHint">Capture a screen fragment of the site, then send it to the canvas or assets</span>
+  <button id="btnCapture" title="Capture the visible site area — the browser will ask what to share, choose this tab">&#x1F4F7; Capture</button>
+  <span class="info" id="capSelInfo" hidden>Fragment: <b id="capSelOut">&mdash;</b></span>
+  <button id="btnToCanvas" hidden title="Place the fragment on the canvas as a base layer (with an inpaint mask layer)">&#x1F5BC; To Canvas</button>
+  <button id="btnToAssets" class="ghost to-assets" hidden title="Save the fragment to the gallery (Assets tab)">&#x1F4BE; To Assets</button>
+  <button id="btnCapCancel" class="ghost" hidden title="Back to the live site (Esc)">&#x2715;</button>
+</div>
+
+<div id="freeze">
+  <div id="freezeBox">
+    <canvas id="freezeCanvas"></canvas>
+    <div id="selLayer"><div id="selRect"><span class="size"></span></div></div>
+  </div>
+</div>
+
+<div id="dcToast"></div>
+
+<div id="gate">
+  <form class="card" id="form" autocomplete="off">
+    <div class="logo">Dev<span class="bim">BIM</span></div>
+    <h1>Design Code</h1>
+    <p class="hint">Open the design code knowledge base site.<br>
+      Enter the site URL and the access code you were given.</p>
+    <label for="url" id="urlLabel">Site URL</label>
+    <input id="url" type="text" placeholder="https://nw.dev-bim.com/" spellcheck="false" autofocus>
+    <label for="code" id="codeLabel">Access code</label>
+    <input id="code" type="password" placeholder="Access code" spellcheck="false">
+    <div id="err" role="alert"></div>
+    <div class="row">
+      <button type="submit" id="btnOpen">Open</button>
+      <button type="button" class="ghost" id="btnCancel" hidden>Cancel</button>
+    </div>
+  </form>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var LS_URL = "devbim:designcode:url";
+  var SS_UNLOCK = "devbim:designcode:unlocked";
+  var $ = function (id) { return document.getElementById(id); };
+  var gate = $("gate"), form = $("form"), urlIn = $("url"), codeIn = $("code"),
+      codeLabel = $("codeLabel"), errIn = $("err"), btnOpen = $("btnOpen"),
+      btnCancel = $("btnCancel"), bar = $("bar"), host = $("host"),
+      frame = $("site"), frameWrap = $("frameWrap");
+  var protectedMode = true, currentUrl = null, busy = false;
+
+  function savedUrl() {
+    try { return localStorage.getItem(LS_URL) || ""; } catch (e) { return ""; }
+  }
+
+  function openSite(url) {
+    currentUrl = url;
+    try { localStorage.setItem(LS_URL, url); } catch (e) {}
+    try { sessionStorage.setItem(SS_UNLOCK, "1"); } catch (e) {}
+    gate.hidden = true;
+    bar.classList.add("on");
+    frameWrap.classList.add("on");
+    capbarOn();
+    try { host.textContent = new URL(url).host; } catch (e) { host.textContent = url; }
+    frame.src = url;
+  }
+
+  function showGate() {
+    errIn.textContent = "";
+    codeLabel.hidden = codeIn.hidden = !protectedMode;
+    btnCancel.hidden = !currentUrl;   // отменить можно, только когда есть что показать
+    urlIn.value = savedUrl();
+    gate.hidden = false;
+    bar.classList.remove("on");
+    frameWrap.classList.remove("on");
+    capbarOff();
+    frame.src = "about:blank";
+    setTimeout(function () { (protectedMode && urlIn.value ? codeIn : urlIn).focus(); }, 50);
+  }
+
+  form.addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    if (busy) return;
+    var url = urlIn.value.trim();
+    var code = codeIn.hidden ? "-" : codeIn.value;
+    errIn.textContent = "";
+    if (!/^https?:\/\//i.test(url)) {
+      errIn.textContent = "URL must start with http:// or https://";
+      urlIn.focus();
+      return;
+    }
+    if (protectedMode && !code) {
+      errIn.textContent = "Enter the access code";
+      codeIn.focus();
+      return;
+    }
+    busy = true; btnOpen.disabled = true; btnOpen.textContent = "Opening…";
+    fetch("/api/v1/designcode/auth", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: url, code: code })
+    }).then(function (r) {
+      return r.json().then(function (body) { return { ok: r.ok, body: body }; });
+    }).then(function (res) {
+      if (res.ok && res.body.ok) { openSite(url); return; }
+      var msg = res.body && res.body.detail;
+      errIn.textContent = (typeof msg === "string" && msg) || "Failed to open the site";
+      codeIn.select();
+    }).catch(function () {
+      errIn.textContent = "Server unreachable";
+    }).finally(function () {
+      busy = false; btnOpen.disabled = false; btnOpen.textContent = "Open";
+    });
+  });
+
+  btnCancel.addEventListener("click", function () { if (currentUrl) openSite(currentUrl); });
+  $("btnReload").addEventListener("click", function () {
+    if (currentUrl) { frame.src = "about:blank"; frame.src = currentUrl; }
+  });
+  $("btnTab").addEventListener("click", function () {
+    if (currentUrl) window.open(currentUrl, "_blank", "noopener");
+  });
+  $("btnChange").addEventListener("click", showGate);
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape" && !gate.hidden && currentUrl) openSite(currentUrl);
+  });
+
+  // ============ нижняя панель: фрагмент сайта -> холст/ассеты ============
+  // Сайт внешний (cross-origin), прочитать содержимое его iframe нельзя —
+  // картинку снимает Screen Capture API (getDisplayMedia с предвыбором
+  // текущей вкладки; панель/тост на время захвата прячутся, чтобы не попасть
+  // в кадр). Кадр обрезается по области iframe сайта и «замораживается»:
+  // поверх рамкой выделяется фрагмент (как в PDF-вьювере) и отправляется
+  // «To Canvas» (общий мост __devbimIfc.toCanvas, категория general) или
+  // «To Assets» (upload с category=user -> вкладка «Assets» галереи).
+  var capbar = $("capbar"), btnCapture = $("btnCapture"),
+      btnToCanvas = $("btnToCanvas"), btnToAssets = $("btnToAssets"),
+      btnCapCancel = $("btnCapCancel"), capLiveHint = $("capLiveHint"),
+      capSelInfo = $("capSelInfo"), capSelOut = $("capSelOut"),
+      freeze = $("freeze"), freezeCanvas = $("freezeCanvas"),
+      selLayer = $("selLayer"), selRect = $("selRect"), toastEl = $("dcToast");
+  var capCanvas = null;     // захваченный кадр области сайта (canvas)
+  var capSelection = null;  // {x,y,w,h} в пикселях capCanvas; null = вся область
+  var capBusy = false, capDrag = null;
+
+  function toast(msg, isErr, ms) {
+    toastEl.textContent = msg;
+    toastEl.className = isErr ? "err" : "";
+    toastEl.style.display = "block";
+    clearTimeout(toastEl._tm);
+    toastEl._tm = setTimeout(function () { toastEl.style.display = "none"; }, ms || 2600);
+  }
+
+  function capLiveMode() {
+    capCanvas = null; capSelection = null;
+    freeze.classList.remove("on");
+    capLiveHint.hidden = false; btnCapture.hidden = false;
+    capSelInfo.hidden = true; btnToCanvas.hidden = true;
+    btnToAssets.hidden = true; btnCapCancel.hidden = true;
+    btnToCanvas.disabled = false; btnToAssets.disabled = false;
+  }
+  function capbarOn() { capLiveMode(); capbar.classList.add("on"); }
+  function capbarOff() { capLiveMode(); capbar.classList.remove("on"); }
+
+  // прямоугольник элемента в координатах верхнего окна (вкладки) —
+  // суммируем смещения по цепочке вложенных iframe (все same-origin)
+  function rectInTop(el) {
+    var r = el.getBoundingClientRect(), win = window;
+    while (win !== win.parent) {
+      var p = win.parent, ifr = null;
+      try {
+        var fr = p.document.querySelectorAll("iframe");
+        for (var i = 0; i < fr.length; i++) if (fr[i].contentWindow === win) { ifr = fr[i]; break; }
+      } catch (e) { break; }
+      if (!ifr) break;
+      var pr = ifr.getBoundingClientRect();
+      r = { left: r.left + pr.left, top: r.top + pr.top, width: r.width, height: r.height };
+      win = p;
+    }
+    return r;
+  }
+
+  btnCapture.addEventListener("click", function () {
+    if (capBusy || !currentUrl) return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+      toast("Screen capture is not supported in this browser", true, 5000);
+      return;
+    }
+    capBusy = true; btnCapture.disabled = true;
+    var stream = null;
+    navigator.mediaDevices.getDisplayMedia({
+      audio: false,
+      video: { displaySurface: "browser" },
+      preferCurrentTab: true,        // Chrome: предвыбор текущей вкладки
+      selfBrowserSurface: "include"  // текущая вкладка доступна в пикере
+    }).then(function (st) {
+      stream = st;
+      var v = document.createElement("video");
+      v.srcObject = st; v.muted = true;
+      // панель и тост не должны попасть в кадр — прячем до захвата кадра
+      capbar.style.visibility = "hidden";
+      toastEl.style.display = "none";
+      return new Promise(function (res, rej) {
+        var frames = 0, done = false;
+        var finish = function (ok) {
+          if (done) return; done = true;
+          ok ? res(v) : rej(new Error("no video frame"));
+        };
+        v.addEventListener("loadedmetadata", function () { v.play().catch(function () {}); });
+        v.addEventListener("error", function () { finish(false); });
+        var step = function () {            // ждём пару кадров после скрытия панели
+          if (v.videoWidth) frames++;
+          if (frames >= 2) { finish(true); return; }
+          if (v.requestVideoFrameCallback) v.requestVideoFrameCallback(function () { step(); });
+          else setTimeout(step, 120);
+        };
+        setTimeout(step, 150);
+        setTimeout(function () { finish(v.videoWidth > 0); }, 5000);
+      });
+    }).then(function (v) {
+      var top = window.top;
+      var kx = v.videoWidth / (top.innerWidth || 1);   // пиксели кадра на CSS-px вкладки
+      var ky = v.videoHeight / (top.innerHeight || 1);
+      var r = rectInTop(frame);
+      var sx = Math.max(0, Math.round(r.left * kx));
+      var sy = Math.max(0, Math.round(r.top * ky));
+      var sw = Math.min(v.videoWidth - sx, Math.max(1, Math.round(r.width * kx)));
+      var sh = Math.min(v.videoHeight - sy, Math.max(1, Math.round(r.height * ky)));
+      if (sw < 4 || sh < 4) throw new Error("empty capture area");
+      var c = document.createElement("canvas");
+      c.width = sw; c.height = sh;
+      c.getContext("2d").drawImage(v, sx, sy, sw, sh, 0, 0, sw, sh);
+      return c;
+    }).then(function (c) {
+      capbar.style.visibility = "";
+      stream.getTracks().forEach(function (t) { t.stop(); });
+      capCanvas = c;
+      showFreeze();
+    }).catch(function (e) {
+      capbar.style.visibility = "";
+      if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
+      if (e && (e.name === "NotAllowedError" || e.name === "AbortError")) return;  // отмена пикера
+      toast("Capture failed: " + (e && e.message || e), true, 6000);
+    }).finally(function () {
+      capBusy = false; btnCapture.disabled = false;
+    });
+  });
+
+  function showFreeze() {
+    freezeCanvas.width = capCanvas.width;
+    freezeCanvas.height = capCanvas.height;
+    freezeCanvas.getContext("2d").drawImage(capCanvas, 0, 0);
+    freeze.classList.add("on");
+    capLiveHint.hidden = true; btnCapture.hidden = true;
+    capSelInfo.hidden = false; btnToCanvas.hidden = false;
+    btnToAssets.hidden = false; btnCapCancel.hidden = false;
+    requestAnimationFrame(setFullSelection);
+  }
+  function hideFreeze() { capLiveMode(); }
+
+  // масштаб отображения замороженного кадра (CSS px) -> пиксели захвата
+  function capScale() {
+    return capCanvas ? (capCanvas.width / (freezeCanvas.clientWidth || capCanvas.width)) : 1;
+  }
+
+  function setSelRect(x, y, w, h) {
+    selRect.style.left = x + "px"; selRect.style.top = y + "px";
+    selRect.style.width = w + "px"; selRect.style.height = h + "px";
+    selRect.style.display = "block";
+  }
+  function setSelBadge(w, h) {
+    selRect.firstElementChild.textContent = Math.round(w) + " \u00d7 " + Math.round(h);
+  }
+  function setFullSelection() {
+    capSelection = null;
+    var r = selLayer.getBoundingClientRect();
+    setSelRect(0, 0, r.width, r.height);
+    if (capCanvas) setSelBadge(capCanvas.width, capCanvas.height);
+    updateSelInfo();
+  }
+  function updateSelInfo() {
+    if (!capCanvas) return;
+    var s = capSelection || { x: 0, y: 0, w: capCanvas.width, h: capCanvas.height };
+    capSelOut.textContent = Math.round(s.w) + " \u00d7 " + Math.round(s.h) + " px";
+  }
+
+  function pointInLayer(e) {
+    var r = selLayer.getBoundingClientRect();
+    return {
+      x: Math.min(Math.max(e.clientX - r.left, 0), r.width),
+      y: Math.min(Math.max(e.clientY - r.top, 0), r.height)
+    };
+  }
+
+  selLayer.addEventListener("pointerdown", function (e) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    selLayer.setPointerCapture(e.pointerId);
+    var p = pointInLayer(e);
+    capDrag = { x0: p.x, y0: p.y };
+    setSelRect(p.x, p.y, 0, 0);
+    setSelBadge(0, 0);
+  });
+  selLayer.addEventListener("pointermove", function (e) {
+    if (!capDrag) return;
+    var p = pointInLayer(e);
+    var x = Math.min(capDrag.x0, p.x), y = Math.min(capDrag.y0, p.y);
+    var w = Math.abs(p.x - capDrag.x0), h = Math.abs(p.y - capDrag.y0);
+    setSelRect(x, y, w, h);
+    setSelBadge(w * capScale(), h * capScale());
+  });
+  selLayer.addEventListener("pointerup", function (e) {
+    if (!capDrag) return;
+    var p = pointInLayer(e);
+    var w = Math.abs(p.x - capDrag.x0), h = Math.abs(p.y - capDrag.y0);
+    var x = Math.min(capDrag.x0, p.x), y = Math.min(capDrag.y0, p.y);
+    capDrag = null;
+    if (w < 8 || h < 8) { setFullSelection(); return; }  // клик = вся область
+    var k = capScale();
+    capSelection = {
+      x: Math.round(x * k), y: Math.round(y * k),
+      w: Math.round(w * k), h: Math.round(h * k)
+    };
+    updateSelInfo();
+  });
+  selLayer.addEventListener("pointercancel", function () { capDrag = null; setFullSelection(); });
+
+  btnCapCancel.addEventListener("click", hideFreeze);
+  document.addEventListener("keydown", function (ev) {
+    if (ev.key === "Escape" && freeze.classList.contains("on")) hideFreeze();
+  });
+
+  // Контекст моста держит смонтированная вкладка (DCE v2). Если страница
+  // приложения работает на СТАРОМ бандле (открыта до обновления и без F5),
+  // контекста нет и toCanvas падает «canvas context unavailable» — добираем
+  // redux-store через канвас-мост __devbimCanvasBridge (есть во всех бандлах
+  // с 05.09). ВАЖНО: вся последовательность (поллинг менеджера холста,
+  // переключение вкладки на «Холст», вызов моста) исполняется в контексте
+  // ПРИЛОЖЕНИЯ (new parent.Function) — наш iframe при переключении вкладки
+  // отсоединяется, и его таймеры/промисы умирают (проверено E2E 11.09).
+  function toCanvasViaBridge(dto) {
+    var p = window.parent;
+    var api = p && p.__devbimIfc;
+    if (!api || !api.toCanvas) throw new Error("canvas bridge unavailable (reload the page)");
+    if (p.__devbimIfcCtx) return api.toCanvas(dto, false);   // быстрый путь: контекст есть
+    try {
+      if (!p.__devbimSendToCanvas) {
+        p.__devbimSendToCanvas = new p.Function("dto",
+          "var P=window;return (async function(){" +
+          "var tryStore=function(){try{" +
+          "var m=P.__devbimCanvasBridge&&P.__devbimCanvasBridge.getManager&&P.__devbimCanvasBridge.getManager();" +
+          "var s=m&&m.stateApi&&m.stateApi.store;" +
+          "if(s&&s.dispatch&&s.getState){P.__devbimIfcCtx=s;return true}}catch(e){}return false};" +
+          "if(!tryStore()){for(var n=0;n<40;n++){" +
+          "await new Promise(function(r){setTimeout(r,100)});" +
+          "if(tryStore())break;" +
+          "if(n===3&&P.__devbimSwitchTab){try{P.__devbimSwitchTab('canvas')}catch(e){}}}}" +
+          "if(!P.__devbimIfcCtx)throw new Error('canvas context unavailable — reload the page (F5)');" +
+          "return P.__devbimIfc.toCanvas(dto,false);})();");
+      }
+      return p.__devbimSendToCanvas(dto);
+    } catch (e) {
+      return Promise.reject(e);
+    }
+  }
+
+  // фрагмент -> PNG -> /api/v1/images/upload (multipart: POST /api/v1/images/
+  // в 6.2 — JSON-запись); category=user -> вкладка «Assets» галереи,
+  // general — проверенный путь «To Canvas» (как IFC/PDF-снимки)
+  function sendFragment(toCanvas) {
+    if (!capCanvas) return;
+    var btn = toCanvas ? btnToCanvas : btnToAssets;
+    btn.disabled = true;
+    var sel = capSelection || { x: 0, y: 0, w: capCanvas.width, h: capCanvas.height };
+    var crop = document.createElement("canvas");
+    crop.width = sel.w; crop.height = sel.h;
+    crop.getContext("2d").drawImage(capCanvas, sel.x, sel.y, sel.w, sel.h, 0, 0, sel.w, sel.h);
+    crop.toBlob(function (blob) {
+      if (!blob) { btn.disabled = false; toast("PNG encoding failed", true); return; }
+      var fd = new FormData();
+      fd.append("file", blob, "designcode-fragment.png");
+      fetch("/api/v1/images/upload?image_category=" + (toCanvas ? "general" : "user") +
+            "&is_intermediate=false", { method: "POST", body: fd })
+        .then(function (r) { if (!r.ok) throw new Error("HTTP " + r.status); return r.json(); })
+        .then(function (dto) {
+          if (!toCanvas) {
+            toast('Fragment saved to the gallery "Assets" tab');
+            hideFreeze(); return;
+          }
+          return toCanvasViaBridge(dto).then(function () {
+            toast("Fragment placed on canvas — brush an inpaint mask, then Generate");
+            hideFreeze();
+          });
+        })
+        .catch(function (e) { toast("Error: " + (e && e.message || e), true, 6000); })
+        .finally(function () { btn.disabled = false; });
+    }, "image/png");
+  }
+  btnToCanvas.addEventListener("click", function () { sendFragment(true); });
+  btnToAssets.addEventListener("click", function () { sendFragment(false); });
+
+  // старт: код уже вводился в этой сессии браузера + сохранённый URL → сразу сайт
+  var unlocked = false;
+  try { unlocked = sessionStorage.getItem(SS_UNLOCK) === "1"; } catch (e) {}
+  fetch("/api/v1/designcode/auth").then(function (r) { return r.json(); })
+    .then(function (status) {
+      protectedMode = !!status.protected;
+      var url = savedUrl() || (status.default_url || "");
+      if (url && (!protectedMode || unlocked)) openSite(url);
+      else { showGate(); urlIn.value = url; }
+    }).catch(function () { showGate(); });  // сервер недоступен — форма покажет ошибку при отправке
+})();
+</script>
+</body>
+</html>

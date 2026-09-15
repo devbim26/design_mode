@@ -759,6 +759,41 @@ async function uploadImage(blob, name, category = "general") {
   return await r.json(); // ImageDTO
 }
 
+// Контекст моста держит смонтированная вкладка/панель (PDFE v2 и др.).
+// Если страница приложения работает на СТАРОМ бандле (открыта до
+// обновления и без F5), контекста нет и toCanvas падает «canvas context
+// unavailable» — добираем redux-store через канвас-мост
+// __devbimCanvasBridge (есть во всех бандлах с 05.09). ВАЖНО: вся
+// последовательность (поллинг менеджера, переключение вкладки на «Холст»,
+// вызов моста) исполняется в контексте ПРИЛОЖЕНИЯ (new parent.Function) —
+// наш iframe при переключении вкладки отсоединяется, и его таймеры/промисы
+// умирают (проверено E2E 11.09).
+function toCanvasViaBridge(dto) {
+  const p = window.parent;
+  const api = p && p.__devbimIfc;
+  if (!api || !api.toCanvas) throw new Error("canvas bridge unavailable (reload the page)");
+  if (p.__devbimIfcCtx) return api.toCanvas(dto, false);   // быстрый путь: контекст есть
+  try {
+    if (!p.__devbimSendToCanvas) {
+      p.__devbimSendToCanvas = new p.Function("dto",
+        "var P=window;return (async function(){" +
+        "var tryStore=function(){try{" +
+        "var m=P.__devbimCanvasBridge&&P.__devbimCanvasBridge.getManager&&P.__devbimCanvasBridge.getManager();" +
+        "var s=m&&m.stateApi&&m.stateApi.store;" +
+        "if(s&&s.dispatch&&s.getState){P.__devbimIfcCtx=s;return true}}catch(e){}return false};" +
+        "if(!tryStore()){for(var n=0;n<40;n++){" +
+        "await new Promise(function(r){setTimeout(r,100)});" +
+        "if(tryStore())break;" +
+        "if(n===3&&P.__devbimSwitchTab){try{P.__devbimSwitchTab('canvas')}catch(e){}}}}" +
+        "if(!P.__devbimIfcCtx)throw new Error('canvas context unavailable — reload the page (F5)');" +
+        "return P.__devbimIfc.toCanvas(dto,false);})();");
+    }
+    return p.__devbimSendToCanvas(dto);
+  } catch (e) {
+    return Promise.reject(e);
+  }
+}
+
 async function sendFragment({ toCanvas = false } = {}) {
   if (!selection || !pdf) { setStatus("Select a fragment first (drag a frame)", true); return; }
   const btn = toCanvas ? $("btn-to-canvas") : $("btn-save-assets");
@@ -768,9 +803,7 @@ async function sendFragment({ toCanvas = false } = {}) {
     const { blob, name } = await cropSelection();
     if (toCanvas) {
       const dto = await uploadImage(blob, name, "general");
-      const api = window.parent && window.parent.__devbimIfc;
-      if (!api?.toCanvas) throw new Error("canvas bridge unavailable (reload the page)");
-      await api.toCanvas(dto, false);
+      await toCanvasViaBridge(dto);
       setStatus(`Page ${pageNum} fragment placed on canvas — brush an inpaint mask, then Generate`);
     } else {
       const dto = await uploadImage(blob, name, "user");
