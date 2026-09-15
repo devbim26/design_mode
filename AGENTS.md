@@ -5,12 +5,14 @@
 ## Что это
 
 Локальный InvokeAI 6.2.0 (CPU) с ребрендингом DevBIM, облачной генерацией
-ImageRouter, IFC-вьювером, PDF-вьювером, гейтом сайта по паролю и
+ImageRouter, IFC-вьювером, PDF-вьювером, вьювером сайт-базы дизайн-кода
+(«Design Code»), гейтом сайта по паролю и
 мультитенантностью «экземпляр на компанию». Скрипты патчат пакет в
 `venv/Lib/site-packages/invokeai/` — после
 `pip install --force-reinstall invokeai==6.2.0` применять в порядке:
 `rebrand_devbim.py` → `setup_imagerouter.py` → `setup_ifcviewer.py` →
-`setup_pdfviewer.py` → `setup_site_auth.py` → `setup_style_presets.py`.
+`setup_pdfviewer.py` → `setup_designcode.py` →
+`setup_site_auth.py` → `setup_style_presets.py`.
 Все — идемпотентны.
 
 ## Где что
@@ -20,6 +22,9 @@ ImageRouter, IFC-вьювером, PDF-вьювером, гейтом сайта
 - `imagerouter/` — посредник облачной генерации (перехват enqueue_batch).
 - `ifc/` — IFC-вьювер и его роутер.
 - `pdf/` — PDF-вьювер (вкладка «PDF») и его роутер.
+- `design_code/` — вьювер сайта дизайн-кода (вкладка «Design Code»:
+  модалка «URL + код», iframe сайта) и его роутер; код доступа —
+  DESIGN_CODE_ACCESS_CODE в .env (per-company).
 - `company_manager.py`, `create_company.py`, `start_company.bat`,
   `stop_company.py`, `list_companies.py` — компании-лицензиаты
   (экземпляр на компанию, порты 9100+).

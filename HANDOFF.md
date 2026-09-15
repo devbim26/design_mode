@@ -1225,13 +1225,208 @@ invokeai==6.2.0` их нужно запускать повторно в поря
       `docs/text-tool-{panel-preview,created,final}.png`. Тесты:
       `tests/test_text_tool.py` (+ в блок «Проверка после изменений»).
 
+33. **Вкладка «Design Code» — вьювер сайта дизайн-кода** (10.09; запрос
+    пользователя: кнопка вьювера → модальное окно «URL сайта + код» →
+    интерактивное окно с сайтом типа https://nw.dev-bim.com/). Спека:
+    `docs/superpowers/specs/2026-09-10-design-code-viewer-design.md`.
+    Всё по паттерну PDF-вьювера (п.18), БЕЗ моста на холст (сайт внешний,
+    cross-origin).
+    - **UI**: кнопка в левой рейке после PDF (id `designcode`, label
+      «Design Code», иконка-палитра — Phosphor palette fill; встраивается
+      собственной function-декларацией `DCI` через бандловый хелпер `ue`
+      (GenIcon) — того же формата, что RA/vx; ГРАБЛЯ: глобы/palette в
+      бандле НЕТ, путь взят из react-icons@5.5.0/pi PiPaletteFill).
+      Панель вкладки — iframe `/design_code_viewer.html` (компонент `DCE`
+      перед `const cue=u.memo(`, unregisterTab в cleanup, `designcode`
+      добавлен в zod-enum activeTab index-бандла — вкладка переживает F5).
+    - **Страница** `design_code/design_code_viewer.html`: без сохранённого
+      URL/разблокировки — модальная карточка «Site URL» (префилл из
+      DESIGN_CODE_URL .env или последнего ввода) + «Access code» →
+      POST /api/v1/designcode/auth → при успехе iframe грузит сайт, URL —
+      в localStorage `devbim:designcode:url`, разблокировка — в
+      sessionStorage `devbim:designcode:unlocked` (код спрашивается РАЗ
+      на вкладку браузера, как админ-гейт; «⚙ Change site» → модалка
+      снова, Esc/Cancel — назад к сайту). Плавающий тулбар: чип хоста,
+      «⟳ Reload», «↗ New tab» (если сайт запрещает встраивание
+      X-Frame-Options — iframe пустой, спасает ↗), «⚙ Change site».
+      Язык EN (базовый, решение 05.09); RU — отдельная задача.
+    - **Роутер** `design_code/design_code_router.py` →
+      `routers/design_code.py`: GET/POST `/api/v1/designcode/auth`;
+      код — `DESIGN_CODE_ACCESS_CODE` из .env (per-company, перечитывается
+      на каждом вызове как siteauth — смена кода БЕЗ рестарта; не задан
+      или пустой → защита выключена, модалка код не спрашивает — зеркало
+      admin-auth); URL обязан http(s)://; неверный код — 401 + пауза 0.3 с
+      (hmac.compare_digest).
+    - Деплой: `setup_designcode.py` (идемпотентен, бэкапы
+      `*.designcode-bak`; гейт: PDF-патчи обязаны быть применены — якоря
+      сидят на pdf-кнопке/панели). Порядок после force-reinstall: rebrand
+      → imagerouter → ifcviewer → pdfviewer → **designcode** → siteauth.
+      venv общий — вкладка появляется у всех компаний, код у каждой свой
+      (`companies/<код>/.env`).
+    - E2E 10.09 (Playwright, живой туннель): кнопка в рейке → модалка с
+      префиллом https://nw.dev-bim.com/ → неверный код «Неверный код
+      доступа» → nw2026 → сайт «Северный Берег» открыт в iframe (скриншот
+      docs/designcode-site-open.png), ⚙/Esc/⟳ работают, F5 — вкладка
+      восстановилась, код НЕ запрошен повторно (0 ошибок консоли).
+      Скриншоты: docs/designcode-{gate,site-open,after-f5}.png.
+      Тесты: `tests/test_designcode.py`. Отладка: код в .env (дефолт
+      nw2026), страница — прямой URL /design_code_viewer.html.
+
+34. **Нижние панели «To Canvas / To Assets» в вкладках Design Code и IFC**
+    (11.09; запрос пользователя «добавь панель (внизу окна) копирования на
+    холст или в ассеты, как в PDF-вьюере»). Спека:
+    `docs/superpowers/specs/2026-09-11-copy-to-canvas-panels-design.md`.
+    - **IFC (вкладка)**: snapbar `#snapbar` («📸 To Canvas» + «💾 To
+      Assets») существовал только в embed-режиме — теперь CSS показывает
+      его в ОБЕИХ режимах (в вкладке селектор моделей скрыт, он в шапке),
+      обработчики подключаются до `if (EMBED)`, тост `embedToast` больше не
+      гасится вне embed. Снимок — прежний renderSnapshot (прозрачный фон,
+      контактная тень, кратно 64). Мост: **IFE v2** в `setup_ifcviewer.py`
+      — компонент вкладки IFC захватывает `Je()` в `window.__devbimIfcCtx`
+      при монтировании (как PDFE v2; раньше контекст держали только IFCV
+      и PDFE/PDFV — из вкладки IFC мост падал «canvas context
+      unavailable»). Миграция v1→v2 повторным запуском setup.
+    - **Design Code**: сайт cross-origin — прочитать его iframe НЕЛЬЗЯ,
+      картинку снимает Screen Capture API. Панель `#capbar` внизу (когда
+      сайт открыт): «📷 Capture» → getDisplayMedia({video:
+      {displaySurface:"browser"}, preferCurrentTab:true, selfBrowserSurface:
+      "include"}) → кадр кропается по rect iframe `#site` в координатах
+      вкладки (`rectInTop` — сумма смещений по цепочке same-origin iframe,
+      масштаб videoWidth/top.innerWidth — DPR вкладки) → «заморозка»
+      `#freeze` (canvas + selLayer): рамка фрагмента как в PDF (drag, бейдж
+      «W × H», затемнение вне рамки, клик = вся область, Esc/✕ — назад),
+      панель переключается в «Fragment: W × H px» + «🖼 To Canvas» +
+      «💾 To Assets». Отправка — путь IFC/PDF: PNG → `/api/v1/images/upload`
+      (general/user) → мост `__devbimIfc.toCanvas` (подложка + маска +
+      кисть) / вкладка «Assets». ГРАБЛИ: (а) панель/тост прячутся
+      (visibility) ДО захвата кадра, ждём 2 новых кадра (rVFC, фолбэк
+      таймеры 180 мс, общий таймаут 3 с) — иначе они попадают в снимок;
+      (б) отмена пикера = NotAllowedError/AbortError — тихо; (в) выбрана
+      другая поверхность — видно в замороженном превью, Esc и повторить;
+      (г) Permissions-Policy display-capture ('self') — iframe вьювера
+      same-origin, allow-атрибут не нужен. Мост: **DCE v2** в
+      `setup_designcode.py` (захват `__devbimIfcCtx`, миграция v1→v2);
+      вкладки designcode/canvas не активны одновременно — глобаль не
+      спорит с PDFE/IFE/IFCV/PDFV.
+    - E2E 11.09 (Playwright; getDisplayMedia подменён canvas-стримом с
+      контрольными цветами): кроп пиксельно точен (центр #7cc7ff — область
+      сайта, не фон), рамка drag → «Fragment: 585 × 287 px», To Assets →
+      201 user + тост + freeze закрыт; To Canvas из вкладки Design Code →
+      приложение на «Холсте», растр 1170×706 + слой маски + кисть
+      (DCE v2 live); IFC вкладка: snapbar display:flex, селектор скрыт,
+      example.ifc → To Assets 201 user, To Canvas → «Холст», растр
+      704×768 + маска + кисть (IFE v2 live); 0 ошибок консоли. Тестовые
+      слои/картинки вычищены. Скриншоты:
+      docs/designcode-{capture-selection,to-canvas-result}.png,
+      docs/ifc-tab-to-canvas-result.png. Тесты: `tests/test_ifc_sections.py`
+      (+test_snapbar_tab_mode), `tests/test_designcode.py` (панель + DCE v2
+      + node --check скрипта страницы). Правка панелей —
+      design_code/design_code_viewer.html + ifc/ifcviewer.html + повторный
+      setup_*; откат бандлов — *.ifcviewer-bak / *.designcode-bak.
+    - **ДОПОЛНЕНИЕ (11.09, после живого теста пользователя «Error: IFC:
+      canvas context unavailable»)**: вкладка пользователя была открыта ДО
+      деплоя — iframe вьюера обновился (панель видна), а внешний App-бандл
+      остался старым (без DCE v2) → мост есть, контекста нет (та же грабля
+      п.23: без F5). Сделан ФОЛБЭК `toCanvasViaBridge(dto)` во ВСЕХ трёх
+      вьюерах (design_code/pdf/ifc): если `__devbimIfcCtx` пуст — скрипт
+      `__devbimSendToCanvas` (создаётся `new parent.Function` — ИСПОЛНЯЕТСЯ
+      В КОНТЕКСТЕ ПРИЛОЖЕНИЯ) поллит `__devbimCanvasBridge.getManager()`
+      (есть во всех бандлах с 05.09), при необходимости переключает вкладку
+      на «Холст» (`__devbimSwitchTab('canvas')`), ставит
+      `__devbimIfcCtx = manager.stateApi.store` ({dispatch,getState} стора —
+      ровно то, что читает мост) и вызывает `__devbimIfc.toCanvas(dto)`.
+      ГРАБЛИ (почему именно parent.Function): первый вариант фолбэка с
+      setInterval ВНУТРИ iframe терял вызов — при переключении вкладки наш
+      iframe отсоединяется и ЕГО таймеры/промисы умирают (контекст
+      успевали поставить смонтированные панели, но toCanvas не вызывался);
+      колбэк родительского realm переживает detach. Быстрый путь (контекст
+      уже есть) вызывает мост напрямую. E2E 11.09 (эмуляция старого бандла:
+      `__devbimIfcCtx=null` до клика, менеджер не поднят): To Canvas из
+      Design Code → сам переключил вкладку, добыл сторе, растр 1172×707 +
+      маска + кисть (скриншот docs/designcode-stale-bundle-fallback.png);
+      после F5 быстрый путь цел. Заодно починена идемпотентность
+      `setup_pdfviewer.patch_index_bundle` (та же грабля, что п.20 у
+      ifcviewer: точный поиск enum не находил бандл после добавления
+      designcode — теперь regex по наличию "pdf" в enum).
+
+35. **Кнопки «Prompt Assistant» и «3D Design» в правом углу баннера**
+    (15.09; запрос пользователя: «добавь текст на кнопку улучшателя промтов,
+    выровняй высоту с Generate, добавь кнопку 3D Design другого цвета,
+    обе — группой в правом углу»). Спека не писалась (малый UI-патч по
+    готовым паттернам).
+    - **Патч App-бандла v2** (`patch_prompt_enhance_button`,
+      миграция V1→V2 повторным запуском setup): вместо голубой кнопки ✨
+      56×40px в слоте 60px у Generate в бандле остаётся только ХОСТ:
+      глобал `window.__devbimPromptEnhance()` (ci.setPending + lb — тот же
+      штатный флоу Prompt Expansion; фолбэк стора — менеджер холста
+      `__devbimCanvasBridge.getManager().stateApi.store`, клик работает и
+      до монтирования ряда Generate) и невидимый наблюдатель DevbimPEWatch
+      на старом месте в ряду (при каждом рендере обновляет
+      `__devbimPEStore` / `__devbimPEPending`). Слот 60px у Generate
+      вернулся к стоковому пустому виду (заглушка V1 удалена).
+    - **Виджет** `imagerouter/devbim_topright_buttons.js` →
+      `dist/devbim-topright-buttons.js` + script в index.html (новая
+      `deploy_topright_buttons()` в setup_imagerouter.py, бэкап
+      `index.html.topright-bak`, идемпотентно; бандлы НЕ тронуты — после
+      деплоя достаточно F5). Группа `#devbim-tr-btns` живёт в ПРАВОМ углу
+      ЛЕВОЙ ПАНЕЛИ — в ряду жёлтой Generate (очереди), за Spacer'ом
+      (поправка 15.09 по фидбеку пользователя: «правый угол не всего
+      интерфейса, а левой панели»; первая версия была в баннере).
+      Локале-независимый поиск ряда: жёлтая invokeYellow кнопка ~36px
+      в верхней части панели (rgb-эвристика: R>180, G>140, B<110) →
+      контейнер 200px → родительский ряд с .chakra-numberinput. Тик 500
+      мс пере-вставляет группу при ремоунте панели (React вычищает её
+      вместе с рядом) и прячет на вкладках без ряда (Workflows/IFC/PDF/
+      Design Code). АДАПТИВНОСТЬ (по фидбеку пользователя 15.09: «при
+      уменьшении панели кнопки пропадали»; доработка — «в деградированном
+      виде оставить звёздочку и текст 3D»): fit(row) каждый тик считает
+      свободное место (ширина ряда − контейнер Generate − gap) и при
+      <240px переключает группу в класс devbim-tr-compact — кнопки 36×36
+      без длинного текста: у ✨ остаётся ЗВЁЗДОЧКА (svg), у «3D Design» —
+      короткая подпись «3D» (атрибут data-short выводится через ::after);
+      min-width:14px/flex-shrink:1 — страховка от полного исчезновения
+      (на практике панель dockview и так не уже ~408px — компактный вид
+      помещается всегда). Расширение панели возвращает полный вид. Кнопка ✨
+      «Prompt Assistant» (#38BDF8, клик → `__devbimPromptEnhance`,
+      приглушается пока VLM работает по `__devbimPEPending`) и «3D
+      Design» (#A78BFA, заглушка — тост «раздел в разработке»;
+      функциональность — отдельная задача). Высота ОБЕИХ кнопок 36px =
+      Generate (было 40px — «немного больше», по жалобе); шрифт 13px,
+      паддинг 10px — чтобы пара с текстом влезла в свободные ~250px
+      ряда (панель 456px: 200 контейнер Generate + группа 229px).
+      Тосты RU/EN по языку интерфейса (IndexedDB-поллинг, как у баннера).
+    - E2E 15.09 (Playwright, живой сервер; после поправки размещения):
+      группа в ряду Generate левой панели (правый край группы = правый
+      край ряда, y=50 = Generate), высоты Generate/PE/3D = 36px; на
+      «Холсте» группа на месте в ряду той вкладки, на IFC — скрыта,
+      возврат на Generate — снова на месте; сжатие панели драгом sash
+      dockview: 456px → полный вид, минимум панели ~408px → компактный
+      вид (✨-звёздочка + «3D», 36×36, кнопки видимы),
+      расширение → полный вид возвращается; старой кнопки в ряду
+      Generate нет, клик «Prompt Assistant» запускает штатный оверлей
+      (кнопка disabled на время работы VLM), результат учитывает картинку
+      из вьювера, Discard закрывает без изменений промта; «3D Design» —
+      тост. Скриншоты docs/topright-buttons-{final,compact}.png. Тесты:
+      `tests/test_topright_buttons.py` (+ обновлён
+      test_patch_prompt_enhance_button в tests/test_prompt_enhancer.py
+      под v2). Отладка: `window.__devbimPromptEnhance` (function),
+      `__devbimPEStore`, `__devbimPEPending`; DOM — `#devbim-tr-btns`
+      (класс devbim-tr-compact = компактный вид: звёздочка + «3D»).
+      Откат: восстановить `*.imagerouter-bak` App-бандл (или повторный
+      setup после отката виджета), `index.html.topright-bak`, удалить
+      `dist/devbim-topright-buttons.js`.
+
 ## Проверка после изменений
+
 
 ```powershell
 cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
 .\venv\Scripts\python.exe .\setup_imagerouter.py        # применить патчи
 .\venv\Scripts\python.exe .\setup_ifcviewer.py          # вкладка IFC (идемпотентно)
 .\venv\Scripts\python.exe .\setup_pdfviewer.py          # вкладка PDF (идемпотентно)
+.\venv\Scripts\python.exe .\setup_designcode.py         # вкладка Design Code (идемпотентно)
+.\venv\Scripts\python.exe .\tests\test_designcode.py    # код доступа/URL + патчи
+.\venv\Scripts\python.exe .\tests\test_topright_buttons.py # кнопки Prompt Assistant / 3D Design
 .\venv\Scripts\python.exe .\tests\test_mask_toggle.py   # тумблер Маска/Слой
 .\venv\Scripts\python.exe .\tests\test_cut_tool.py      # ✂ вырезание по контуру
 .\venv\Scripts\python.exe .\tests\test_text_tool.py    # T текстовый слой
