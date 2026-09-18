@@ -63,6 +63,49 @@ def test_build_genplan():
     print("test_build_genplan OK")
 
 
+def test_extract_json():
+    from threed.threed_scenarios import extract_json
+    assert extract_json('```json\n{"a": 1}\n```') == {"a": 1}
+    assert extract_json('Вот ответ: {"a": [1,2]} конец.') == {"a": [1, 2]}
+    assert extract_json("никакого json нет") is None
+    print("test_extract_json OK")
+
+
+def test_validate_genplan():
+    from threed.threed_scenarios import validate_genplan
+    # валидная сцена проходит, дефолты проставлены
+    s = sample_scene()
+    s.pop("residential_storey_height")
+    out, warn = validate_genplan(s, 800, 600)
+    assert out["residential_storey_height"] == 3.1
+    assert len(out["sections"]) == 2
+    # координаты за пределами картинки клампятся
+    s = sample_scene()
+    s["sections"][0]["points_px"] = [[-50, 100], [900, 100], [900, 300], [-50, 300]]
+    out, warn = validate_genplan(s, 800, 600)
+    xs = [p[0] for p in out["sections"][0]["points_px"]]
+    assert min(xs) >= 0 and max(xs) <= 800
+    # битая секция выкидывается с warning
+    s = sample_scene()
+    s["sections"][1]["points_px"] = [[1, 1]]  # мало точек
+    out, warn = validate_genplan(s, 800, 600)
+    assert len(out["sections"]) == 1 and any("Ш-1" in w for w in warn)
+    # этажность клампится 1..30
+    s = sample_scene()
+    s["sections"][0]["floors"] = 99
+    out, _ = validate_genplan(s, 800, 600)
+    assert out["sections"][0]["floors"] == 30
+    # неизвестный kind контекста выкидывается
+    s = sample_scene()
+    s["context"].append({"kind": "Beach", "z": 0, "depth": 0.1,
+                         "points_px": [[0, 0], [10, 0], [10, 10], [0, 10]]})
+    out, warn = validate_genplan(s, 800, 600)
+    assert len(out["context"]) == 1 and any("Beach" in w for w in warn)
+    print("test_validate_genplan OK")
+
+
 if __name__ == "__main__":
     test_build_genplan()
+    test_extract_json()
+    test_validate_genplan()
     print("ALL OK")
