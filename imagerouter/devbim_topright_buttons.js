@@ -53,7 +53,7 @@
       noSource: 'Put an image on the Canvas or select one in the viewer',
       generate: 'Generate 3D', generating: 'Analyzing the model…',
       done: 'Model created:', plan: 'Master plan', facade: 'Facade', interior: 'Interior',
-      pickScenario: 'What to generate?', promptPh: 'Hints: "residential 5 floors, school 3, scale 0.5 m/px"',
+      pickScenario: 'What to generate?', promptPh: 'Hints: &quot;residential 5 floors, school 3, scale 0.5 m/px&quot;',
       netErr: 'Network/server error',
       needTab: 'Open the Generate or Canvas tab and try again'
     }
@@ -255,12 +255,13 @@
   }
 
   // ===================== 3D Design: модалка генерации =====================
-  var S3 = { scenario: 'plan', image: null, source: '', busy: false, timer: null };
+  var S3 = { scenario: 'plan', image: null, source: '', busy: false, timer: null, escHandler: null };
 
   function close3D() {
     var m = document.getElementById('devbim-3d-modal');
     if (m) m.remove();
     if (S3.timer) { clearInterval(S3.timer); S3.timer = null; }
+    if (S3.escHandler) { document.removeEventListener('keydown', S3.escHandler); S3.escHandler = null; }
     S3.busy = false;
   }
 
@@ -352,9 +353,8 @@
     });
     ov.querySelector('.devbim-3d-tile').classList.add('on');
     document.getElementById('devbim-3d-go').addEventListener('click', run3D);
-    document.addEventListener('keydown', function esc(e) {
-      if (e.key === 'Escape') { close3D(); document.removeEventListener('keydown', esc); }
-    });
+    S3.escHandler = function (e) { if (e.key === 'Escape') close3D(); };
+    document.addEventListener('keydown', S3.escHandler);
     refresh3D();
   }
 
