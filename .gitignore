@@ -33,3 +33,5 @@ logs/
 # Мусор тестовых прогонов
 data_test_companies.json
 data_test_companies/
+tests/_threed_tmp/
+ifc/_chk.mjs
