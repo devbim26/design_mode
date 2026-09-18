@@ -78,9 +78,18 @@ JSON-сцены, наш сборщик на IfcOpenShell строит IFC, ре�
 - `GET/PUT /api/v1/threed/model`; PUT валидирует: модель есть в
   каталоге v3, `input_modalities` содержит image, `output_modalities`
   содержит text (иначе 422 со списком подходящих VLM).
+- Список VLM для админки — СВОЙ запрос к /v3/models с модальным
+  фильтром (input_modalities=image&output_modalities=text; ГРАБЛЯ:
+  существующий `GET /api/v1/imagerouter/models` шлёт фильтр
+  output_modalities="image" — VLM-модели с выходом text он НЕ
+  возвращает; внутренний `_fetch_ir_models` — тоже image-only).
+  Кэш каталога 10 мин; фильтр по `architecture.input/output_
+  modalities` дублируется на сервере (ответ каталога уже несёт их).
 - Админ-секция «3D-генерация — модель аналитики» в imagerouter.html:
-  выпадающий список VLM каталога (фильтр по модальностям, кэш каталога
-  10 мин), активная модель, подсказка про F5.
+  выпадающий список VLM, активная модель, подсказка про F5. На
+  ГЕНЕРАЦИИ модель тоже перепроверяется по модальностям (админ руками
+  правил json / каталог обновился) → 422 «Модель 3D-анализа
+  недоступна».
 
 ### Сценарий «Генплан» (топ-даун схема/аэро)
 
@@ -114,7 +123,10 @@ JSON-сцены, наш сборщик на IfcOpenShell строит IFC, ре�
 Системный промпт: если на картинке есть размерные линии — масштаб
 считать по ним (точнее); иначе — по опорам (окно ≈1,5 м, этаж ≈3 м).
 
-- Схема: `storeys`, `floor_height` (м), `width_m`, `depth_m` (с фасада не видна — дефолт 12 или из промта),
+- Схема (вся — В МЕТРАХ, пиксельные координаты не нужны: у фасада нет
+  привязанных к картинке полигонов, сетка окон описывается
+  параметрически): `storeys`, `floor_height` (м), `width_m`, `depth_m`
+  (с фасада не видна — дефолт 12 или из промта),
   `roof: flat|gable` + `roof_height`, `windows {rows, cols, w_m, h_m,
   margin_x_m, margin_y_m, skip[][] (опциональная bool-матрица
   пропусков)}`, `balconies[{floor, x_m, w_m, d_m}]`,
@@ -136,16 +148,20 @@ JSON-сцены, наш сборщик на IfcOpenShell строит IFC, ре�
 предметами. Всё после «снимка» уже работает штатно (п.25/26: постановка
 человека, BIM-контекст, референсы) — нового ничего не требуется.
 
-- Схема: `metres_per_trace_pixel` (опоры: дверной проём 0,9–1 м,
-  кровать 2×1,6 м, унитаз 0,4 м; на планах бывает размерная линия —
-  тогда считать по ней), `wall_height` (дефолт 2,7), `outline
-  [[x,y],…]` — наружный контур, `walls [{points:[[x1,y1],[x2,y2]],
-  thickness_m, exterior}]`, `openings [{wall_idx|“outline”, x_m,
-  width_m, height_m, sill_m, kind: door|window}]`, `rooms [{name
-  (прочитанная с плана подпись: «Кухня»…), type, points}]`,
-  `furniture [{type: bed|sofa|table|chair|wardrobe|kitchen|bath|
-  toilet|sink|lamp|other, x_m, y_m, w_m, d_m, h_m, rot_deg}]`
-  (позиции/поворот — как нарисовано на плане).
+- Схема (ЕДИНОЕ ПРАВИЛО КООРДИНАТ, как в генплане): позиционная
+  геометрия — в ПИКСЕЛЯХ картинки (trace_width/height = размеры
+  исходной картинки), размеры/высоты — в МЕТРАХ; сборщик переводит
+  через metres_per_trace_pixel. `metres_per_trace_pixel` (опоры:
+  дверной проём 0,9–1 м, кровать 2×1,6 м, унитаз 0,4 м; на планах
+  бывает размерная линия — тогда считать по ней), `wall_height`
+  (дефолт 2,7), `outline [[x,y],…]` — наружный контур (px), `walls
+  [{points_px:[[x1,y1],[x2,y2]], thickness_m, exterior}]`,
+  `openings [{wall_idx|“outline”, x_px (позиция вдоль стены), width_m,
+  height_m, sill_m, kind: door|window}]`, `rooms [{name (прочитанная
+  с плана подпись: «Кухня»…), type, points_px}]`, `furniture [{type:
+  bed|sofa|table|chair|wardrobe|kitchen|bath|toilet|sink|lamp|other,
+  x_px, y_px, w_m, d_m, h_m, rot_deg}]` (позиции/поворот — как
+  нарисовано на плане).
 - Сборка: плита пола, стены боксами по сегментам (толщина с плана),
   окна/двери — тёмные прямоугольники заподлицо с плоскостью стены,
   комнаты — **IfcSpace с именами** (выбор кликом во вьювере покажет
@@ -190,8 +206,10 @@ JSON-сцены, наш сборщик на IfcOpenShell строит IFC, ре�
   (cp311 wheels, общий venv на все компании).
 - Вызов VLM — лениво через задеплоенный imagerouter-роутер (паттерн
   `prompt_enhancer.call_vlm`): единый источник ключа/базового URL;
-  max_tokens 4000 (грабля п.22: reasoning-модели при малом лимите
-  возвращают пустой content), temperature 0.2, use_cache=False.
+  max_tokens 8000 — Astra поддерживает параметр reasoning, и бюджет
+  размышлений съедает лимит (грабля п.22: reasoning-модели при малом
+  max_tokens возвращают ПУСТОЙ content), temperature 0.2,
+  use_cache=False.
 - `setup_threed.py`: идемпотентный, бэкапы `*.threed-bak`, копирует
   роутер и модули, патчит `api_app.py` (после design_code-роутера;
   гейт: imagerouter-патчи применены). Порядок после force-reinstall:
