@@ -11,7 +11,7 @@ ImageRouter, IFC-вьювером, PDF-вьювером, вьювером сай
 `venv/Lib/site-packages/invokeai/` — после
 `pip install --force-reinstall invokeai==6.2.0` применять в порядке:
 `rebrand_devbim.py` → `setup_imagerouter.py` → `setup_ifcviewer.py` →
-`setup_pdfviewer.py` → `setup_designcode.py` →
+`setup_pdfviewer.py` → `setup_designcode.py` → `setup_threed.py` →
 `setup_site_auth.py` → `setup_style_presets.py`.
 Все — идемпотентны.
 
@@ -25,6 +25,9 @@ ImageRouter, IFC-вьювером, PDF-вьювером, вьювером сай
 - `design_code/` — вьювер сайта дизайн-кода (вкладка «Design Code»:
   модалка «URL + код», iframe сайта) и его роутер; код доступа —
   DESIGN_CODE_ACCESS_CODE в .env (per-company).
+- `threed/` — 3D-генерация по картинке (кнопка «3D Design»: VLM-аналитик
+  → JSON-сцена → сборка IFC4) — роутер/сценарии/сборщик + `setup_threed.py`
+  (деплой после designcode).
 - `company_manager.py`, `create_company.py`, `start_company.bat`,
   `stop_company.py`, `list_companies.py` — компании-лицензиаты
   (экземпляр на компанию, порты 9100+).

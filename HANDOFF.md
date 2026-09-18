@@ -1416,7 +1416,104 @@ invokeai==6.2.0` их нужно запускать повторно в поря
       setup после отката виджета), `index.html.topright-bak`, удалить
       `dist/devbim-topright-buttons.js`.
 
-## Проверка после изменений
+36. **Design Code: гвард локальных адресов + кнопка «↺ Default»** (15.09;
+    жалоба пользователя «кнопка дизайн-код… работает как пдф вьювер»).
+    ПРИЧИНА: вкладка — вьювер ПОСЛЕДНЕГО введённого адреса (localStorage
+    `devbim:designcode:url` имеет приоритет над DESIGN_CODE_URL из .env), а
+    там со времён тестов панели захвата (11.09, п.34) лежал
+    `http://127.0.0.1:9090/pdfviewer.html` — вкладка честно открывала
+    PDF-вьювер как «сайт». Кнопка/бандлы были исправны. Заодно выяснено:
+    сам https://nw.dev-bim.com/ в тот день отдавал Cloudflare 530 (туннель
+    не поднят) — внешняя проблема, не локальная.
+    - **Гвард** `isLocalSiteUrl(url)` в design_code_viewer.html: петля
+      (localhost/127.*/0.0.0.0/[::1]) и хост самого приложения
+      (location.hostname) — не «сайт дизайн-кода». (а) В submit такой URL
+      отклоняется ДО запроса с пояснением «This is a local app address…»;
+      (б) на старте сохранённый локальный URL ВЫЧИЩАЕТСЯ из localStorage, и
+      вкладка fallback-ит на DESIGN_CODE_URL (адрес по умолчанию). Роутер НЕ
+      тронут (остаётся permits локальные URL — .env может задавать локальный
+      default для разработки/тестов).
+    - **«↺ Default»** в модалке (id btnDefault, видна когда сервер отдал
+      default_url): заполняет поле адресом из DESIGN_CODE_URL и гасит
+      ошибку. showGate теперь префиллит `savedUrl() || defaultUrl`.
+    - Отладочный хук `window.__dc` ({openSite, showGate, isLocalSiteUrl}) —
+      как __ifc/__pdf; полезен E2E, которым нужен не-локальный «сайт» без
+      правки гварда (localStorage-инъекция теперь вычищается).
+    - Деплой: setup_designcode.py (копия html; бандлы не менялись, рестарт
+      сервера не нужен — только F5). Тесты: tests/test_designcode.py
+      (+статические проверки и поведенческий node-тест isLocalSiteUrl на 7
+      URL). E2E 15.09 (Playwright): подложен плохой localStorage → после
+      перезагрузки поле = default; ввод pdfviewer.html → отклонён с
+      сообщением (0 сетевых ошибок); Default → адрес восстановлен; вход с
+      кодом → сайт открыт. Скриншот designcode-guard-fixed.jpeg (рядом с
+      проектом, в docs не переносили).
+
+37. **3D Design (фаза 1): генерация IFC по картинке — «Генплан»** (18.09,
+    ветка `3d`; кнопка «3D Design» из п.35 превращена из заглушки в рабочий
+    конвейер). Спека:
+    `docs/superpowers/specs/2026-09-18-3d-design-ifc-generation-design.md`.
+    - **Конвейер**: модалка в `imagerouter/devbim_topright_buttons.js`
+      (плитки сценариев — «Генплан» активен, «Фасад»/«Интерьер» disabled
+      с подсказкой «фаза 2–3»; превью источника с бейджем Холст/Галерея;
+      textarea уточнений) → `POST /api/v1/threed/generate` {scenario,
+      prompt, image dataURL} → VLM-аналитик (по SYSTEM_GENPLAN) строит
+      строгий JSON-сцену (extract_json + 1 ретрай на невалидный) →
+      validate_genplan (clamp координат в границы картинки, дефолты
+      масштаба 0.5 м/px и высот этажей, этажность 1–30, битые
+      секции/контекст выбрасываются с warnings → тост в модалке) →
+      build_genplan: IFC4 с поэтажными IfcBuildingElementProxy-экструзиями,
+      контекст-плиты IfcGeographicElement, pset DevBIM на IfcProject /
+      SiteMassing на IfcBuilding / MassingElement на элемент, превью-PNG
+      (обводки + этажность поверх исходника; упрощение против спеки —
+      БЕЗ matplotlib-3D-превью, 3D-вид даёт вьювер) →
+      `data/ifc/3D_plan_<stamp>.ifc` → виджет ставит localStorage
+      `devbim:ifc:lastModel` + `__devbimSwitchTab('ifc')` → полная
+      вкладка IFC автозагружает модель (раньше автозагрузка жила только
+      в embed-панели п.13 — теперь и топ-уровневый `if (!EMBED)` в
+      ifcviewer.html). Дальше штатный цикл: сечения, человек, 📸 To
+      Canvas → ИИ-рендер.
+    - **Файлы**: `threed/threed_router.py` (деплой `routers/threed.py`;
+      POST /generate, GET/PUT /model), `threed/threed_scenarios.py`
+      (SYSTEM_GENPLAN/extract_json/validate_genplan) и
+      `threed/threed_build.py` (build_genplan) — деплой as-is;
+      `setup_threed.py` (идемпотентен, бэкап `api_app.py.threed-bak`,
+      гейты: сперва imagerouter и designcode); админ-секция «3D-генерация
+      — модель аналитики» (`#threedsec`) в `imagerouter/imagerouter.html`;
+      тесты `tests/test_threed.py` (9 функций, plain asserts).
+    - **Модель-аналитик** (менеджер за шестерёнкой): цепочка
+      `data/imagerouter_threed_model.json` → `.env THREED_MODEL` →
+      дефолт `openai/gpt-6-astra`; PUT /api/v1/threed/model валидирует
+      по каталогу /v3/models (вход image, выход text — СВОЙ запрос:
+      существующий GET /imagerouter/models фильтрует output=image и VLM
+      не отдаёт); смена без F5 — модель читается при каждой генерации.
+    - **ГРАБЛИ**: (1) /v3/models отвечает ГОЛЫМ JSON-списком, а не
+      {"data":[…]} — парсер принимает ОБЕ формы; слепое .get("data")
+      молча оставляло список VLM пустым и отключало PUT-валидацию
+      (фикс 2b909cd). (2) Дамп диагностики — `root_path/ifc/
+      _threed_last.json` (рядом с IFC: out_dir в _generate_impl —
+      ifc-каталог), НЕ в data/. (3) E2E-баги виджета ловит только
+      рантайм: open3D вызывал refresh3D вместо refresh3DSource —
+      ReferenceError, статика/node --check слепы (2497de7);
+      canvasComposite обязан читать canvas-стейт ЧЕРЕЗ .present
+      (redux-undo, ключ «canvas» нижнего регистра) и PER-TYPE entities:
+      `state.canvas.present.rasterLayers.entities` /
+      `controlLayers.entities` — плоского present.entities НЕТ
+      (ded1841, 5ea07b0); эталон-паттерн — canvasState() в
+      devbim_mask_toggle.js / devbim_cut_tool.js. (4) siteauth гейтит и
+      /api/v1/threed/* — curl-проверки требуют cookie devbim_auth (вход —
+      как п.17: POST /auth/login). (5) Синтетическую схему VLM разбирает
+      ~10 с, реальные генпланы дольше — запрос синхронный (сервер 180 с /
+      фронт 300 с), модалка крутит таймер, не паниковать раньше таймаута.
+    - **Отладка**: `data/ifc/_threed_last.json` (последняя генерация),
+      `window.__devbimPEStore` (стейт приложения: canvas/gallery), хук
+      `__ifc` в iframe вьювера, превью `data/ifc/3D_plan_*_preview.png`.
+      Скриншоты E2E: docs/3d-design-modal.png, docs/3d-design-ifc-result.png.
+    - **Деплой**: setup_threed.py; порядок после force-reinstall: rebrand
+      → imagerouter → ifcviewer → pdfviewer → designcode → **threed** →
+      siteauth. Зависимости: ifcopenshell 0.8.5 + shapely 2.1.2 (pip, в
+      общий venv). Стоимость живой генерации ~$0.05–0.15 (Astra
+      completion $50/M токенов); за E2E-сессию сделано 2 живые генерации.
+      Фазы 2 (фасад) и 3 (интерьер) — планы отдельными документами.
 
 
 ```powershell
@@ -1425,7 +1522,9 @@ cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
 .\venv\Scripts\python.exe .\setup_ifcviewer.py          # вкладка IFC (идемпотентно)
 .\venv\Scripts\python.exe .\setup_pdfviewer.py          # вкладка PDF (идемпотентно)
 .\venv\Scripts\python.exe .\setup_designcode.py         # вкладка Design Code (идемпотентно)
+.\venv\Scripts\python.exe .\setup_threed.py             # 3D Design (идемпотентно)
 .\venv\Scripts\python.exe .\tests\test_designcode.py    # код доступа/URL + патчи
+.\venv\Scripts\python.exe .\tests\test_threed.py        # 3D Design: сценарий/сборщик/роутер
 .\venv\Scripts\python.exe .\tests\test_topright_buttons.py # кнопки Prompt Assistant / 3D Design
 .\venv\Scripts\python.exe .\tests\test_mask_toggle.py   # тумблер Маска/Слой
 .\venv\Scripts\python.exe .\tests\test_cut_tool.py      # ✂ вырезание по контуру
