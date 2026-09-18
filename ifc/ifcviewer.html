@@ -1811,6 +1811,20 @@ if (EMBED) {
   const last = (() => { try { return localStorage.getItem(LAST_MODEL_KEY); } catch { return null; } })();
   if (last) loadServerModel(last).catch(console.error);
 }
+
+// Полная вкладка IFC: автозагрузка последней модели (3D-генерация кладёт
+// devbim:ifc:lastModel и переключает сюда). iframe монтируется свежим —
+// прочитает только что сгенерированную модель; кнопка «3D» на вкладке IFC
+// скрыта, спорных перезаписей нет.
+if (!EMBED) {
+  window.addEventListener("storage", (e) => {
+    if (e.key !== LAST_MODEL_KEY || !e.newValue) return;
+    if (e.newValue === loadedModelName) return;
+    loadServerModel(e.newValue).catch((err) => console.warn("sync:", err));
+  });
+  const lastTab = (() => { try { return localStorage.getItem(LAST_MODEL_KEY); } catch { return null; } })();
+  if (lastTab && lastTab !== loadedModelName) loadServerModel(lastTab).catch(console.error);
+}
 </script>
 </body>
 </html>

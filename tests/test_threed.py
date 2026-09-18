@@ -191,6 +191,24 @@ def test_setup_threed():
     print("test_setup_threed OK")
 
 
+def test_ifcviewer_autoload():
+    import re
+    src = (ROOT / "ifc" / "ifcviewer.html").read_text(encoding="utf-8")
+    m = re.search(r'<script type="module">(.*?)</script>', src, re.S)
+    assert m, "module-скрипт не найден"
+    chk = ROOT / "ifc" / "_chk.mjs"
+    chk.write_text(m.group(1), encoding="utf-8")
+    try:
+        import subprocess
+        r = subprocess.run(["node", "--check", str(chk)], capture_output=True, text=True)
+        assert r.returncode == 0, r.stderr
+    finally:
+        chk.unlink(missing_ok=True)
+    assert 'if (!EMBED) {' in m.group(1)
+    assert m.group(1).count("loadServerModel(lastTab)") == 1
+    print("test_ifcviewer_autoload OK")
+
+
 if __name__ == "__main__":
     test_build_genplan()
     test_extract_json()
@@ -198,4 +216,5 @@ if __name__ == "__main__":
     test_generate_impl()
     test_model_choice_and_put()
     test_setup_threed()
+    test_ifcviewer_autoload()
     print("ALL OK")
