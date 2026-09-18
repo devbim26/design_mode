@@ -119,7 +119,11 @@ def _vlm_list_cached() -> list[dict]:
             params={"input_modalities": "image", "output_modalities": "text",
                     "limit": 500},
             timeout=30)
-        items = resp.json().get("data", []) if resp.status_code == 200 else []
+        data = resp.json() if resp.status_code == 200 else []
+        # /v3/models отдаёт голый список (как в imagerouter.py); dict{"data":[…]}
+        # оставлен как запасной вариант
+        items = data.get("data", []) if isinstance(data, dict) else \
+            (data if isinstance(data, list) else [])
     except Exception:
         items = []
     out = []
