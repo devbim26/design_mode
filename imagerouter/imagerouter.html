@@ -167,6 +167,18 @@
     <div class="msg" id="up-msg"></div>
   </section>
 
+  <section id="threedsec">
+    <h2>3D-генерация — модель аналитики</h2>
+    <p class="hint">VLM, которая анализирует картинку и строит JSON-сцену для 3D
+      (кнопка «3D Design»). Список — только модели с входом «изображение» и
+      текстовым выходом. После смены — F5 не нужен (читается при генерации).</p>
+    <div class="row">
+      <select id="threed-model" style="min-width:280px"></select>
+      <button id="threed-save">Сохранить</button>
+    </div>
+    <div id="threed-status" class="hint"></div>
+  </section>
+
   <section>
     <h2>Генерация</h2>
     <div class="row" style="margin-bottom:8px">
@@ -653,6 +665,38 @@ $("gen").addEventListener("click", function(){
 refreshStatus();
 loadUpscale();
 loadMainModels();
+
+// --- 3D-генерация: выбор VLM-аналитика (GET/PUT /api/v1/threed/model) ---
+(function () {
+  var sel = $("threed-model"), st = $("threed-status");
+  fetch("/api/v1/threed/model").then(function (r) { return r.json(); }).then(function (d) {
+    sel.innerHTML = "";
+    (d.vlms || []).forEach(function (m) {
+      var o = document.createElement("option");
+      o.value = m.id; o.textContent = m.id;
+      sel.appendChild(o);
+    });
+    if (!(d.vlms || []).some(function (m) { return m.id === d.model; })) {
+      var o = document.createElement("option");
+      o.value = d.model; o.textContent = d.model + " (не в каталоге)";
+      sel.appendChild(o);
+    }
+    sel.value = d.model;
+    st.textContent = "Источник: " + (d.source === "file" ? "сохранённый выбор" :
+      d.source === "env" ? ".env THREED_MODEL" : "по умолчанию");
+  }).catch(function () { st.textContent = "Не удалось загрузить список VLM"; });
+  $("threed-save").addEventListener("click", function () {
+    st.textContent = "Сохранение…";
+    fetch("/api/v1/threed/model", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: sel.value })
+    }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        st.textContent = res.ok ? "Сохранено: " + sel.value :
+          "Ошибка: " + (res.j.detail || "?");
+      }).catch(function () { st.textContent = "Ошибка сети"; });
+  });
+})();
 </script>
 </body>
 </html>

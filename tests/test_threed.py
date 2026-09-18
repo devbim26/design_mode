@@ -227,6 +227,14 @@ def test_widget_3d_modal():
     print("test_widget_3d_modal OK")
 
 
+def test_admin_threed_section():
+    src = (ROOT / "imagerouter" / "imagerouter.html").read_text(encoding="utf-8")
+    assert 'id="threedsec"' in src
+    assert "/api/v1/threed/model" in src
+    assert 'id="threed-save"' in src
+    print("test_admin_threed_section OK")
+
+
 if __name__ == "__main__":
     test_build_genplan()
     test_extract_json()
@@ -236,4 +244,5 @@ if __name__ == "__main__":
     test_setup_threed()
     test_ifcviewer_autoload()
     test_widget_3d_modal()
+    test_admin_threed_section()
     print("ALL OK")
