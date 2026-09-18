@@ -271,7 +271,8 @@
     var m = b && b.getManager && b.getManager();
     if (!m || !m.stage || !m.stage.konva || !m.stage.konva.stage) return null;
     var ents = null;
-    try { ents = window.__devbimPEStore.getState().canvas.PRESENT.entities; } catch (e) {}
+    try { var cState = window.__devbimPEStore.getState().canvas;
+          ents = (cState && cState.present ? cState.present : cState).entities; } catch (e) {}
     var has = false;
     (ents || []).forEach(function (en) {
       if ((en.type === 'raster_layer' || en.type === 'control_layer') &&
