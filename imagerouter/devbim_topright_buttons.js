@@ -355,7 +355,7 @@
     document.getElementById('devbim-3d-go').addEventListener('click', run3D);
     S3.escHandler = function (e) { if (e.key === 'Escape') close3D(); };
     document.addEventListener('keydown', S3.escHandler);
-    refresh3D();
+    refresh3DSource();
   }
 
   async function run3D() {

@@ -223,6 +223,8 @@ def test_widget_3d_modal():
     for marker in ("/api/v1/threed/generate", "__devbimSwitchTab('ifc')",
                    "devbim:ifc:lastModel", "images_by_names", "open3D()"):
         assert marker in src, marker
+    assert "refresh3D();" not in src and "refresh3DSource();" in src, \
+        "open3D обязан вызывать refresh3DSource (не refresh3D)"
     assert "toast(t().soon)" not in src.split("function build()")[1].split("function isYellow")[0]
     print("test_widget_3d_modal OK")
 
