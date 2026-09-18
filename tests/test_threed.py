@@ -164,10 +164,38 @@ def test_model_choice_and_put(monkeypatch=None):
     print("test_model_choice_and_put OK")
 
 
+def test_setup_threed():
+    import setup_threed as S
+    TMP.mkdir(exist_ok=True)
+    fake = TMP / "fakevenv"
+    routers = fake / "Lib" / "site-packages" / "invokeai" / "app" / "api" / "routers"
+    routers.mkdir(parents=True, exist_ok=True)
+    (routers / "imagerouter.py").write_text("# existing", encoding="utf-8")
+    api_app = fake / "Lib" / "site-packages" / "invokeai" / "app" / "api_app.py"
+    api_app.write_text(
+        "from invokeai.app.api.routers import (\n    pdf,\n    design_code,\n)\n"
+        'app.include_router(pdf.pdf_router, prefix="/api")\n'
+        'app.include_router(design_code.design_code_router, prefix="/api")\n',
+        encoding="utf-8")
+    S.deploy_files(fake)
+    assert (routers / "threed.py").is_file()
+    assert (routers / "threed_scenarios.py").is_file()
+    assert (routers / "threed_build.py").is_file()
+    changed = S.patch_api_app(api_app)
+    s = api_app.read_text(encoding="utf-8")
+    assert changed and "    threed,\n" in s
+    assert 'app.include_router(threed.threed_router, prefix="/api")' in s
+    # идемпотентность: второй прогон ничего не меняет
+    assert S.patch_api_app(api_app) is False
+    assert S.deploy_files(fake) is False
+    print("test_setup_threed OK")
+
+
 if __name__ == "__main__":
     test_build_genplan()
     test_extract_json()
     test_validate_genplan()
     test_generate_impl()
     test_model_choice_and_put()
+    test_setup_threed()
     print("ALL OK")
