@@ -213,6 +213,20 @@ def test_ifcviewer_autoload():
     print("test_ifcviewer_autoload OK")
 
 
+def test_widget_3d_modal():
+    src = (ROOT / "imagerouter" / "devbim_topright_buttons.js").read_text(encoding="utf-8")
+    import subprocess
+    r = subprocess.run(["node", "--check",
+                        str(ROOT / "imagerouter" / "devbim_topright_buttons.js")],
+                       capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    for marker in ("/api/v1/threed/generate", "__devbimSwitchTab('ifc')",
+                   "devbim:ifc:lastModel", "images_by_names", "open3D()"):
+        assert marker in src, marker
+    assert "toast(t().soon)" not in src.split("function build()")[1].split("function isYellow")[0]
+    print("test_widget_3d_modal OK")
+
+
 if __name__ == "__main__":
     test_build_genplan()
     test_extract_json()
@@ -221,4 +235,5 @@ if __name__ == "__main__":
     test_model_choice_and_put()
     test_setup_threed()
     test_ifcviewer_autoload()
+    test_widget_3d_modal()
     print("ALL OK")
