@@ -104,8 +104,69 @@ def test_validate_genplan():
     print("test_validate_genplan OK")
 
 
+def _mock_vlm_ok(text):
+    def call(system, prompt, image_url, model):
+        return text
+    return call
+
+
+def test_generate_impl(monkeypatch=None):
+    """Роутерная логика без HTTP: мок VLM -> IFC в tmp-каталоге."""
+    from PIL import Image
+    import threed.threed_router as R
+
+    scene = sample_scene()
+    R._call_vlm = _mock_vlm_ok("```json\n" + json.dumps(scene, ensure_ascii=False) + "\n```")
+    TMP.mkdir(exist_ok=True)
+    img = Image.new("RGB", (800, 600), (245, 245, 240))
+    res = R._generate_impl("plan", "тест", img, TMP)
+    assert res["name"].startswith("3D_plan_") and res["name"].endswith(".ifc")
+    assert (TMP / res["name"]).is_file()
+    assert (TMP / (Path(res["name"]).stem + "_preview.png")).is_file()
+    assert (TMP / "_threed_last.json").is_file()
+
+    # ретрай: первый ответ мусор, второй валидный
+    calls = {"n": 0}
+    def flaky(system, prompt, image_url, model):
+        calls["n"] += 1
+        return "мусор без json" if calls["n"] == 1 else json.dumps(scene)
+    R._call_vlm = flaky
+    res2 = R._generate_impl("plan", "", img, TMP)
+    assert res2["name"].startswith("3D_plan_") and calls["n"] == 2
+
+    # два мусорных ответа -> ValueError
+    R._call_vlm = _mock_vlm_ok("no json here")
+    try:
+        R._generate_impl("plan", "", img, TMP)
+        raise AssertionError("ожидалась ошибка")
+    except ValueError as e:
+        assert "JSON" in str(e) or "сцену" in str(e)
+    print("test_generate_impl OK")
+
+
+def test_model_choice_and_put(monkeypatch=None):
+    import threed.threed_router as R
+    # дефолт без файла
+    R._model_store_path = lambda: TMP / "missing_threed_model.json"
+    assert R._load_model_choice() == ("openai/gpt-6-astra", "default")
+    # PUT-валидация по списку VLM (мок каталога)
+    R._vlm_list_cached = lambda: [{"id": "openai/gpt-6-astra"}, {"id": "x/vlm-2"}]
+    p = TMP / "threed_model.json"
+    R._model_store_path = lambda: p
+    R._save_model_choice("x/vlm-2")
+    assert R._load_model_choice() == ("x/vlm-2", "file")
+    try:
+        R._validate_model_in_list("no/such")
+        raise AssertionError("ожидалась ошибка")
+    except ValueError:
+        pass
+    print("test_model_choice_and_put OK")
+
+
 if __name__ == "__main__":
     test_build_genplan()
     test_extract_json()
     test_validate_genplan()
+    test_generate_impl()
+    test_model_choice_and_put()
     print("ALL OK")
