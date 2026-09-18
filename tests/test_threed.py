@@ -114,6 +114,7 @@ def test_generate_impl(monkeypatch=None):
     """Роутерная логика без HTTP: мок VLM -> IFC в tmp-каталоге."""
     from PIL import Image
     import threed.threed_router as R
+    R._vlm_list_cached = lambda: []  # каталог не запрашиваем: тесты без сети
 
     scene = sample_scene()
     R._call_vlm = _mock_vlm_ok("```json\n" + json.dumps(scene, ensure_ascii=False) + "\n```")
