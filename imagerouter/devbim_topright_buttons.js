@@ -272,7 +272,10 @@
     if (!m || !m.stage || !m.stage.konva || !m.stage.konva.stage) return null;
     var ents = null;
     try { var cState = window.__devbimPEStore.getState().canvas;
-          ents = (cState && cState.present ? cState.present : cState).entities; } catch (e) {}
+          var cPresent = cState && cState.present ? cState.present : cState;
+          ents = (cPresent.entities || [])
+            .concat((cPresent.rasterLayers && cPresent.rasterLayers.entities) || [])
+            .concat((cPresent.controlLayers && cPresent.controlLayers.entities) || []); } catch (e) {}
     var has = false;
     (ents || []).forEach(function (en) {
       if ((en.type === 'raster_layer' || en.type === 'control_layer') &&

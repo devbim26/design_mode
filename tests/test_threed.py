@@ -225,8 +225,8 @@ def test_widget_3d_modal():
         assert marker in src, marker
     assert "refresh3D();" not in src and "refresh3DSource();" in src, \
         "open3D обязан вызывать refresh3DSource (не refresh3D)"
-    assert "cState.present ? cState.present : cState" in src, \
-        "canvasComposite обязан разворачивать redux-undo через .present (не PRESENT)"
+    assert "cPresent.rasterLayers && cPresent.rasterLayers.entities" in src, \
+        "canvasComposite обязан читать per-type entities (rasterLayers/controlLayers)"
     assert "toast(t().soon)" not in src.split("function build()")[1].split("function isYellow")[0]
     print("test_widget_3d_modal OK")
 
