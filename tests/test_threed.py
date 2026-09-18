@@ -206,6 +206,10 @@ def test_ifcviewer_autoload():
         chk.unlink(missing_ok=True)
     assert 'if (!EMBED) {' in m.group(1)
     assert m.group(1).count("loadServerModel(lastTab)") == 1
+    # спека: автозагрузка обязана быть ВНЕ блока if (EMBED) — топ-уровень
+    # module-скрипта без отступа; тело embed-блока всегда с отступом
+    assert re.search(r"^if \(!EMBED\) \{", m.group(1), re.M), \
+        "блок автозагрузки должен быть топ-уровневым (вне if (EMBED))"
     print("test_ifcviewer_autoload OK")
 
 
