@@ -1328,7 +1328,7 @@ PYTHONUTF8=1 venv/Scripts/python.exe tests/test_threed.py
 
 Expected: все функции OK.
 
-- [ ] **Step 2: Живой smoke (1 генерация, ~$0.05–0.15)** — POST /api/v1/threed/generate со сценарием scene и `data/probe/ref_photo.png` (dataURL), cookie devbim_auth. Проверки: 200, `name` = 3D_scene_*.ifc, `camHint.azimuth_deg` в [-75, 75], файл и превью в data/ifc, warnings — записать в отчёт.
+- [ ] **Step 2: Живой smoke (1 генерация, ~$0.05–0.15)** — POST /api/v1/threed/generate со сценарием scene и `docs/3d-scene-smoke-ref.jpg` (фото улицы из сессии 19.09; data/probe в git не входит — использовать копию в docs/), cookie devbim_auth. Проверки: 200, `name` = 3D_scene_*.ifc, `camHint.azimuth_deg` в [-75, 75], файл и превью в data/ifc, warnings — записать в отчёт.
 
 ```bash
 PYTHONUTF8=1 venv/Scripts/python.exe - <<'EOF'
@@ -1338,7 +1338,8 @@ ROOT = Path('.').resolve()
 pw = (re.search(r"^SITE_PASSWORD=(.+)$", (ROOT/'.env').read_text(encoding='utf-8'), re.M) or [None,''])[1].strip().strip('"')
 s = requests.Session()
 r = s.post('http://127.0.0.1:9090/auth/login', data={'password': pw}, allow_redirects=False, timeout=15)
-durl = 'data:image/png;base64,' + base64.b64encode((ROOT/'data'/'probe'/'ref_photo.png').read_bytes()).decode()
+raw = (ROOT/'docs'/'3d-scene-smoke-ref.jpg').read_bytes()
+durl = 'data:image/jpeg;base64,' + base64.b64encode(raw).decode()
 r = s.post('http://127.0.0.1:9090/api/v1/threed/generate',
            json={'scenario': 'scene', 'prompt': '', 'image': durl}, timeout=300)
 print(r.status_code, r.text[:400])
