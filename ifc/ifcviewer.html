@@ -495,7 +495,7 @@ async function loadIfc(bytes, name) {
   await setProgress(0.9);
 
   await buildTree();
-  fitModel();
+  if (!applyCamHint()) fitModel();
   if (personGroup && personModelName && personModelName !== name) removePerson();
   renderSecList();        // сечения переживают загрузку — пересчитать слайдеры
   updateSecShowPlanes();
@@ -524,6 +524,29 @@ function fitModel() {
     center.x, center.y, center.z,
   );
   world.camera.controls.update();
+}
+
+// Фаза 4 (сцена): одноразовая подсказка камеры от 3D-генерации — камера
+// как на фото (az 0 = фронтально со стороны world +Z, «+» = вправо).
+function applyCamHint() {
+  let hint = null;
+  try { hint = JSON.parse(localStorage.getItem("devbim:ifc:camHint") || "null"); }
+  catch { hint = null; }
+  try { localStorage.removeItem("devbim:ifc:camHint"); } catch {}
+  if (!hint || typeof hint.azimuth_deg !== "number") return false;
+  const box = modelBox();
+  if (!box || box.isEmpty()) return false;
+  const c = box.getCenter(new Vector3());
+  const size = box.getSize(new Vector3());
+  const dist = Math.max(hint.dist_m || 35, size.length() * 0.35);
+  const az = hint.azimuth_deg * Math.PI / 180;
+  const h = Math.max(0.5, Math.min(30, hint.eye_height_m || 1.6));
+  world.camera.controls.setLookAt(
+    c.x + dist * Math.sin(az), box.min.y + h, c.z + dist * Math.cos(az),
+    c.x, c.y, c.z);
+  world.camera.controls.update();
+  setStatus("Камера по подсказке сцены (как на фото)");
+  return true;
 }
 
 // --- дерево пространственной структуры ---

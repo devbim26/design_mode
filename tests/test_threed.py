@@ -533,6 +533,10 @@ def test_ifcviewer_autoload():
     # module-скрипта без отступа; тело embed-блока всегда с отступом
     assert re.search(r"^if \(!EMBED\) \{", m.group(1), re.M), \
         "блок автозагрузки должен быть топ-уровневым (вне if (EMBED))"
+    # фаза 4: camHint — камера по подсказке генерации сцены
+    assert "function applyCamHint()" in m.group(1)
+    assert "devbim:ifc:camHint" in m.group(1)
+    assert "if (!applyCamHint()) fitModel();" in m.group(1)
     print("test_ifcviewer_autoload OK")
 
 
