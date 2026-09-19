@@ -315,6 +315,61 @@ def test_validate_facade():
     print("test_validate_facade OK")
 
 
+def test_validate_interior():
+    from threed.threed_scenarios import validate_interior, SYSTEM_INTERIOR
+    assert "furniture" in SYSTEM_INTERIOR and "wall_height" in SYSTEM_INTERIOR
+
+    scene = sample_interior_scene()
+    out, warn = validate_interior(scene, 40, 30)
+    assert out["trace_width"] == 40 and out["trace_height"] == 30
+    assert out["wall_height"] == 2.7 and len(out["walls"]) == 5
+    assert len(out["openings"]) == 3 and out["openings"][0]["kind"] == "door"
+    assert [r["name"] for r in out["rooms"]] == ["Кухня", "Спальня"]
+    assert out["furniture"][0]["type"] == "bed"
+    assert warn == []
+
+    # не-dict / пустая сцена -> ValueError
+    for bad in (None, [], {}, {"rooms": []}):
+        try:
+            validate_interior(bad, 100, 100)
+            raise AssertionError("ожидалась ошибка для " + repr(bad))
+        except ValueError:
+            pass
+
+    # дефолты: масштаб/высота/толщина; мусорные поля выбрасываются
+    out2, warn2 = validate_interior({"outline": [[0, 0], [99, 0], [99, 99], [0, 99]],
+                                     "walls": [
+                                         {"points_px": [[0, 0], [99, 0]],
+                                          "thickness_m": "мусор", "exterior": True},
+                                         {"points_px": [[0, 0]], "thickness_m": 0.1},
+                                         {"points_px": [[0, 0], [1, 0]],
+                                          "thickness_m": 99.0}],
+                                     "openings": [
+                                         {"wall_idx": 7, "x_px": 5, "width_m": 1.0,
+                                          "height_m": 2.0, "sill_m": 0, "kind": "door"},
+                                         {"wall_idx": 0, "x_px": 50, "width_m": 1.0,
+                                          "height_m": 2.0, "sill_m": 0, "kind": "window"}],
+                                     "rooms": [{"name": 123, "type": "sauna",
+                                                "points_px": [[1, 1], [9, 1], [9, 9], [1, 9]]}],
+                                     "furniture": [
+                                         {"type": "spaceship", "x_px": 5, "y_px": 5,
+                                          "w_m": 2.0, "d_m": 2.0, "h_m": 1.0,
+                                          "rot_deg": 900}]},
+                                    100, 100)
+    assert abs(out2["metres_per_trace_pixel"] - 0.01) < 1e-9   # дефолт
+    assert out2["wall_height"] == 2.7
+    assert len(out2["walls"]) == 2                              # нулевая длина выброшена
+    assert out2["walls"][0]["thickness_m"] == 0.15              # мусор -> дефолт
+    assert out2["walls"][1]["thickness_m"] == 0.6               # кламп сверху
+    assert len(out2["openings"]) == 1                           # wall_idx 7 выброшен
+    assert out2["rooms"][0]["name"] == "Комната 1"              # не-строка -> дефолт
+    assert out2["rooms"][0]["type"] == "other"                  # sauna -> other
+    assert out2["furniture"][0]["type"] == "other"              # spaceship -> other
+    assert out2["furniture"][0]["rot_deg"] == 180.0             # кламп 900 -> 180
+    assert any("walls" in w for w in warn2) or warn2
+    print("test_validate_interior OK")
+
+
 def _mock_vlm_ok(text):
     def call(system, prompt, image_url, model):
         return text
@@ -499,6 +554,7 @@ if __name__ == "__main__":
     test_extract_json()
     test_validate_genplan()
     test_validate_facade()
+    test_validate_interior()
     test_generate_impl()
     test_generate_impl_facade()
     test_model_choice_and_put()

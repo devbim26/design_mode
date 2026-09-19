@@ -321,3 +321,226 @@ def validate_facade(scene):
             warnings.append(f"colors.{key}: не hex — дефолт {default}")
             out["colors"][key] = default
     return out, warnings
+
+
+# ===================== Фаза 3: сценарий «Интерьер» =====================
+
+SYSTEM_INTERIOR = """You are a BIM interior analyst. Look at the attached 2D FLOOR PLAN
+(apartment / room drawing, PDF page fragment or screenshot; NOT a photo of a finished
+interior). Trace the plan into a parametric model. Reply with STRICT JSON ONLY - no
+markdown fences, no comments, no extra keys.
+
+Schema (positions in PIXELS of the image, sizes/heights in METERS):
+{
+ "metres_per_trace_pixel": <float: meters per image pixel. Estimate from anchors:
+   door opening 0.9-1 m, bed 2.0 x 1.6 m, toilet 0.4 m, or printed dimension lines
+   (they are exact). Typical flat plan ~0.005-0.02.>,
+ "wall_height": <float m, floor-to-ceiling, default 2.7>,
+ "outline": [[x, y], ...outer boundary pixels, y=0 at the TOP of the image],
+ "walls": [
+   {"points_px": [[x1, y1], [x2, y2]], "thickness_m": <float m, interior 0.1-0.2,
+     exterior 0.3-0.5>, "exterior": <bool>}
+ ],
+ "openings": [
+   {"wall_idx": <int index into walls> | "outline", "x_px": <position ALONG the wall
+     from its first point, image pixels>, "width_m": 0.9, "height_m": 2.1,
+     "sill_m": <0.0 for doors, ~0.9 for windows>, "kind": "door" | "window"}
+ ],
+ "rooms": [
+   {"name": "<label read from the plan, e.g. Kitchen; Room N if unlabeled>",
+    "type": "living|bedroom|kitchen|bath|wc|hall|wardrobe|balcony|other",
+    "points_px": [[x, y], ...]}
+ ],
+ "furniture": [
+   {"type": "bed|sofa|table|chair|wardrobe|kitchen|bath|toilet|sink|lamp|other",
+    "x_px": <center x>, "y_px": <center y>, "w_m": <width>, "d_m": <depth>,
+    "h_m": <height>, "rot_deg": <rotation around center, 0 = as drawn>}
+ ]
+}
+
+Rules:
+- y=0 is the TOP of the image; pixel coordinates only for positions/along-wall
+  distances; all sizes, heights and thicknesses are meters.
+- List every wall segment with its drawn thickness; exterior walls form the outline.
+- Rooms MUST use the label text read on the plan when present.
+- Furniture: one entry per item, placed as drawn (position + rotation).
+- The USER PROMPT overrides your guesses (scale, wall height) wherever it states them.
+"""
+
+ROOM_TYPES = {"living", "bedroom", "kitchen", "bath", "wc", "hall",
+              "wardrobe", "balcony", "other"}
+FURNITURE_TYPES = {"bed", "sofa", "table", "chair", "wardrobe", "kitchen",
+                   "bath", "toilet", "sink", "lamp", "other"}
+INTERIOR_SCALE_DEFAULT = 0.01
+# MAX 0.5 (не 0.1): валидны и миниатюрные растровые планы — 40×30 px ≈
+# 10×7.5 м при 0.25 м/px; жёсткий потолок ловит лишь бессмыслицу от VLM.
+INTERIOR_SCALE_MIN, INTERIOR_SCALE_MAX = 0.001, 0.5
+
+
+def _num(value, default, lo, hi, field, warnings):
+    """float с NaN-гвардом и клампом (паттерн _facade_float, обобщено)."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        warnings.append(f"{field}: неверное значение — дефолт {default}")
+        return default
+    if v != v:  # NaN
+        warnings.append(f"{field}: NaN — дефолт {default}")
+        return default
+    if v < lo or v > hi:
+        clamped = max(lo, min(hi, v))
+        warnings.append(f"{field}: {v:g} вне [{lo}, {hi}] — кламп до {clamped:g}")
+        return clamped
+    return v
+
+
+def _px_point(value, w, h):
+    """Одна точка [x, y] -> [x, y] клампнутая | None."""
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return None
+    try:
+        x, y = float(value[0]), float(value[1])
+    except (TypeError, ValueError):
+        return None
+    if x != x or y != y:
+        return None
+    return [_clamp(x, 0, w), _clamp(y, 0, h)]
+
+
+def validate_interior(scene, img_w, img_h):
+    """Сцена интерьера от VLM -> (чистая сцена, warnings). ValueError — не план."""
+    if not isinstance(scene, dict):
+        raise ValueError("Сцена не является JSON-объектом")
+    warnings = []
+    out = {"trace_width": int(img_w), "trace_height": int(img_h),
+           "metres_per_trace_pixel": INTERIOR_SCALE_DEFAULT, "wall_height": 2.7,
+           "outline": [], "walls": [], "openings": [], "rooms": [], "furniture": []}
+    scale = _num(scene.get("metres_per_trace_pixel"), INTERIOR_SCALE_DEFAULT,
+                 INTERIOR_SCALE_MIN, INTERIOR_SCALE_MAX, "metres_per_trace_pixel",
+                 warnings)
+    out["metres_per_trace_pixel"] = scale
+    out["wall_height"] = _num(scene.get("wall_height"), 2.7, 2.0, 4.0,
+                              "wall_height", warnings)
+    if not (scene.get("outline") or scene.get("walls")):
+        raise ValueError("Не удалось распознать план помещения")
+
+    outline = _valid_points(scene.get("outline"), img_w, img_h)
+    if outline is None:
+        warnings.append("outline: битый контур — стены по segments")
+    else:
+        out["outline"] = outline
+
+    raw_walls = scene.get("walls")
+    if not isinstance(raw_walls, list):
+        warnings.append("walls: не список — пропущены")
+        raw_walls = []
+    for idx, wall in enumerate(raw_walls, start=1):
+        if not isinstance(wall, dict):
+            warnings.append(f"Стена {idx}: не объект — пропущена")
+            continue
+        pts = wall.get("points_px")
+        if not isinstance(pts, list) or len(pts) != 2:
+            warnings.append(f"Стена {idx}: нужен ровно 2 точки — пропущена")
+            continue
+        p1 = _px_point(pts[0], img_w, img_h)
+        p2 = _px_point(pts[1], img_w, img_h)
+        if p1 is None or p2 is None:
+            warnings.append(f"Стена {idx}: битые координаты — пропущена")
+            continue
+        if abs(p2[0] - p1[0]) + abs(p2[1] - p1[1]) < 1.0:
+            warnings.append(f"Стена {idx}: нулевая длина — пропущена")
+            continue
+        out["walls"].append({
+            "points_px": [p1, p2],
+            "thickness_m": _num(wall.get("thickness_m", 0.15), 0.15, 0.05, 0.6,
+                                f"Стена {idx}.thickness_m", warnings),
+            "exterior": bool(wall.get("exterior")),
+        })
+
+    raw_ops = scene.get("openings")
+    if not isinstance(raw_ops, list):
+        if raw_ops:
+            warnings.append("openings: не список — пропущены")
+        raw_ops = []
+    for idx, op in enumerate(raw_ops, start=1):
+        if not isinstance(op, dict):
+            warnings.append(f"Проём {idx}: не объект — пропущен")
+            continue
+        widx = op.get("wall_idx")
+        if widx != "outline" and not (isinstance(widx, int) and 0 <= widx < len(out["walls"])):
+            warnings.append(f"Проём {idx}: wall_idx {widx} не указывает на стену — пропущен")
+            continue
+        if widx == "outline" and not out["outline"]:
+            warnings.append(f"Проём {idx}: нет outline — пропущен")
+            continue
+        kind = op.get("kind")
+        if kind not in ("door", "window"):
+            warnings.append(f"Проём {idx}: kind {kind} не поддержан — пропущен")
+            continue
+        h_default = 2.1 if kind == "door" else 1.5
+        out["openings"].append({
+            "wall_idx": widx,
+            "x_px": _num(op.get("x_px", 0), 0, 0, 100000, f"Проём {idx}.x_px", warnings),
+            "width_m": _num(op.get("width_m", 0.9), 0.9, 0.4, 4.0,
+                            f"Проём {idx}.width_m", warnings),
+            "height_m": _num(op.get("height_m", h_default), h_default, 0.5, 3.0,
+                             f"Проём {idx}.height_m", warnings),
+            "sill_m": _num(op.get("sill_m", 0.0 if kind == "door" else 0.9),
+                           0.0, 0.0, 2.0, f"Проём {idx}.sill_m", warnings),
+            "kind": kind,
+        })
+
+    raw_rooms = scene.get("rooms")
+    if not isinstance(raw_rooms, list):
+        if raw_rooms:
+            warnings.append("rooms: не список — пропущены")
+        raw_rooms = []
+    for idx, room in enumerate(raw_rooms, start=1):
+        if not isinstance(room, dict):
+            warnings.append(f"Комната {idx}: не объект — пропущена")
+            continue
+        points = _valid_points(room.get("points_px"), img_w, img_h)
+        if points is None:
+            warnings.append(f"Комната {idx}: битый контур — пропущена")
+            continue
+        name = room.get("name")
+        name = str(name).strip()[:24] if isinstance(name, str) and name.strip() \
+            else f"Комната {idx}"
+        rtype = room.get("type")
+        if rtype not in ROOM_TYPES:
+            warnings.append(f"Комната {name}: тип {rtype} не поддержан — other")
+            rtype = "other"
+        out["rooms"].append({"name": name, "type": rtype, "points_px": points})
+
+    raw_furn = scene.get("furniture")
+    if not isinstance(raw_furn, list):
+        if raw_furn:
+            warnings.append("furniture: не список — пропущены")
+        raw_furn = []
+    for idx, item in enumerate(raw_furn, start=1):
+        if not isinstance(item, dict):
+            warnings.append(f"Мебель {idx}: не объект — пропущена")
+            continue
+        p = _px_point([item.get("x_px"), item.get("y_px")], img_w, img_h)
+        if p is None:
+            warnings.append(f"Мебель {idx}: битая позиция — пропущена")
+            continue
+        ftype = item.get("type")
+        if ftype not in FURNITURE_TYPES:
+            warnings.append(f"Мебель {idx}: тип {ftype} не поддержан — other")
+            ftype = "other"
+        out["furniture"].append({
+            "type": ftype, "x_px": p[0], "y_px": p[1],
+            "w_m": _num(item.get("w_m", 0.6), 0.6, 0.1, 6.0,
+                        f"Мебель {idx}.w_m", warnings),
+            "d_m": _num(item.get("d_m", 0.6), 0.6, 0.1, 6.0,
+                        f"Мебель {idx}.d_m", warnings),
+            "h_m": _num(item.get("h_m", 0.5), 0.5, 0.05, 3.0,
+                        f"Мебель {idx}.h_m", warnings),
+            "rot_deg": _num(item.get("rot_deg", 0), 0, -180.0, 180.0,
+                            f"Мебель {idx}.rot_deg", warnings),
+        })
+
+    if not out["walls"] and not out["rooms"] and not out["furniture"]:
+        raise ValueError("На картинке не найдено объектов для 3D-модели")
+    return out, warnings
