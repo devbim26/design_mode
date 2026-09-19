@@ -10,7 +10,7 @@
  * ряду Generate держит window.__devbimPEStore свежим и пишет флаг занятости
  * window.__devbimPEPending. «3D Design» открывает модалку генерации 3D
  * (сценарий/источник/промт -> POST /api/v1/threed/generate -> вкладка IFC;
- * сценарии: генплан и фасад, интерьер — заглушка, фаза 3).
+ * сценарии: генплан, фасад, интерьер — все активны (фазы 1–3).
  *
  * Ряд очереди ищется локале-независимо: жёлтая (invokeYellow) кнопка
  * ~36px в верхней части панели → её контейнер 200px → родительский ряд
@@ -37,7 +37,6 @@
   var TEXTS = {
     ru: {
       soon: '3D Design — раздел в разработке',
-      soon3d: 'Интерьер — в разработке (фаза 3)',
       srcCanvas: 'Холст', srcViewer: 'Галерея',
       noSource: 'Положите картинку на Холст или выберите в галерее/вьювере',
       generate: 'Сгенерировать 3D', generating: 'Анализ модели…',
@@ -45,12 +44,12 @@
       pickScenario: 'Что генерируем?',
       promptPhPlan: 'Уточнения: «жилой 5 этажей, школа 3, масштаб 0.5 м/px»',
       promptPhFacade: 'Уточнения: «5 этажей, двускатная крыша, окна 4 в ряд, балконы со 2 этажа, глубина 14 м»',
+      promptPhInterior: 'Уточнения: «высота стен 2.8, масштаб 0.01 м/px, стены по чертежу»',
       netErr: 'Ошибка сети/сервера',
       needTab: 'Откройте вкладку Generate или Холст и повторите'
     },
     en: {
       soon: '3D Design — coming soon',
-      soon3d: 'Interior — coming soon (phase 3)',
       srcCanvas: 'Canvas', srcViewer: 'Gallery',
       noSource: 'Put an image on the Canvas or select one in the viewer',
       generate: 'Generate 3D', generating: 'Analyzing the model…',
@@ -58,6 +57,7 @@
       pickScenario: 'What to generate?',
       promptPhPlan: 'Hints: "residential 5 floors, school 3, scale 0.5 m/px"',
       promptPhFacade: 'Hints: "5 storeys, gable roof, 4 windows per row, balconies from floor 2, depth 14 m"',
+      promptPhInterior: 'Hints: "wall height 2.8, scale 0.01 m/px, walls as drawn"',
       netErr: 'Network/server error',
       needTab: 'Open the Generate or Canvas tab and try again'
     }
@@ -341,7 +341,7 @@
       '<div class="devbim-3d-tiles">' +
       '<button class="devbim-3d-tile" data-s="plan"><span>🗺</span>' + t().plan + '</button>' +
       '<button class="devbim-3d-tile" data-s="facade"><span>🏢</span>' + t().facade + '</button>' +
-      '<button class="devbim-3d-tile" data-s="interior" disabled title="' + t().soon3d + '"><span>🛋</span>' + t().interior + '</button>' +
+      '<button class="devbim-3d-tile" data-s="interior"><span>🛋</span>' + t().interior + '</button>' +
       '</div>' +
       '<div class="devbim-3d-src"><img alt=""><span class="devbim-3d-badge">—</span></div>' +
       '<div id="devbim-3d-hint" style="display:none">' + t().noSource + '</div>' +
@@ -358,8 +358,11 @@
         ov.querySelectorAll('.devbim-3d-tile').forEach(function (x) { x.classList.remove('on'); });
         b.classList.add('on');
         var ta = document.getElementById('devbim-3d-prompt');
-        if (ta) ta.placeholder = b.getAttribute('data-s') === 'facade'
-          ? t().promptPhFacade : t().promptPhPlan;
+        if (ta) {
+          var ph = {plan: t().promptPhPlan, facade: t().promptPhFacade,
+                    interior: t().promptPhInterior};
+          ta.placeholder = ph[b.getAttribute('data-s')] || t().promptPhPlan;
+        }
       });
     });
     ov.querySelector('.devbim-3d-tile').classList.add('on');

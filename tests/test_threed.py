@@ -547,7 +547,6 @@ def test_widget_3d_modal():
     assert facade_tile + "<span>\U0001F3E2</span>" in src, \
         "плитка фасада должна быть активна (без disabled/title)"
     assert 'data-s="facade" disabled' not in src
-    assert 'data-s="interior" disabled' in src
     for key in ("promptPhPlan", "promptPhFacade"):
         assert key + ":" in src, key
     assert "promptPh:" not in src and "t().promptPh +" not in src
@@ -560,6 +559,14 @@ def test_widget_3d_modal():
         "TEXTS.en не должен хранить &quot; (утечка при присваивании свойства)"
     assert "promptPhPlan.replace(/\"/g, '&quot;')" in src, \
         "placeholder экранируется в точке HTML-интерполяции"
+    # фаза 3: плитка интерьера активна, placeholder по 3 сценариям
+    assert '<button class="devbim-3d-tile" data-s="interior"><span>🛋</span>' in src
+    assert 'data-s="interior" disabled' not in src
+    assert "promptPhInterior" in src and "soon3d" not in src
+    # RU/EN тексты placeholder-ов интерьера
+    assert "promptPhInterior: 'Уточнения:" in src
+    # переключение placeholder-а через карту сценариев
+    assert "var ph = {plan: t().promptPhPlan" in src
     print("test_widget_3d_modal OK")
 
 
