@@ -30,6 +30,64 @@ def sample_scene():
     }
 
 
+def sample_facade_scene():
+    """Фасад: 5 эт. × 3.0 м, 24×12 м, двускатная крыша 2.5 м, окна 1 ряд по 4
+    (второе пропущено на всех этажах), балконы на 2 и 3 этаже."""
+    return {
+        "storeys": 5, "floor_height": 3.0, "width_m": 24.0, "depth_m": 12.0,
+        "roof": "gable", "roof_height": 2.5,
+        "windows": {"rows": 1, "cols": 4, "w_m": 1.5, "h_m": 1.5,
+                    "margin_x_m": 1.0, "margin_y_m": 0.7,
+                    "skip": [[False, True, False, False]]},
+        "balconies": [{"floor": 2, "x_m": 4.0, "w_m": 3.0, "d_m": 1.2},
+                      {"floor": 3, "x_m": 4.0, "w_m": 3.0, "d_m": 1.2}],
+        "colors": {"walls": "#d9c7a7", "roof": "#52616b", "plinth": "#8d8d8d"},
+    }
+
+
+def test_build_facade():
+    import ifcopenshell
+    from threed.threed_build import build_facade
+
+    TMP.mkdir(exist_ok=True)
+    ifc = TMP / "3D_facade_test.ifc"
+    prev = TMP / "3D_facade_test_preview.png"
+    path = build_facade(sample_facade_scene(), ifc, prev,
+                        {"Scenario": "facade", "Prompt": "тест", "Model": "test/model",
+                         "Source": "3D Design"})
+    assert path == ifc and ifc.is_file() and prev.is_file()
+
+    m = ifcopenshell.open(str(ifc))
+    assert m.schema == "IFC4"
+    gids = [r.GlobalId for r in m.by_type("IfcRoot")]
+    assert len(gids) == len(set(gids)), "GlobalId не уникальны"
+    assert len(m.by_type("IfcBuilding")) == 1
+    assert len(m.by_type("IfcBuildingStorey")) == 5
+    proxies = m.by_type("IfcBuildingElementProxy")
+    by_type = {}
+    for p in proxies:
+        by_type[p.ObjectType] = by_type.get(p.ObjectType, 0) + 1
+    assert by_type.get("CONCEPTUAL_STOREY") == 5            # поэтажные тома
+    assert by_type.get("CONCEPTUAL_WINDOW") == 3 * 5        # 4 минус skip, на этаж
+    assert by_type.get("CONCEPTUAL_BALCONY") == 2
+    assert by_type.get("CONCEPTUAL_PLINTH") == 1
+    assert by_type.get("CONCEPTUAL_ROOF") == 1              # двускатная призма
+    # этажи на своих отметках
+    elev = sorted(s.Elevation for s in m.by_type("IfcBuildingStorey"))
+    assert elev == [0.0, 3.0, 6.0, 9.0, 12.0]
+    # объём первого этажа: 24 × 12 × 3 = 864 м³
+    from ifcopenshell.util.element import get_psets
+    storey1 = [p for p in proxies if p.ObjectType == "CONCEPTUAL_STOREY"][0]
+    qto = get_psets(storey1).get("Qto_BuildingElementProxyQuantities", {})
+    assert abs(qto.get("NetVolume", 0) - 24 * 12 * 3.0) < 1.0
+    # pset DevBIM у проекта + FacadeModel у здания
+    assert get_psets(m.by_type("IfcProject")[0]).get("DevBIM", {}).get("Scenario") == "facade"
+    b = m.by_type("IfcBuilding")[0]
+    fm = get_psets(b).get("FacadeModel", {})
+    assert fm.get("Storeys") == 5 and fm.get("WindowsTotal") == 15
+    print("test_build_facade OK")
+
+
 def test_build_genplan():
     import ifcopenshell
     from PIL import Image
@@ -240,6 +298,7 @@ def test_admin_threed_section():
 
 
 if __name__ == "__main__":
+    test_build_facade()
     test_build_genplan()
     test_extract_json()
     test_validate_genplan()
