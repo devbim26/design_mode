@@ -657,6 +657,58 @@ def test_validate_scene():
     print("test_validate_scene OK")
 
 
+def test_build_scene():
+    import ifcopenshell
+    from threed.threed_scenarios import validate_scene
+    from threed.threed_build import build_scene
+
+    clean, _ = validate_scene(sample_scene_scene())
+    TMP.mkdir(exist_ok=True)
+    ifc = TMP / "3D_scene_test.ifc"
+    prev = TMP / "3D_scene_test_preview.png"
+    path = build_scene(clean, ifc, prev,
+                       {"Scenario": "scene", "Prompt": "тест", "Model": "test/model",
+                        "Source": "3D Design"})
+    assert path == ifc and ifc.is_file() and prev.is_file()
+
+    m = ifcopenshell.open(str(ifc))
+    assert m.schema == "IFC4"
+    gids = [r.GlobalId for r in m.by_type("IfcRoot")]
+    assert len(gids) == len(set(gids)), "GlobalId не уникальны"
+    proxies = m.by_type("IfcBuildingElementProxy")
+    by_type = {}
+    for p in proxies:
+        by_type[p.ObjectType] = by_type.get(p.ObjectType, 0) + 1
+    assert by_type.get("CONCEPTUAL_STOREY") == 7 + 3      # тома-этажи 2 зданий
+    assert by_type.get("CONCEPTUAL_PLINTH") == 2
+    assert by_type.get("CONCEPTUAL_ROOF") == 1            # gable у второго
+    # главное (27 м, шаг фронта (24-1.4)/7+1.4=3.23; depth 15):
+    # side_cols = clamp(round((15-2*1.5)/3.23),1,6)=4 -> фронт 7×8 + бок 7×2×4=112
+    assert by_type.get("CONCEPTUAL_WINDOW") == 112 + 3 * 4
+    assert by_type.get("CONCEPTUAL_BALCONY") == 1
+    assert by_type.get("CONCEPTUAL_TREE") == 4            # 2 дерева × (ствол+крона)
+    assert by_type.get("CONCEPTUAL_CAR") == 1
+    assert by_type.get("CONCEPTUAL_PERSON") == 2
+    assert by_type.get("CONCEPTUAL_GROUND") == 1
+    # фронт главного здания на IFC -Y: окна при y_m=0 -> центры -depth/2
+    from ifcopenshell.util.placement import get_local_placement
+    wins = [p for p in proxies if p.ObjectType == "CONCEPTUAL_WINDOW"
+            and "Гл" in (p.Name or "") and "бок" not in (p.Name or "")]
+    assert wins and all(get_local_placement(w.ObjectPlacement)[1, 3] < -5.0 for w in wins)
+    # CameraHint на проекте
+    from ifcopenshell.util.element import get_psets
+    hint = get_psets(m.by_type("IfcProject")[0]).get("CameraHint", {})
+    assert abs(hint.get("AzimuthDeg", 999) - (-30)) < 1e-6
+    assert abs(hint.get("EyeHeightM", 0) - 1.7) < 1e-6
+    sm = get_psets(m.by_type("IfcBuilding")[0]).get("SceneModel", {})
+    assert sm.get("Buildings") == 2 and sm.get("WindowsTotal") == 112 + 12
+    # превью: план рисуется (содержательная проверка — E2E задачи 11)
+    from PIL import Image
+    im = Image.open(prev)
+    assert im.size[0] > 400 and im.size[1] > 300
+    print("test_build_scene OK")
+
+
 def test_admin_threed_section():
     src = (ROOT / "imagerouter" / "imagerouter.html").read_text(encoding="utf-8")
     assert 'id="threedsec"' in src
@@ -675,6 +727,7 @@ if __name__ == "__main__":
     test_validate_interior()
     test_validate_facade_balcony_fit()
     test_validate_scene()
+    test_build_scene()
     test_generate_impl()
     test_generate_impl_facade()
     test_generate_impl_interior()

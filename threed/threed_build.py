@@ -811,3 +811,270 @@ def _draw_interior_preview(data, preview_path):
     preview_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(preview_path, dpi=160, facecolor="white")
     plt.close(fig)
+
+
+# ===================== Фаза 4: сценарий «Сцена» (camera mapping) =====================
+
+ASSUMPTION_SCENE = (
+    "Концептуальная уличная сцена по фотографии (3D Design). Здания, деревья, "
+    "автомобили и люди — схематичные объёмы-примитивы; перспектива принята за "
+    "ортогональную, размеры оценочные по опорным объектам. Не использовать как "
+    "обмерную или рабочую документацию."
+)
+
+SCENE_COLORS = {
+    "walls": "#c8b89a", "roof": "#52616b", "plinth": "#8d8d8d",
+    "glazing": "#202830", "balcony": "#9aa3ad", "tree": "#4e7a4e",
+    "trunk": "#7a5b3a", "car": "#5a6470", "person": "#38424e", "ground": "#b9c2b4",
+}
+
+
+def _scene_box(model, body, fstyles, container, name, bw, bd, bh,
+               cx, cy, z, color_key, object_type, rot_deg=0.0):
+    """Примитив-бокс сцены (как box() фасада, +поворот вокруг Z)."""
+    product = _api("root.create_entity", file=model, ifc_class="IfcBuildingElementProxy",
+                   predefined_type="USERDEFINED", name=name)
+    product.ObjectType = object_type
+    pts = [[-bw / 2, -bd / 2], [bw / 2, -bd / 2], [bw / 2, bd / 2], [-bw / 2, bd / 2]]
+    profile = _api("profile.add_arbitrary_profile", file=model, profile=pts, name=name)
+    representation = _api("geometry.add_profile_representation", file=model, context=body,
+                          profile=profile, depth=bh, cardinal_point=None)
+    _api("geometry.assign_representation", file=model, product=product,
+         representation=representation)
+    _api("spatial.assign_container", file=model, products=[product],
+         relating_structure=container)
+    matrix = np.eye(4)
+    rad = np.radians(rot_deg)
+    matrix[0, 0], matrix[0, 1] = np.cos(rad), -np.sin(rad)
+    matrix[1, 0], matrix[1, 1] = np.sin(rad), np.cos(rad)
+    matrix[:3, 3] = [float(cx), float(cy), float(z)]
+    _api("geometry.edit_object_placement", file=model, product=product, matrix=matrix)
+    _api("style.assign_representation_styles", file=model,
+         shape_representation=representation, styles=[fstyles[color_key]])
+    return product
+
+
+def build_scene(scene, ifc_path, preview_path, meta):
+    """Сцена улицы (validate_scene) -> IFC4 + PNG-план. Возвращает ifc_path."""
+    data = dict(scene)
+    data.setdefault("camera", {})
+    data.setdefault("buildings", [])
+    data.setdefault("context", {})
+    colors = dict(SCENE_COLORS)
+
+    model = _api("project.create_file", version="IFC4")
+    project = _api("root.create_entity", file=model, ifc_class="IfcProject",
+                   name=data.get("project_name", "3D Design — сцена"))
+    project.Description = ASSUMPTION_SCENE
+    units = [_api("unit.add_si_unit", file=model, unit_type=t)
+             for t in ("LENGTHUNIT", "AREAUNIT", "VOLUMEUNIT")]
+    _api("unit.assign_unit", file=model, units=units)
+    context = _api("context.add_context", file=model, context_type="Model")
+    body = _api("context.add_context", file=model, context_type="Model",
+                context_identifier="Body", target_view="MODEL_VIEW", parent=context)
+    site = _api("root.create_entity", file=model, ifc_class="IfcSite", name="Участок")
+    _api("aggregate.assign_object", file=model, products=[site], relating_object=project)
+    _api("geometry.edit_object_placement", file=model, product=site, matrix=np.eye(4))
+    _properties(model, project, "DevBIM", {
+        "Source": meta.get("Source", "3D Design"), "Scenario": meta.get("Scenario", "scene"),
+        "Prompt": (meta.get("Prompt") or "")[:1024], "Model": meta.get("Model", ""),
+        "ApproximateGeometry": True, "Notes": ASSUMPTION_SCENE,
+    })
+    building = _api("root.create_entity", file=model, ifc_class="IfcBuilding",
+                    name="Сцена по фото")
+    building.Description = ASSUMPTION_SCENE
+    _api("aggregate.assign_object", file=model, products=[building], relating_object=site)
+    _api("geometry.edit_object_placement", file=model, product=building, matrix=np.eye(4))
+    storey = _api("root.create_entity", file=model, ifc_class="IfcBuildingStorey",
+                  name="Уровень сцены")
+    storey.Elevation = 0.0
+    _api("aggregate.assign_object", file=model, products=[storey], relating_object=building)
+    _api("geometry.edit_object_placement", file=model, product=storey, matrix=np.eye(4))
+
+    fstyles = {}
+    for key, color in colors.items():
+        r, g, b = matplotlib.colors.to_rgb(color)
+        style = _api("style.add_style", file=model, name=f"Scene{key.capitalize()}")
+        _api("style.add_surface_style", file=model, style=style,
+             ifc_class="IfcSurfaceStyleShading",
+             attributes={"SurfaceColour": {"Name": key, "Red": r, "Green": g, "Blue": b},
+                         "Transparency": 0.0})
+        fstyles[key] = style
+
+    def boxx(name, bw, bd, bh, cx, cy, z, color_key, otype, rot=0.0):
+        return _scene_box(model, body, fstyles, storey, name, bw, bd, bh,
+                          cx, cy, z, color_key, otype, rot)
+
+    windows_total = 0
+    for b_idx, b in enumerate(data["buildings"], start=1):
+        w, d = b["width_m"], b["depth_m"]
+        fh, n = b["floor_height"], b["storeys"]
+        cx0, cy0 = b["x_m"], b["y_m"]
+        tag = "Гл" if b.get("main") else f"Д{b_idx}"
+        win = b["windows"]
+        for f in range(n):
+            boxx(f"Стены {tag} · этаж {f + 1}", w, d, fh, cx0, cy0, f * fh,
+                 "walls", "CONCEPTUAL_STOREY")
+        # фронт (IFC -Y): сетка как у фасада, x_m балкона — от левого края
+        usable = w - 2 * win["margin_x_m"]
+        gap = (usable - win["cols"] * win["w_m"]) / (win["cols"] - 1) \
+            if win["cols"] > 1 else 0.0
+        pitch = win["w_m"] + max(gap, 0.0)
+        xs = [cx0 - w / 2 + win["margin_x_m"] + i * pitch + win["w_m"] / 2
+              for i in range(win["cols"])]
+        zs = [win["margin_y_m"] + win["h_m"] / 2]  # rows=1..2; центр строки
+        if win["rows"] > 1:
+            mid = (fh - 2 * win["margin_y_m"]) / 2
+            zs = [win["margin_y_m"] + win["h_m"] / 2, mid + win["h_m"] / 2]
+        for f in range(n):
+            for z_in in zs:
+                for x in xs:
+                    boxx(f"Окно {tag} Э{f + 1}-{xs.index(x) + 1}", win["w_m"], 0.12,
+                         win["h_m"], x, cy0 - d / 2, f * fh + z_in,
+                         "glazing", "CONCEPTUAL_WINDOW")
+                    windows_total += 1
+        if b.get("main"):
+            # боковины ±X упрощённой сеткой (глухие боковины рендер не достраивает)
+            side_cols = max(1, min(6, round((d - 2 * win["margin_x_m"]) / pitch))) \
+                if pitch > 0 else 1
+            for f in range(n):
+                for z_in in zs:
+                    for sgn, sname in ((-1, "L"), (1, "R")):
+                        for k in range(side_cols):
+                            y = cy0 - d / 2 + win["margin_x_m"] + k * pitch \
+                                + win["w_m"] / 2
+                            boxx(f"Окно {tag} бок{sname} Э{f + 1}-{k + 1}",
+                                 0.12, win["w_m"], win["h_m"],
+                                 cx0 + sgn * (w / 2 + 0.06), y, f * fh + z_in,
+                                 "glazing", "CONCEPTUAL_WINDOW")
+                            windows_total += 1
+        for j, bal in enumerate(b["balconies"], start=1):
+            bal_z = (bal["floor"] - 1) * fh - 0.18
+            boxx(f"Балкон {tag} {j} · этаж {bal['floor']}", bal["w_m"], bal["d_m"], 0.18,
+                 cx0 + bal["x_m"] - w / 2, cy0 - (d / 2 + bal["d_m"] / 2), bal_z,
+                 "balcony", "CONCEPTUAL_BALCONY")
+        boxx(f"Цоколь {tag}", w + 0.2, d + 0.2, 0.6, cx0, cy0, 0.0,
+             "plinth", "CONCEPTUAL_PLINTH")
+        if b["roof"] == "gable" and b["roof_height"] > 0.05:
+            ridge = _api("root.create_entity", file=model,
+                         ifc_class="IfcBuildingElementProxy",
+                         predefined_type="USERDEFINED", name=f"Крыша {tag} двускатная")
+            ridge.ObjectType = "CONCEPTUAL_ROOF"
+            prof = [[-w / 2, 0.0], [w / 2, 0.0], [0.0, b["roof_height"]]]
+            profile = _api("profile.add_arbitrary_profile", file=model, profile=prof,
+                           name=f"Крыша {tag}")
+            representation = _api("geometry.add_profile_representation", file=model,
+                                  context=body, profile=profile, depth=d,
+                                  cardinal_point=None)
+            _api("geometry.assign_representation", file=model, product=ridge,
+                 representation=representation)
+            _api("spatial.assign_container", file=model, products=[ridge],
+                 relating_structure=storey)
+            matrix = np.array([
+                [1.0, 0.0, 0.0, cx0],
+                [0.0, 0.0, 1.0, cy0 - d / 2],
+                [0.0, 1.0, 0.0, n * fh],
+                [0.0, 0.0, 0.0, 1.0],
+            ])
+            _api("geometry.edit_object_placement", file=model, product=ridge,
+                 matrix=matrix)
+            _api("style.assign_representation_styles", file=model,
+                 shape_representation=representation, styles=[fstyles["roof"]])
+
+    ctx = data["context"]
+    for t_idx, tr in enumerate(ctx.get("trees", []), start=1):
+        h, crown = tr["h_m"], tr["crown_d_m"]
+        boxx(f"Дерево {t_idx} · ствол", 0.3, 0.3, h * 0.4, tr["x_m"], tr["y_m"], 0.0,
+             "trunk", "CONCEPTUAL_TREE")
+        boxx(f"Дерево {t_idx} · крона", crown, crown, h * 0.6, tr["x_m"], tr["y_m"],
+             h * 0.4, "tree", "CONCEPTUAL_TREE")
+    for c_idx, car in enumerate(ctx.get("cars", []), start=1):
+        boxx(f"Машина {c_idx}", 1.8, 4.5, 1.4, car["x_m"], car["y_m"], 0.0,
+             "car", "CONCEPTUAL_CAR", rot=car.get("rot_deg", 0.0))
+    for p_idx, per in enumerate(ctx.get("people", []), start=1):
+        boxx(f"Человек {p_idx}", 0.5, 0.3, 1.7, per["x_m"], per["y_m"], 0.0,
+             "person", "CONCEPTUAL_PERSON")
+
+    # земля: общий габарит + запас 4 м
+    all_xy = [(b["x_m"] - b["width_m"] / 2, b["y_m"] - b["depth_m"] / 2,
+               b["x_m"] + b["width_m"] / 2, b["y_m"] + b["depth_m"] / 2)
+              for b in data["buildings"]]
+    for it in ctx.get("trees", []) + ctx.get("cars", []) + ctx.get("people", []):
+        all_xy.append((it["x_m"] - 2, it["y_m"] - 2, it["x_m"] + 2, it["y_m"] + 2))
+    x0 = min(p[0] for p in all_xy) - 4 if all_xy else -20
+    y0 = min(p[1] for p in all_xy) - 4 if all_xy else -20
+    x1 = max(p[2] for p in all_xy) + 4 if all_xy else 20
+    y1 = max(p[3] for p in all_xy) + 4 if all_xy else 20
+    boxx("Земля", x1 - x0, y1 - y0, 0.25, (x0 + x1) / 2, (y0 + y1) / 2, -0.25,
+         "ground", "CONCEPTUAL_GROUND")
+
+    cam = data["camera"]
+    _properties(model, project, "CameraHint", {
+        "AzimuthDeg": cam.get("azimuth_deg", 25.0),
+        "EyeHeightM": cam.get("eye_height_m", 1.6),
+        "DistM": cam.get("dist_m", 35.0),
+    })
+    _properties(model, building, "SceneModel", {
+        "Buildings": len(data["buildings"]),
+        "Trees": len(ctx.get("trees", [])),
+        "Cars": len(ctx.get("cars", [])),
+        "People": len(ctx.get("people", [])),
+        "WindowsTotal": windows_total,
+        "OrthoAssumption": True, "Source": "3D Design", "Notes": ASSUMPTION_SCENE,
+    })
+
+    _write_header(model, ifc_path)
+    model.write(str(ifc_path))
+    _draw_scene_preview(data, preview_path)
+    return ifc_path
+
+
+def _draw_scene_preview(data, preview_path):
+    """План сцены сверху: здания, контекст, маркер камеры с направлением."""
+    import matplotlib.pyplot as plt
+    import matplotlib.transforms
+    from matplotlib.patches import Circle, FancyArrow, Rectangle
+
+    fig, ax = plt.subplots(figsize=(10, 8), dpi=140)
+    ctx = data["context"]
+    for b in data["buildings"]:
+        face = "#d9c7a7" if b.get("main") else "#c4cdd8"
+        ax.add_patch(Rectangle((b["x_m"] - b["width_m"] / 2, b["y_m"] - b["depth_m"] / 2),
+                               b["width_m"], b["depth_m"], facecolor=face,
+                               edgecolor="#263747", linewidth=1.2))
+        ax.text(b["x_m"], b["y_m"], f"{b['storeys']} эт.", ha="center", va="center",
+                fontsize=9, color="#15232e", fontweight="bold")
+    for t in ctx.get("trees", []):
+        ax.add_patch(Circle((t["x_m"], t["y_m"]), t["crown_d_m"] / 2,
+                            facecolor="#7fae7f", edgecolor="#3c603c", alpha=.85))
+    for c in ctx.get("cars", []):
+        rot = c.get("rot_deg", 0.0) or 0.0
+        tr = matplotlib.transforms.Affine2D().rotate_deg_around(
+            c["x_m"], c["y_m"], rot) + ax.transData
+        rect = Rectangle((c["x_m"] - 0.9, c["y_m"] - 2.25), 1.8, 4.5,
+                         facecolor="#9aa3ad", edgecolor="#263747")
+        rect.set_transform(tr)
+        ax.add_patch(rect)
+    for p in ctx.get("people", []):
+        ax.add_patch(Circle((p["x_m"], p["y_m"]), 0.4, facecolor="#38424e"))
+    cam = data["camera"]
+    az = np.radians(cam.get("azimuth_deg", 25.0))
+    dist = cam.get("dist_m", 35.0)
+    main = next((b for b in data["buildings"] if b.get("main")), {"x_m": 0, "y_m": 0})
+    # фасад главного здания смотрит на -Y (юг): камера — южнее, az>0 восточнее
+    cxp = main["x_m"] + dist * np.sin(az)
+    cyp = main["y_m"] - dist * np.cos(az)
+    ax.add_patch(Circle((cxp, cyp), 1.2, facecolor="#e2574c", edgecolor="#7a1f18"))
+    ax.add_patch(FancyArrow(cxp, cyp, (main["x_m"] - cxp) * 0.3,
+                            (main["y_m"] - cyp) * 0.3,
+                            width=0.5, head_width=2.0, color="#e2574c", alpha=.8))
+    ax.text(cxp, cyp + 2.5, f"камера {cam.get('azimuth_deg', 25):g}° · {dist:g} м",
+            ha="center", fontsize=8, color="#7a1f18")
+    ax.set_aspect("equal")
+    ax.autoscale(True)
+    ax.set_title("3D Design — сцена: план (схематично, метры)", fontsize=13)
+    ax.axis("off")
+    fig.tight_layout()
+    preview_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(preview_path, facecolor="white")
+    plt.close(fig)
