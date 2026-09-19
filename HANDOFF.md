@@ -1536,8 +1536,8 @@ invokeai==6.2.0` их нужно запускать повторно в поря
       flat ИЛИ двускатная CONCEPTUAL_ROOF (3-точечный профиль,
       выдавливание depth с матрицей поворота локальная Y→Z), pset
       FacadeModel на IfcBuilding (Storeys/FloorHeight/WidthM/DepthM/
-      Roof/RoofHeight/WindowsTotal/BalconiesCount/OrthoAssumption=
-      perspective|ortho/DepthAssumed), превью — чертёж фасада в метрах
+      Roof/RoofHeight/WindowsTotal/BalconiesCount/OrthoAssumed=True
+      (перспектива принята за орто)/DepthAssumed=True), превью — чертёж фасада в метрах
       (стены/цоколь/окна/balcony-штриховка/крыша/штрих-линии этажей).
       Роутер: SCENARIOS={"plan","facade"}, ветвление промпт/валидатор/
       сборщик по сценарию; interior → 422 «в разработке».
