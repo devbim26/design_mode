@@ -596,6 +596,67 @@ def test_validate_facade_balcony_fit():
     print("test_validate_facade_balcony_fit OK")
 
 
+def sample_scene_scene():
+    """Сцена: главное 7-эт. здание в (0,0) 27×15 м, второе 3-эт. в (32,8);
+    камера азимут -30 (слева), деревья/машины/люди. Третье здание с повторным
+    main валидатор отбрасывает, четвёртое — за лимитом 1..3 (остаются 2)."""
+    return {
+        "camera": {"azimuth_deg": -30, "eye_height_m": 1.7, "dist_m": 40},
+        "buildings": [
+            {"main": True, "x_m": 0, "y_m": 0, "width_m": 27.0, "depth_m": 15.0,
+             "storeys": 7, "floor_height": 3.1, "roof": "flat", "roof_height": 0.5,
+             "windows": {"rows": 1, "cols": 8, "w_m": 1.4, "h_m": 1.8,
+                         "margin_x_m": 1.5, "margin_y_m": 0.6},
+             "balconies": [{"floor": 2, "x_m": 1.5, "w_m": 3.0, "d_m": 1.2}],
+             "colors": {"walls": "#c9b49a", "roof": "#52616b", "plinth": "#8d8d8d"}},
+            {"main": False, "x_m": 32.0, "y_m": 8.0, "width_m": 14.0, "depth_m": 10.0,
+             "storeys": 3, "floor_height": 3.0, "roof": "gable", "roof_height": 2.0,
+             "windows": {"rows": 1, "cols": 4, "w_m": 1.4, "h_m": 1.6,
+                         "margin_x_m": 1.0, "margin_y_m": 0.7},
+             "balconies": [], "colors": {}},
+            {"main": True, "x_m": -40.0, "y_m": 0.0, "width_m": 10.0, "depth_m": 10.0,
+             "storeys": 2, "floor_height": 3.0, "roof": "flat", "roof_height": 1.0,
+             "windows": {}, "balconies": [], "colors": {}},
+            {"main": False, "x_m": 60.0, "y_m": -20.0, "width_m": 8.0, "depth_m": 8.0,
+             "storeys": 1, "floor_height": 3.0, "roof": "flat", "roof_height": 0.5,
+             "windows": {}, "balconies": [], "colors": {}},
+        ],
+        "context": {
+            "trees": [{"x_m": 8.0, "y_m": -12.0, "h_m": 7.0, "crown_d_m": 3.5},
+                      {"x_m": "bad"}, {"x_m": 15.0, "y_m": -14.0, "h_m": 99,
+                                       "crown_d_m": 3.0}],
+            "cars": [{"x_m": -6.0, "y_m": -10.0, "rot_deg": 15}],
+            "people": [{"x_m": 5.0, "y_m": -9.0}, {"x_m": 6.0, "y_m": -9.5}],
+        },
+    }
+
+
+def test_validate_scene():
+    from threed.threed_scenarios import validate_scene, SYSTEM_SCENE
+    assert "azimuth_deg" in SYSTEM_SCENE and "crown_d_m" in SYSTEM_SCENE
+    out, warn = validate_scene(sample_scene_scene())
+    assert out["camera"] == {"azimuth_deg": -30, "eye_height_m": 1.7, "dist_m": 40}
+    b0, b1 = out["buildings"][0], out["buildings"][1]
+    assert b0["main"] is True and b1["main"] is False
+    assert len(out["buildings"]) == 2          # третий (dup main) отброшен, 4-й >3
+    assert any("больше 3" in w for w in warn)
+    # окна второго здания прошли как есть; балкон главного влез
+    assert b1["windows"]["cols"] == 4 and b1["windows"]["w_m"] == 1.4
+    # дерево: 'bad'-элемент выкинут, h_m=99 -> кламп 30
+    assert len(out["context"]["trees"]) == 2
+    assert out["context"]["trees"][1]["h_m"] == 30.0
+    assert any("tree.h_m" in w for w in warn)
+    assert len(out["context"]["people"]) == 2
+    # гейты
+    for bad in (None, {}, {"buildings": []}, {"buildings": "x"}):
+        try:
+            validate_scene(bad)
+            raise AssertionError("ожидалась ошибка")
+        except ValueError:
+            pass
+    print("test_validate_scene OK")
+
+
 def test_admin_threed_section():
     src = (ROOT / "imagerouter" / "imagerouter.html").read_text(encoding="utf-8")
     assert 'id="threedsec"' in src
@@ -613,6 +674,7 @@ if __name__ == "__main__":
     test_validate_facade()
     test_validate_interior()
     test_validate_facade_balcony_fit()
+    test_validate_scene()
     test_generate_impl()
     test_generate_impl_facade()
     test_generate_impl_interior()

@@ -554,3 +554,211 @@ def validate_interior(scene, img_w, img_h):
     if not out["walls"] and not out["rooms"] and not out["furniture"]:
         raise ValueError("На картинке не найдено объектов для 3D-модели")
     return out, warnings
+
+
+# ===================== Фаза 4: сценарий «Сцена» (camera mapping) =====================
+
+SYSTEM_SCENE = """You are a BIM street-scene analyst. Look at the attached PHOTO of a
+street / yard with 1-3 buildings, trees, cars and people. Reconstruct a rough 3D
+massing scene as parametric JSON. Reply with STRICT JSON ONLY - no markdown
+fences, no comments, no extra keys.
+
+Schema (ALL VALUES ARE METERS; plan axes: X east, Y north; the MAIN building
+facade faces SOUTH = -Y and stands near the origin):
+{
+ "camera": {
+   "azimuth_deg": <float -75..75; 0 = camera straight in front of the main facade
+     (south of it, looking north); positive = camera moved to the RIGHT of the
+     facade (east side)>,
+   "eye_height_m": <camera eye height; street-level photo ~1.5-1.8>,
+   "dist_m": <distance from camera to the main facade, 10..200>
+ },
+ "buildings": [
+   {"main": <bool; true ONLY for the building closest to the camera>,
+    "x_m": <center X>, "y_m": <center Y>,
+    "width_m": <facade length along X>, "depth_m": <along Y>,
+    "storeys": <int 1-30>, "floor_height": <2.0-6.0, typical 3.0>,
+    "roof": "flat" | "gable", "roof_height": <ridge above eave>,
+    "windows": {"rows": <1-2>, "cols": <1-10>, "w_m": <>, "h_m": <>,
+      "margin_x_m": <>, "margin_y_m": <>},
+    "balconies": [{"floor": <int, 2..storeys>, "x_m": <center from facade LEFT
+      edge, m>, "w_m": <>, "d_m": <projection depth>}],
+    "colors": {"walls": "#rrggbb", "roof": "#rrggbb", "plinth": "#rrggbb"}}
+ ],
+ "context": {
+   "trees": [{"x_m": <>, "y_m": <>, "h_m": <5-15>, "crown_d_m": <2-6>}],
+   "cars": [{"x_m": <>, "y_m": <>, "rot_deg": <heading; 0 = along X>}],
+   "people": [{"x_m": <>, "y_m": <>}]
+ }
+}
+
+Rules:
+- Scale anchors: storey ~3 m, window ~1.5 x 1.5 m, door ~2.1 m, car 4.5 x 1.8 m,
+  tree 5-8 m, person 1.7 m. Printed dimension lines are exact.
+- The MAIN building is the one closest to the camera: place it at x_m=0, y_m=0
+  with its main facade facing -Y (south). Other buildings: offsets in meters.
+- Count storeys and window columns of the MAIN building CAREFULLY; perspective in
+  photos: treat facades as flat (orthographic).
+- Side walls get a simplified window grid automatically - do not invent them.
+- The USER PROMPT overrides your guesses wherever it states them.
+"""
+
+
+def validate_scene(scene):
+    """Сцена улицы от VLM -> (чистая сцена, warnings). ValueError — нет зданий."""
+    if not isinstance(scene, dict) or not isinstance(scene.get("buildings"), list) \
+            or not scene["buildings"]:
+        raise ValueError("Не удалось распознать сцену на картинке (нет зданий)")
+    warnings = []
+    out = {"camera": {}, "buildings": [], "context": {}}
+
+    cam = scene.get("camera") if isinstance(scene.get("camera"), dict) else {}
+    out["camera"]["azimuth_deg"] = _facade_float(
+        cam.get("azimuth_deg", 25.0), 25.0, -75.0, 75.0, "camera.azimuth_deg", warnings)
+    out["camera"]["eye_height_m"] = _facade_float(
+        cam.get("eye_height_m", 1.6), 1.6, 0.3, 30.0, "camera.eye_height_m", warnings)
+    out["camera"]["dist_m"] = _facade_float(
+        cam.get("dist_m", 35.0), 35.0, 10.0, 200.0, "camera.dist_m", warnings)
+
+    main_seen = False
+    for idx, b in enumerate(scene["buildings"][:3], start=1):
+        if not isinstance(b, dict):
+            warnings.append(f"Здание {idx}: не объект — пропущено")
+            continue
+        if bool(b.get("main")) and main_seen:
+            warnings.append(f"Здание {idx}: main уже назначен — здание отброшено")
+            continue
+        main = bool(b.get("main"))
+        main_seen = main_seen or main
+        bld = {"main": main}
+        bld["x_m"] = _facade_float(b.get("x_m", 0.0), 0.0, -150.0, 150.0,
+                                   f"Здание {idx}.x_m", warnings)
+        bld["y_m"] = _facade_float(b.get("y_m", 0.0), 0.0, -150.0, 150.0,
+                                   f"Здание {idx}.y_m", warnings)
+        bld["width_m"] = _facade_float(b.get("width_m", 18.0), 18.0, 3.0, 120.0,
+                                       f"Здание {idx}.width_m", warnings)
+        bld["depth_m"] = _facade_float(b.get("depth_m", 12.0), 12.0, 3.0, 60.0,
+                                       f"Здание {idx}.depth_m", warnings)
+        bld["storeys"] = int(_facade_float(b.get("storeys", 5), 5, 1, 30,
+                                           f"Здание {idx}.storeys", warnings))
+        bld["floor_height"] = _facade_float(b.get("floor_height", 3.0), 3.0, 2.0, 6.0,
+                                            f"Здание {idx}.floor_height", warnings)
+        roof = b.get("roof", "flat")
+        if roof not in ("flat", "gable"):
+            warnings.append(f"Здание {idx}: крыша «{roof}» не поддержана — flat")
+            roof = "flat"
+        bld["roof"] = roof
+        bld["roof_height"] = _facade_float(b.get("roof_height", 2.5), 2.5, 0.5, 8.0,
+                                           f"Здание {idx}.roof_height", warnings)
+        wsrc = b.get("windows") if isinstance(b.get("windows"), dict) else {}
+        win = {}
+        win["rows"] = int(_facade_float(wsrc.get("rows", 1), 1, 1, 2,
+                                        f"Здание {idx}.windows.rows", warnings))
+        win["cols"] = int(_facade_float(wsrc.get("cols", 4), 4, 1, 10,
+                                        f"Здание {idx}.windows.cols", warnings))
+        win["margin_x_m"] = _facade_float(wsrc.get("margin_x_m", 1.0), 1.0, 0.05, 5.0,
+                                          f"Здание {idx}.windows.margin_x_m", warnings)
+        win["margin_y_m"] = _facade_float(wsrc.get("margin_y_m", 0.8), 0.8, 0.05, 3.0,
+                                          f"Здание {idx}.windows.margin_y_m", warnings)
+        win["w_m"] = _facade_float(wsrc.get("w_m", 1.5), 1.5, 0.3, 5.0,
+                                   f"Здание {idx}.windows.w_m", warnings)
+        win["h_m"] = _facade_float(wsrc.get("h_m", 1.5), 1.5, 0.3, 4.0,
+                                   f"Здание {idx}.windows.h_m", warnings)
+        max_mx = max(0.05, (bld["width_m"] - 0.3 * win["cols"]) / 2)
+        win["margin_x_m"] = min(win["margin_x_m"], max_mx)
+        max_my = max(0.05, (bld["floor_height"] - 0.3 * win["rows"]) / 2)
+        win["margin_y_m"] = min(win["margin_y_m"], max_my)
+        win["w_m"] = min(win["w_m"], (bld["width_m"] - 2 * win["margin_x_m"]) / win["cols"])
+        win["h_m"] = min(win["h_m"], (bld["floor_height"] - 2 * win["margin_y_m"]) / win["rows"])
+        bld["windows"] = win
+        bals = []
+        raw_bals = b.get("balconies") if isinstance(b.get("balconies"), list) else []
+        for j, bal in enumerate(raw_bals[:20], start=1):
+            if not isinstance(bal, dict):
+                warnings.append(f"Здание {idx} балкон {j}: не объект — пропущен")
+                continue
+            try:
+                floor = int(bal.get("floor", 0))
+                x = float(bal.get("x_m", bld["width_m"] / 2))
+                w_b = float(bal.get("w_m", 3.0))
+                d_b = float(bal.get("d_m", 1.2))
+            except (TypeError, ValueError):
+                warnings.append(f"Здание {idx} балкон {j}: неверные размеры — пропущен")
+                continue
+            if x != x or w_b != w_b or d_b != d_b:  # NaN
+                continue
+            if floor < 2 or floor > bld["storeys"]:
+                continue  # 1-й этаж — не балкон; вне диапазона — тихий skip
+            if not (0.5 <= w_b <= bld["width_m"]) or not (0.3 <= d_b <= 5.0):
+                warnings.append(f"Здание {idx} балкон {j}: размеры вне диапазона — пропущен")
+                continue
+            lo, hi = w_b / 2, bld["width_m"] - w_b / 2
+            if x < lo or x > hi:
+                x = max(lo, min(hi, x))
+                warnings.append(f"Здание {idx} балкон {j}: центр вне фасада — кламп {x:g}")
+            bals.append({"floor": floor, "x_m": x, "w_m": w_b, "d_m": d_b})
+        bld["balconies"] = bals
+        src_colors = b.get("colors") if isinstance(b.get("colors"), dict) else {}
+        colors = {}
+        for key, default in (("walls", "#c8b89a"), ("roof", "#52616b"),
+                             ("plinth", "#8d8d8d")):
+            v = src_colors.get(key)
+            colors[key] = v if _is_hex(v) else default
+        bld["colors"] = colors
+        out["buildings"].append(bld)
+    if len(scene["buildings"]) > 3:
+        warnings.append("buildings: больше 3 — лишние отброшены")
+    if not out["buildings"]:
+        raise ValueError("На картинке не найдено зданий для 3D-модели")
+    if not main_seen:
+        out["buildings"][0]["main"] = True  # первое — главное
+
+    ctx_raw = scene.get("context") if isinstance(scene.get("context"), dict) else {}
+    ctx = {"trees": [], "cars": [], "people": []}
+    raw_trees = ctx_raw.get("trees")
+    if isinstance(raw_trees, list):
+        for it in raw_trees[:40]:
+            if not isinstance(it, dict):
+                continue
+            try:
+                x, y = float(it.get("x_m", 0.0)), float(it.get("y_m", 0.0))
+            except (TypeError, ValueError):
+                continue
+            if x != x or y != y:
+                continue
+            ctx["trees"].append({
+                "x_m": _clamp(x, -150.0, 150.0), "y_m": _clamp(y, -150.0, 150.0),
+                "h_m": _facade_float(it.get("h_m", 6.0), 6.0, 2.0, 30.0,
+                                     "tree.h_m", warnings),
+                "crown_d_m": _facade_float(it.get("crown_d_m", 3.0), 3.0, 1.0, 10.0,
+                                           "tree.crown_d_m", warnings)})
+    raw_cars = ctx_raw.get("cars")
+    if isinstance(raw_cars, list):
+        for it in raw_cars[:20]:
+            if not isinstance(it, dict):
+                continue
+            try:
+                x, y = float(it.get("x_m", 0.0)), float(it.get("y_m", 0.0))
+                rot = float(it.get("rot_deg", 0.0))
+            except (TypeError, ValueError):
+                continue
+            if x != x or y != y:
+                continue
+            ctx["cars"].append({"x_m": _clamp(x, -150.0, 150.0),
+                                "y_m": _clamp(y, -150.0, 150.0),
+                                "rot_deg": _clamp(rot, -180.0, 180.0)})
+    raw_people = ctx_raw.get("people")
+    if isinstance(raw_people, list):
+        for it in raw_people[:40]:
+            if not isinstance(it, dict):
+                continue
+            try:
+                x, y = float(it.get("x_m", 0.0)), float(it.get("y_m", 0.0))
+            except (TypeError, ValueError):
+                continue
+            if x != x or y != y:
+                continue
+            ctx["people"].append({"x_m": _clamp(x, -150.0, 150.0),
+                                  "y_m": _clamp(y, -150.0, 150.0)})
+    out["context"] = ctx
+    return out, warnings
