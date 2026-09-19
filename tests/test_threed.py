@@ -163,6 +163,8 @@ def test_build_facade():
     bal2 = [p for p in proxies if p.ObjectType == "CONCEPTUAL_BALCONY"
             and "этаж 2" in (p.Name or "")][0]
     assert abs(get_local_placement(bal2.ObjectPlacement)[2, 3] - (1 * 3.0 - 0.18)) < 1e-6
+    # спека A1: мировой центр балкона = x_m - width/2 (4.0 - 12.0 = -8.0)
+    assert abs(get_local_placement(bal2.ObjectPlacement)[0, 3] - (4.0 - 24.0 / 2)) < 1e-6
     assert by_type.get("CONCEPTUAL_PLINTH") == 1
     assert by_type.get("CONCEPTUAL_ROOF") == 1              # двускатная призма
     # этажи на своих отметках
