@@ -709,6 +709,27 @@ def test_build_scene():
     print("test_build_scene OK")
 
 
+def test_generate_impl_scene():
+    from PIL import Image
+    import threed.threed_router as R
+    R._vlm_list_cached = lambda: []  # тесты без сети
+    scene = sample_scene_scene()
+    R._call_vlm = _mock_vlm_ok("```json\n" + json.dumps(scene, ensure_ascii=False) + "\n```")
+    TMP.mkdir(exist_ok=True)
+    img = Image.new("RGB", (691, 647), (250, 250, 250))
+    res = R._generate_impl("scene", "тест сцены", img, TMP)
+    assert res["name"].startswith("3D_scene_") and res["name"].endswith(".ifc")
+    assert (TMP / res["name"]).is_file()
+    assert res["camHint"] == {"azimuth_deg": -30, "eye_height_m": 1.7, "dist_m": 40}
+    assert "scene" in R.SCENARIOS
+    try:
+        R._generate_impl("attic", "", img, TMP)
+        raise AssertionError("ожидалась ошибка")
+    except ValueError as e:
+        assert "scene" in str(e)
+    print("test_generate_impl_scene OK")
+
+
 def test_admin_threed_section():
     src = (ROOT / "imagerouter" / "imagerouter.html").read_text(encoding="utf-8")
     assert 'id="threedsec"' in src
@@ -728,6 +749,7 @@ if __name__ == "__main__":
     test_validate_facade_balcony_fit()
     test_validate_scene()
     test_build_scene()
+    test_generate_impl_scene()
     test_generate_impl()
     test_generate_impl_facade()
     test_generate_impl_interior()

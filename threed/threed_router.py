@@ -36,7 +36,7 @@ from invokeai.app.services.config.config_default import get_config
 threed_router = APIRouter(prefix="/v1/threed", tags=["threed"])
 
 DEFAULT_MODEL = "openai/gpt-6-astra"
-SCENARIOS = {"plan", "facade", "interior"}
+SCENARIOS = {"plan", "facade", "interior", "scene"}
 CHAT_TIMEOUT_S = 180
 VLM_LIST_CACHE_S = 600
 MAX_SIDE = 1536
@@ -200,7 +200,7 @@ def _call_vlm(system: str, prompt: str, image_url: str, model: str) -> str:
 def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = None) -> dict:
     """Без HTTP: анализ -> сцена -> IFC + превью. Raises ValueError (роутер даст 422)."""
     if scenario not in SCENARIOS:
-        raise ValueError(f"Сценарий «{scenario}» в разработке (доступны: plan, facade, interior)")
+        raise ValueError(f"Сценарий «{scenario}» в разработке (доступны: plan, facade, interior, scene)")
     model, source = _load_model_choice()
     try:
         _validate_model_in_list(model)
@@ -211,7 +211,8 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
     scene = None
     last_err = ""
     for attempt in (1, 2):  # один ретрай на невалидный JSON
-        system = (threed_scenarios.SYSTEM_INTERIOR if scenario == "interior"
+        system = (threed_scenarios.SYSTEM_SCENE if scenario == "scene"
+                  else threed_scenarios.SYSTEM_INTERIOR if scenario == "interior"
                   else threed_scenarios.SYSTEM_FACADE if scenario == "facade"
                   else threed_scenarios.SYSTEM_GENPLAN)
         raw = _call_vlm(system,
@@ -228,6 +229,8 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
     if scenario == "interior":
         scene, warnings = threed_scenarios.validate_interior(
             scene, image.width, image.height)
+    elif scenario == "scene":
+        scene, warnings = threed_scenarios.validate_scene(scene)
     elif scenario == "facade":
         scene, warnings = threed_scenarios.validate_facade(scene)
     else:
@@ -241,6 +244,8 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
     meta = {"Scenario": scenario, "Prompt": prompt, "Model": model, "Source": "3D Design"}
     if scenario == "interior":
         threed_build.build_interior(scene, ifc_path, preview_path, meta)
+    elif scenario == "scene":
+        threed_build.build_scene(scene, ifc_path, preview_path, meta)
     elif scenario == "facade":
         threed_build.build_facade(scene, ifc_path, preview_path, meta)
     else:
@@ -252,7 +257,10 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
             json.dumps(dump, ensure_ascii=False, indent=1), encoding="utf-8")
     except Exception:
         pass
-    return {"name": name, "warnings": warnings}
+    res = {"name": name, "warnings": warnings}
+    if scenario == "scene":
+        res["camHint"] = scene["camera"]
+    return res
 
 
 @threed_router.post("/generate")
