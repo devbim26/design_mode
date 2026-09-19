@@ -1515,6 +1515,56 @@ invokeai==6.2.0` их нужно запускать повторно в поря
       completion $50/M токенов); за E2E-сессию сделано 2 живые генерации.
       Фазы 2 (фасад) и 3 (интерьер) — планы отдельными документами.
 
+38. **3D Design (фаза 2): сценарий «Фасад»** (19.09, ветка `3d`; план
+    `docs/superpowers/plans/2026-09-19-3d-design-phase2-facade.md`, 7 задач).
+    - **Конвейер** — та же модалка, но плитка «Фасад» АКТИВНА («Интерьер»
+      осталась disabled «фаза 3»); placeholder промта меняется по сценарию
+      (promptPhPlan/promptPhFacade, RU/EN). `POST /api/v1/threed/generate`
+      {scenario:"facade"} → VLM по `SYSTEM_FACADE` (вход — фото/рендер ИЛИ
+      чертёж; ВСЯ схема В МЕТРАХ; масштаб по размерным линиям или опорам:
+      этаж ~3 м, окно ~1.5×1.5, дверь ~2.1, балкон ~3×1.2) →
+      `validate_facade` (гейт ValueError: нет storeys/width_m/windows/
+      floor_height; клампы 1–30 этажей; margin pre-clamp ДО FIT,
+      FIT-сжатие окон по свободной ширине; skip-матрица → rows×cols;
+      балконы вне диапазонов DROP с warnings; типо-гварды windows/colors/
+      balconies) → `build_facade`: тома-этажи CONCEPTUAL_STOREY
+      (width×depth×floor_height), окна CONCEPTUAL_WINDOW сеткой
+      (w×0.12×h, центр y=depth/2 — передняя грань на 0.06 м ВПЕРЕДИ
+      фасада; заподлицо делать НЕЛЬЗЯ: совпадающие грани не рендерятся
+      и не кликаются, фикс 1429399), балконы-плиты CONCEPTUAL_BALCONY
+      (этаж≥2, выступ d_m), цоколь CONCEPTUAL_PLINTH (+0.2 м), крыша —
+      flat ИЛИ двускатная CONCEPTUAL_ROOF (3-точечный профиль,
+      выдавливание depth с матрицей поворота локальная Y→Z), pset
+      FacadeModel на IfcBuilding (Storeys/FloorHeight/WidthM/DepthM/
+      Roof/RoofHeight/WindowsTotal/BalconiesCount/OrthoAssumption=
+      perspective|ortho/DepthAssumed), превью — чертёж фасада в метрах
+      (стены/цоколь/окна/balcony-штриховка/крыша/штрих-линии этажей).
+      Роутер: SCENARIOS={"plan","facade"}, ветвление промпт/валидатор/
+      сборщик по сценарию; interior → 422 «в разработке».
+    - **ГРАБЛИ**: (1) Свойство `textarea.placeholder` НЕ декодирует
+      HTML-сущности: в TEXTS хранить чистые кавычки, экранировать
+      (`replace(/"/g,'&quot;')`) только в точке интерполяции innerHTML
+      (9347398). (2) В validate_facade margin pre-clamp обязан идти ДО
+      FIT-сжатия: margin_x 5 при width 3 давал ОТРИЦАТЕЛЬНЫЕ w_m/h_m
+      (e0e2c0d). (3) Клик по окну/балкону/цоколю в 3D-вьювере даёт
+      «Стены · этаж N» / ничего — ИЗВЕСТНОЕ ОГРАНИЧЕНИЕ canvas-picking
+      @thatopen на сгруппированных фрагментах; expressID и геометрия
+      корректны (дерево выбирает те же элементы с полными props),
+      стены/крыша кликаются. (4) E2E-методика: если MCP-браузера нет —
+      `pip install playwright` + `launch_persistent_context(
+      channel="chrome", headless=True)` работает (WebGL рендерит);
+      props-панель ЧИСТИТЬ между кликами (wait ловит старый CONCEPTUAL_);
+      «Вписать» сбрасывает орто-ориентацию; `orthoFacade()` выбирает
+      грань по текущей позиции камеры — навести камеру вдоль нужной оси
+      ДО вызова; VLM-анализатор скриншотов ГОЛЛЮЦИНИРУЕТ фасады —
+      верить пиксельным проверкам (PIL-кроп блоба здания). (5) Тесты
+      роутера импортируют venv-копии threed-модулей — после правок
+      threed/* сперва setup_threed.py, потом тесты.
+    - **Артефакты**: `data/ifc/3D_facade_{20260919-173634,20260919-174856}.ifc`
+      + превью; скриншоты `docs/3d-design-facade-{modal,result}.png`;
+      тесты `tests/test_threed.py` (12 функций). Фаза 3 (интерьер) —
+      план отдельным документом.
+
 
 ```powershell
 cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
