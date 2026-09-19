@@ -230,7 +230,11 @@ def validate_facade(scene):
     out["roof_height"] = _facade_float(scene.get("roof_height", 2.5), 2.5, 0.5, 8.0,
                                        "roof_height", warnings)
 
-    src = scene.get("windows") or {}
+    src = scene.get("windows")
+    if not isinstance(src, dict):
+        if src is not None:
+            warnings.append("windows: не объект — дефолты сетки окон")
+        src = {}
     win = {}
     win["rows"] = int(_facade_float(src.get("rows", 1), 1, 1, 4, "windows.rows", warnings))
     win["cols"] = int(_facade_float(src.get("cols", 3), 3, 1, 10, "windows.cols", warnings))
@@ -240,6 +244,15 @@ def validate_facade(scene):
                                       "windows.margin_y_m", warnings)
     win["w_m"] = _facade_float(src.get("w_m", 1.5), 1.5, 0.3, 5.0, "windows.w_m", warnings)
     win["h_m"] = _facade_float(src.get("h_m", 1.5), 1.5, 0.3, 4.0, "windows.h_m", warnings)
+    # поля не должны съедать фасад/этаж: гарантия ≥0.3 м на окно до FIT
+    max_mx = max(0.05, (out["width_m"] - 0.3 * win["cols"]) / 2)
+    if win["margin_x_m"] > max_mx:
+        warnings.append(f"windows.margin_x_m: {win['margin_x_m']:g} велик — сжат до {max_mx:g}")
+        win["margin_x_m"] = max_mx
+    max_my = max(0.05, (out["floor_height"] - 0.3 * win["rows"]) / 2)
+    if win["margin_y_m"] > max_my:
+        warnings.append(f"windows.margin_y_m: {win['margin_y_m']:g} велик — сжат до {max_my:g}")
+        win["margin_y_m"] = max_my
     # FIT: сетка обязана влезать в фасад/этаж
     fit_w = (out["width_m"] - 2 * win["margin_x_m"]) / win["cols"]
     if win["w_m"] > fit_w:
@@ -265,7 +278,12 @@ def validate_facade(scene):
     out["windows"] = win
 
     out["balconies"] = []
-    for idx, bal in enumerate(scene.get("balconies") or [], start=1):
+    raw_balconies = scene.get("balconies")
+    if not isinstance(raw_balconies, list):
+        if raw_balconies:
+            warnings.append("balconies: не список — пропущены")
+        raw_balconies = []
+    for idx, bal in enumerate(raw_balconies, start=1):
         if not isinstance(bal, dict):
             warnings.append(f"Балкон {idx}: не объект — пропущен")
             continue
@@ -289,7 +307,11 @@ def validate_facade(scene):
             continue
         out["balconies"].append({"floor": floor, "x_m": x, "w_m": w_b, "d_m": d_b})
 
-    src_colors = scene.get("colors") or {}
+    src_colors = scene.get("colors")
+    if not isinstance(src_colors, dict):
+        if src_colors is not None:
+            warnings.append("colors: не объект — дефолты цветов")
+        src_colors = {}
     out["colors"] = {}
     for key, default in (("walls", "#c8b89a"), ("roof", "#52616b"), ("plinth", "#8d8d8d")):
         value = src_colors.get(key)

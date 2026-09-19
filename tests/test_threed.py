@@ -209,6 +209,16 @@ def test_validate_facade():
             raise AssertionError("ожидалась ошибка")
         except ValueError:
             pass
+    # фаза 2, ревью: поля съедают фасад -> поля сжаты, w_m положителен
+    out, warn = validate_facade({"storeys": 2, "width_m": 3.0,
+                                 "windows": {"cols": 4, "margin_x_m": 5.0}})
+    assert out["windows"]["w_m"] >= 0.3 and out["windows"]["margin_x_m"] <= 1.05
+    # фаза 2, ревью: не-dict/не-список из VLM -> деградация, не краш
+    out, warn = validate_facade({"storeys": 2, "windows": ["x"], "balconies": 5,
+                                 "colors": ["y"]})
+    assert out["windows"]["cols"] == 3 and out["balconies"] == []
+    assert out["colors"]["walls"] == "#c8b89a"
+    assert sum(1 for w in warn if "дефолт" in w or "пропущены" in w) >= 3
     print("test_validate_facade OK")
 
 
