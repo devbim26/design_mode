@@ -10,7 +10,7 @@
  * ряду Generate держит window.__devbimPEStore свежим и пишет флаг занятости
  * window.__devbimPEPending. «3D Design» открывает модалку генерации 3D
  * (сценарий/источник/промт -> POST /api/v1/threed/generate -> вкладка IFC;
- * фасад/интерьер — заглушки внутри модалки, фаза 2–3).
+ * сценарии: генплан и фасад, интерьер — заглушка, фаза 3).
  *
  * Ряд очереди ищется локале-независимо: жёлтая (invokeYellow) кнопка
  * ~36px в верхней части панели → её контейнер 200px → родительский ряд
@@ -37,23 +37,27 @@
   var TEXTS = {
     ru: {
       soon: '3D Design — раздел в разработке',
-      soon3d: 'Фасад и интерьер — в разработке (фаза 2–3)',
+      soon3d: 'Интерьер — в разработке (фаза 3)',
       srcCanvas: 'Холст', srcViewer: 'Галерея',
       noSource: 'Положите картинку на Холст или выберите в галерее/вьювере',
       generate: 'Сгенерировать 3D', generating: 'Анализ модели…',
       done: 'Модель создана:', plan: 'Генплан', facade: 'Фасад', interior: 'Интерьер',
-      pickScenario: 'Что генерируем?', promptPh: 'Уточнения: «жилой 5 этажей, школа 3, масштаб 0.5 м/px»',
+      pickScenario: 'Что генерируем?',
+      promptPhPlan: 'Уточнения: «жилой 5 этажей, школа 3, масштаб 0.5 м/px»',
+      promptPhFacade: 'Уточнения: «5 этажей, двускатная крыша, окна 4 в ряд, балконы со 2 этажа, глубина 14 м»',
       netErr: 'Ошибка сети/сервера',
       needTab: 'Откройте вкладку Generate или Холст и повторите'
     },
     en: {
       soon: '3D Design — coming soon',
-      soon3d: 'Facade & Interior — coming soon (phase 2-3)',
+      soon3d: 'Interior — coming soon (phase 3)',
       srcCanvas: 'Canvas', srcViewer: 'Gallery',
       noSource: 'Put an image on the Canvas or select one in the viewer',
       generate: 'Generate 3D', generating: 'Analyzing the model…',
       done: 'Model created:', plan: 'Master plan', facade: 'Facade', interior: 'Interior',
-      pickScenario: 'What to generate?', promptPh: 'Hints: &quot;residential 5 floors, school 3, scale 0.5 m/px&quot;',
+      pickScenario: 'What to generate?',
+      promptPhPlan: 'Hints: &quot;residential 5 floors, school 3, scale 0.5 m/px&quot;',
+      promptPhFacade: 'Hints: &quot;5 storeys, gable roof, 4 windows per row, balconies from floor 2, depth 14 m&quot;',
       netErr: 'Network/server error',
       needTab: 'Open the Generate or Canvas tab and try again'
     }
@@ -336,12 +340,12 @@
       '<div class="devbim-3d-head"><b>3D Design</b><button class="devbim-3d-x" aria-label="close">✕</button></div>' +
       '<div class="devbim-3d-tiles">' +
       '<button class="devbim-3d-tile" data-s="plan"><span>🗺</span>' + t().plan + '</button>' +
-      '<button class="devbim-3d-tile" data-s="facade" disabled title="' + t().soon3d + '"><span>🏢</span>' + t().facade + '</button>' +
+      '<button class="devbim-3d-tile" data-s="facade"><span>🏢</span>' + t().facade + '</button>' +
       '<button class="devbim-3d-tile" data-s="interior" disabled title="' + t().soon3d + '"><span>🛋</span>' + t().interior + '</button>' +
       '</div>' +
       '<div class="devbim-3d-src"><img alt=""><span class="devbim-3d-badge">—</span></div>' +
       '<div id="devbim-3d-hint" style="display:none">' + t().noSource + '</div>' +
-      '<textarea id="devbim-3d-prompt" rows="3" placeholder="' + t().promptPh + '"></textarea>' +
+      '<textarea id="devbim-3d-prompt" rows="3" placeholder="' + t().promptPhPlan + '"></textarea>' +
       '<button id="devbim-3d-go">' + t().generate + '</button>' +
       '<div id="devbim-3d-status"></div>' +
       '</div>';
@@ -353,6 +357,9 @@
         S3.scenario = b.getAttribute('data-s');
         ov.querySelectorAll('.devbim-3d-tile').forEach(function (x) { x.classList.remove('on'); });
         b.classList.add('on');
+        var ta = document.getElementById('devbim-3d-prompt');
+        if (ta) ta.placeholder = b.getAttribute('data-s') === 'facade'
+          ? t().promptPhFacade : t().promptPhPlan;
       });
     });
     ov.querySelector('.devbim-3d-tile').classList.add('on');

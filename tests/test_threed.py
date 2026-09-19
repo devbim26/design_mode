@@ -370,6 +370,17 @@ def test_widget_3d_modal():
     assert "cPresent.rasterLayers && cPresent.rasterLayers.entities" in src, \
         "canvasComposite обязан читать per-type entities (rasterLayers/controlLayers)"
     assert "toast(t().soon)" not in src.split("function build()")[1].split("function isYellow")[0]
+    # фаза 2: плитка фасада активна, placeholder зависит от сценария
+    facade_tile = '<button class="devbim-3d-tile" data-s="facade">'
+    assert facade_tile + "<span>\U0001F3E2</span>" in src, \
+        "плитка фасада должна быть активна (без disabled/title)"
+    assert 'data-s="facade" disabled' not in src
+    assert 'data-s="interior" disabled' in src
+    for key in ("promptPhPlan", "promptPhFacade"):
+        assert key + ":" in src, key
+    assert "promptPh:" not in src and "t().promptPh +" not in src
+    assert "promptPhFacade" in src.split('data-s="facade"')[1], \
+        "клик по плитке фасада подставляет promptPhFacade"
     print("test_widget_3d_modal OK")
 
 
