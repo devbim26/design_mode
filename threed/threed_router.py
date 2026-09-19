@@ -2,7 +2,7 @@
 """3D Design: генерация IFC по картинке (VLM ImageRouter) + выбор модели в менеджере.
 
 Монтируется под /api:
-    POST /api/v1/threed/generate  {scenario, prompt, image}  -> {name, warnings}
+    POST /api/v1/threed/generate  {scenario: plan|facade, prompt, image} -> {name, warnings}
     GET  /api/v1/threed/model     {model, source, vlms:[...]}
     PUT  /api/v1/threed/model     {model} -> {ok}
 
@@ -36,7 +36,7 @@ from invokeai.app.services.config.config_default import get_config
 threed_router = APIRouter(prefix="/v1/threed", tags=["threed"])
 
 DEFAULT_MODEL = "openai/gpt-6-astra"
-SCENARIOS = {"plan"}  # facade/interior — фазы 2-3
+SCENARIOS = {"plan", "facade"}  # interior — фаза 3
 CHAT_TIMEOUT_S = 180
 VLM_LIST_CACHE_S = 600
 MAX_SIDE = 1536
@@ -200,7 +200,7 @@ def _call_vlm(system: str, prompt: str, image_url: str, model: str) -> str:
 def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = None) -> dict:
     """Без HTTP: анализ -> сцена -> IFC + превью. Raises ValueError (роутер даст 422)."""
     if scenario not in SCENARIOS:
-        raise ValueError(f"Сценарий «{scenario}» в разработке (доступен: plan)")
+        raise ValueError(f"Сценарий «{scenario}» в разработке (доступны: plan, facade)")
     model, source = _load_model_choice()
     try:
         _validate_model_in_list(model)
@@ -211,7 +211,9 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
     scene = None
     last_err = ""
     for attempt in (1, 2):  # один ретрай на невалидный JSON
-        raw = _call_vlm(threed_scenarios.SYSTEM_GENPLAN,
+        system = (threed_scenarios.SYSTEM_FACADE if scenario == "facade"
+                  else threed_scenarios.SYSTEM_GENPLAN)
+        raw = _call_vlm(system,
                         prompt + ("\n(attempt 2: return ONLY the strict JSON)" if attempt == 2
                                   else ""),
                         image_url, model)
@@ -222,15 +224,20 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
     if scene is None:
         raise ValueError(f"Модель не смогла описать сцену (не JSON): {last_err}")
 
-    scene, warnings = threed_scenarios.validate_genplan(scene, image.width, image.height)
+    if scenario == "facade":
+        scene, warnings = threed_scenarios.validate_facade(scene)
+    else:
+        scene, warnings = threed_scenarios.validate_genplan(scene, image.width, image.height)
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     name = f"3D_{scenario}_{stamp}.ifc"
     out_dir = Path(out_dir) if out_dir else _ifc_dir()
     ifc_path = out_dir / name
     preview_path = out_dir / (Path(name).stem + "_preview.png")
-    threed_build.build_genplan(
-        scene, image, ifc_path, preview_path,
-        {"Scenario": scenario, "Prompt": prompt, "Model": model, "Source": "3D Design"})
+    meta = {"Scenario": scenario, "Prompt": prompt, "Model": model, "Source": "3D Design"}
+    if scenario == "facade":
+        threed_build.build_facade(scene, ifc_path, preview_path, meta)
+    else:
+        threed_build.build_genplan(scene, image, ifc_path, preview_path, meta)
     dump = {"ts": datetime.now().isoformat(), "scenario": scenario, "prompt": prompt,
             "model": model, "warnings": warnings, "name": name}
     try:

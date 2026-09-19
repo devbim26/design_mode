@@ -263,6 +263,30 @@ def test_generate_impl(monkeypatch=None):
     print("test_generate_impl OK")
 
 
+def test_generate_impl_facade():
+    from PIL import Image
+    import threed.threed_router as R
+    R._vlm_list_cached = lambda: []  # тесты без сети (фаза 1)
+
+    assert "facade" in R.SCENARIOS and "interior" not in R.SCENARIOS
+    scene = sample_facade_scene()
+    R._call_vlm = _mock_vlm_ok("```json\n" + json.dumps(scene, ensure_ascii=False) + "\n```")
+    TMP.mkdir(exist_ok=True)
+    img = Image.new("RGB", (600, 800), (250, 250, 250))
+    res = R._generate_impl("facade", "тест фасада", img, TMP)
+    assert res["name"].startswith("3D_facade_") and res["name"].endswith(".ifc")
+    assert (TMP / res["name"]).is_file()
+    assert (TMP / (Path(res["name"]).stem + "_preview.png")).is_file()
+    assert (TMP / "_threed_last.json").is_file()
+    # интерьер всё ещё фаза 3
+    try:
+        R._generate_impl("interior", "", img, TMP)
+        raise AssertionError("ожидалась ошибка")
+    except ValueError as e:
+        assert "разработке" in str(e)
+    print("test_generate_impl_facade OK")
+
+
 def test_model_choice_and_put(monkeypatch=None):
     import threed.threed_router as R
     # дефолт без файла
@@ -364,6 +388,7 @@ if __name__ == "__main__":
     test_validate_genplan()
     test_validate_facade()
     test_generate_impl()
+    test_generate_impl_facade()
     test_model_choice_and_put()
     test_setup_threed()
     test_ifcviewer_autoload()
