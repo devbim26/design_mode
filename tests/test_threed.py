@@ -381,6 +381,13 @@ def test_widget_3d_modal():
     assert "promptPh:" not in src and "t().promptPh +" not in src
     assert "promptPhFacade" in src.split('data-s="facade"')[1], \
         "клик по плитке фасада подставляет promptPhFacade"
+    # EN-плейсхолдеры без HTML-сущностей: свойство placeholder не декодирует их,
+    # экранирование — только в точке innerHTML-интерполяции
+    assert "promptPhFacade: 'Hints: \"5 storeys" in src
+    assert "&quot;" not in src.split("en: {")[1].split("}")[0], \
+        "TEXTS.en не должен хранить &quot; (утечка при присваивании свойства)"
+    assert "promptPhPlan.replace(/\"/g, '&quot;')" in src, \
+        "placeholder экранируется в точке HTML-интерполяции"
     print("test_widget_3d_modal OK")
 
 

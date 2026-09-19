@@ -56,8 +56,8 @@
       generate: 'Generate 3D', generating: 'Analyzing the model…',
       done: 'Model created:', plan: 'Master plan', facade: 'Facade', interior: 'Interior',
       pickScenario: 'What to generate?',
-      promptPhPlan: 'Hints: &quot;residential 5 floors, school 3, scale 0.5 m/px&quot;',
-      promptPhFacade: 'Hints: &quot;5 storeys, gable roof, 4 windows per row, balconies from floor 2, depth 14 m&quot;',
+      promptPhPlan: 'Hints: "residential 5 floors, school 3, scale 0.5 m/px"',
+      promptPhFacade: 'Hints: "5 storeys, gable roof, 4 windows per row, balconies from floor 2, depth 14 m"',
       netErr: 'Network/server error',
       needTab: 'Open the Generate or Canvas tab and try again'
     }
@@ -345,7 +345,7 @@
       '</div>' +
       '<div class="devbim-3d-src"><img alt=""><span class="devbim-3d-badge">—</span></div>' +
       '<div id="devbim-3d-hint" style="display:none">' + t().noSource + '</div>' +
-      '<textarea id="devbim-3d-prompt" rows="3" placeholder="' + t().promptPhPlan + '"></textarea>' +
+      '<textarea id="devbim-3d-prompt" rows="3" placeholder="' + t().promptPhPlan.replace(/"/g, '&quot;') + '"></textarea>' +
       '<button id="devbim-3d-go">' + t().generate + '</button>' +
       '<div id="devbim-3d-status"></div>' +
       '</div>';
