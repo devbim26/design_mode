@@ -284,12 +284,14 @@ def test_validate_facade():
     out, warn = validate_facade(s)
     assert out["windows"]["skip"] == [[False] * 4]
     assert any("skip" in w for w in warn)
-    # балкон с этажем вне диапазона выкидывается
+    # балкон с этажем вне диапазона выкидывается; центр вне фасада —
+    # клампится, балкон сохраняется (спека A2: «Балконы сохраняем»)
     s = sample_facade_scene()
     s["balconies"] = [{"floor": 9, "x_m": 4, "w_m": 3, "d_m": 1},
                       {"floor": 1, "x_m": 40, "w_m": 3, "d_m": 1}]
     out, warn = validate_facade(s)
-    assert len(out["balconies"]) == 0 and len(warn) >= 2
+    assert len(out["balconies"]) == 1 and out["balconies"][0]["x_m"] == 22.5
+    assert len(warn) >= 2
     # цвет не hex -> дефолт + warning
     s = sample_facade_scene()
     s["colors"] = {"walls": "red"}
@@ -570,6 +572,23 @@ def test_widget_3d_modal():
     print("test_widget_3d_modal OK")
 
 
+def test_validate_facade_balcony_fit():
+    """Спека этапа A2: плита балкона целиком в фасаде — кламп центра."""
+    from threed.threed_scenarios import validate_facade
+    s = sample_facade_scene()
+    s["balconies"] = [{"floor": 2, "x_m": 23.5, "w_m": 3.0, "d_m": 1.2},
+                      {"floor": 3, "x_m": 0.5, "w_m": 3.0, "d_m": 1.2}]
+    out, warn = validate_facade(s)
+    assert [b["x_m"] for b in out["balconies"]] == [22.5, 1.5], out["balconies"]
+    assert any("Балкон 1" in w for w in warn), warn
+    assert any("Балкон 2" in w for w in warn), warn
+    # влезающий балкон не сдвигается и не даёт предупреждений
+    s["balconies"] = [{"floor": 2, "x_m": 4.0, "w_m": 3.0, "d_m": 1.2}]
+    out2, warn2 = validate_facade(s)
+    assert out2["balconies"][0]["x_m"] == 4.0 and warn2 == []
+    print("test_validate_facade_balcony_fit OK")
+
+
 def test_admin_threed_section():
     src = (ROOT / "imagerouter" / "imagerouter.html").read_text(encoding="utf-8")
     assert 'id="threedsec"' in src
@@ -586,6 +605,7 @@ if __name__ == "__main__":
     test_validate_genplan()
     test_validate_facade()
     test_validate_interior()
+    test_validate_facade_balcony_fit()
     test_generate_impl()
     test_generate_impl_facade()
     test_generate_impl_interior()

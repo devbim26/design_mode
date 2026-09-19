@@ -301,10 +301,20 @@ def validate_facade(scene):
         except (TypeError, ValueError):
             warnings.append(f"Балкон {idx}: неверные размеры — пропущен")
             continue
-        if not (0.0 <= x <= out["width_m"]) or not (0.5 <= w_b <= out["width_m"]) \
-                or not (0.3 <= d_b <= 5.0):
+        if x != x or w_b != w_b or d_b != d_b:  # NaN
+            warnings.append(f"Балкон {idx}: неверные размеры — пропущен")
+            continue
+        if not (0.5 <= w_b <= out["width_m"]) or not (0.3 <= d_b <= 5.0):
             warnings.append(f"Балкон {idx}: размеры вне диапазона — пропущен")
             continue
+        # плита целиком в фасаде: центр в [w_b/2, width-w_b/2] (кламп, не дроп)
+        lo, hi = w_b / 2, out["width_m"] - w_b / 2
+        if x < lo or x > hi:
+            clamped = max(lo, min(hi, x))
+            warnings.append(
+                f"Балкон {idx}: центр {x:g} — плита выходит за фасад, "
+                f"центр смещён до {clamped:g}")
+            x = clamped
         out["balconies"].append({"floor": floor, "x_m": x, "w_m": w_b, "d_m": d_b})
 
     src_colors = scene.get("colors")
