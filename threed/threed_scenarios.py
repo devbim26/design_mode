@@ -146,3 +146,156 @@ def validate_genplan(scene, img_w, img_h):
             z, depth = -0.45, 0.35
         out["context"].append({"kind": kind, "z": z, "depth": depth, "points_px": points})
     return out, warnings
+
+
+# ===================== Фаза 2: сценарий «Фасад» =====================
+
+SYSTEM_FACADE = """You are a BIM facade analyst. Look at the attached image: a PHOTO or
+RENDER of a building facade, OR an elevation DRAWING (possibly with dimension lines).
+Estimate the facade as a parametric metric model. Reply with STRICT JSON ONLY - no
+markdown fences, no comments, no extra keys.
+
+Schema (ALL VALUES ARE METERS - no pixel coordinates):
+{
+ "storeys": <int 1-30, number of storeys>,
+ "floor_height": <float m, storey height, 2.5-4 typical>,
+ "width_m": <float m, facade width>,
+ "depth_m": <float m, building depth - NOT visible from the facade; use 12 or the
+   USER PROMPT if it states one>,
+ "roof": "flat" | "gable",
+ "roof_height": <float m, ridge height above the eave, only for gable>,
+ "windows": {
+   "rows": <int 1-4, window rows per storey>,
+   "cols": <int 1-10, windows per row>,
+   "w_m": <float m, window width>, "h_m": <float m, window height>,
+   "margin_x_m": <float m, side margin>, "margin_y_m": <float m, margin inside a storey>,
+   "skip": <rows x cols boolean matrix, true = NO window there (e.g. stair shaft,
+     blind panels); all-false if every cell is glazed>
+ },
+ "balconies": [{"floor": <int 1-based>, "x_m": <center position from facade LEFT edge,
+   m>, "w_m": <width>, "d_m": <projection depth>}],
+ "colors": {"walls": "#rrggbb", "roof": "#rrggbb", "plinth": "#rrggbb"}
+}
+
+Rules:
+- SCALE: if the image has dimension lines - use them (they are exact). Otherwise use
+  anchors: storey ~3 m, window ~1.5 x 1.5 m, entrance door ~2.1 m, balcony ~3 x 1.2 m.
+- Count storeys and window columns CAREFULLY; one window row per storey is typical.
+- Perspective in photos: treat the facade as flat (orthographic).
+- The USER PROMPT overrides your guesses (storeys, depth, roof, colors) wherever it
+  states them.
+"""
+
+
+def _facade_float(value, default, lo, hi, field, warnings):
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        warnings.append(f"{field}: неверное значение — дефолт {default}")
+        return default
+    if v != v:  # NaN
+        warnings.append(f"{field}: NaN — дефолт {default}")
+        return default
+    if v < lo or v > hi:
+        clamped = max(lo, min(hi, v))
+        warnings.append(f"{field}: {v:g} вне [{lo}, {hi}] — кламп до {clamped:g}")
+        return clamped
+    return v
+
+
+def _is_hex(value):
+    import re as _re
+    return isinstance(value, str) and _re.fullmatch(r"#[0-9a-fA-F]{6}", value) is not None
+
+
+def validate_facade(scene):
+    """Сцена фасада от VLM -> (чистая сцена, warnings). ValueError — не фасад."""
+    if not isinstance(scene, dict) or not any(
+            k in scene for k in ("storeys", "width_m", "windows", "floor_height")):
+        raise ValueError("Не удалось распознать фасад на картинке")
+    warnings = []
+    out = {}
+    out["storeys"] = int(_facade_float(scene.get("storeys", 5), 5, 1, 30, "storeys", warnings))
+    out["floor_height"] = _facade_float(scene.get("floor_height", 3.0), 3.0, 2.0, 6.0,
+                                        "floor_height", warnings)
+    out["width_m"] = _facade_float(scene.get("width_m", 18.0), 18.0, 3.0, 200.0,
+                                   "width_m", warnings)
+    out["depth_m"] = _facade_float(scene.get("depth_m", 12.0), 12.0, 3.0, 60.0,
+                                   "depth_m", warnings)
+    roof = scene.get("roof", "flat")
+    if roof not in ("flat", "gable"):
+        warnings.append(f"roof: «{roof}» не поддержан — flat")
+        roof = "flat"
+    out["roof"] = roof
+    out["roof_height"] = _facade_float(scene.get("roof_height", 2.5), 2.5, 0.5, 8.0,
+                                       "roof_height", warnings)
+
+    src = scene.get("windows") or {}
+    win = {}
+    win["rows"] = int(_facade_float(src.get("rows", 1), 1, 1, 4, "windows.rows", warnings))
+    win["cols"] = int(_facade_float(src.get("cols", 3), 3, 1, 10, "windows.cols", warnings))
+    win["margin_x_m"] = _facade_float(src.get("margin_x_m", 1.0), 1.0, 0.05, 5.0,
+                                      "windows.margin_x_m", warnings)
+    win["margin_y_m"] = _facade_float(src.get("margin_y_m", 0.8), 0.8, 0.05, 3.0,
+                                      "windows.margin_y_m", warnings)
+    win["w_m"] = _facade_float(src.get("w_m", 1.5), 1.5, 0.3, 5.0, "windows.w_m", warnings)
+    win["h_m"] = _facade_float(src.get("h_m", 1.5), 1.5, 0.3, 4.0, "windows.h_m", warnings)
+    # FIT: сетка обязана влезать в фасад/этаж
+    fit_w = (out["width_m"] - 2 * win["margin_x_m"]) / win["cols"]
+    if win["w_m"] > fit_w:
+        warnings.append(f"windows.w_m: {win['w_m']:g} не влезает — сжат до {fit_w:g}")
+        win["w_m"] = fit_w
+    fit_h = (out["floor_height"] - 2 * win["margin_y_m"]) / win["rows"]
+    if win["h_m"] > fit_h:
+        warnings.append(f"windows.h_m: {win['h_m']:g} не влезает — сжат до {fit_h:g}")
+        win["h_m"] = fit_h
+    # skip -> строго rows×cols из bool
+    raw_skip = src.get("skip")
+    skip = [[False] * win["cols"] for _ in range(win["rows"])]
+    if raw_skip is not None:
+        ok = isinstance(raw_skip, list) and len(raw_skip) == win["rows"] and all(
+            isinstance(r, list) and len(r) == win["cols"] for r in raw_skip)
+        if ok:
+            for j in range(win["rows"]):
+                for i in range(win["cols"]):
+                    skip[j][i] = bool(raw_skip[j][i])
+        else:
+            warnings.append("windows.skip: неверная форма — все окна считаются остеклёнными")
+    win["skip"] = skip
+    out["windows"] = win
+
+    out["balconies"] = []
+    for idx, bal in enumerate(scene.get("balconies") or [], start=1):
+        if not isinstance(bal, dict):
+            warnings.append(f"Балкон {idx}: не объект — пропущен")
+            continue
+        try:
+            floor = int(bal.get("floor", 0))
+        except (TypeError, ValueError):
+            floor = 0
+        if floor < 1 or floor > out["storeys"]:
+            warnings.append(f"Балкон {idx}: этаж {floor} вне 1..{out['storeys']} — пропущен")
+            continue
+        try:
+            x = float(bal.get("x_m", out["width_m"] / 2))
+            w_b = float(bal.get("w_m", 3.0))
+            d_b = float(bal.get("d_m", 1.2))
+        except (TypeError, ValueError):
+            warnings.append(f"Балкон {idx}: неверные размеры — пропущен")
+            continue
+        if not (0.0 <= x <= out["width_m"]) or not (0.5 <= w_b <= out["width_m"]) \
+                or not (0.3 <= d_b <= 5.0):
+            warnings.append(f"Балкон {idx}: размеры вне диапазона — пропущен")
+            continue
+        out["balconies"].append({"floor": floor, "x_m": x, "w_m": w_b, "d_m": d_b})
+
+    src_colors = scene.get("colors") or {}
+    out["colors"] = {}
+    for key, default in (("walls", "#c8b89a"), ("roof", "#52616b"), ("plinth", "#8d8d8d")):
+        value = src_colors.get(key)
+        if _is_hex(value):
+            out["colors"][key] = value
+        else:
+            warnings.append(f"colors.{key}: не hex — дефолт {default}")
+            out["colors"][key] = default
+    return out, warnings

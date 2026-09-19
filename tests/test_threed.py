@@ -162,6 +162,56 @@ def test_validate_genplan():
     print("test_validate_genplan OK")
 
 
+def test_validate_facade():
+    from threed.threed_scenarios import validate_facade
+    # валидная сцена проходит без изменений структуры
+    out, warn = validate_facade(sample_facade_scene())
+    assert out["storeys"] == 5 and out["windows"]["cols"] == 4
+    assert out["windows"]["skip"] == [[False, True, False, False]]
+    # дефолты на пустых полях
+    out, warn = validate_facade({"storeys": 3})
+    assert out["floor_height"] == 3.0 and out["windows"]["cols"] == 3
+    assert out["depth_m"] == 12.0 and out["roof"] == "flat"
+    # клампы
+    out, warn = validate_facade({"storeys": 99, "floor_height": 9.0, "width_m": 500.0})
+    assert out["storeys"] == 30 and out["floor_height"] == 6.0 and out["width_m"] == 200.0
+    # крыша вне белого списка -> flat + warning
+    out, warn = validate_facade({"storeys": 2, "roof": "hip", "roof_height": 1.0})
+    assert out["roof"] == "flat" and any("hip" in w for w in warn)
+    # FIT: окна не влезают по ширине -> w_m сжат
+    s = {"storeys": 2, "width_m": 10.0,
+         "windows": {"rows": 1, "cols": 4, "w_m": 3.0, "h_m": 1.5,
+                     "margin_x_m": 1.0, "margin_y_m": 0.5}}
+    out, warn = validate_facade(s)
+    assert abs(out["windows"]["w_m"] - (10.0 - 2.0) / 4) < 1e-9
+    assert any("w_m" in w for w in warn)
+    # skip неправильной формы -> all False + warning
+    s = sample_facade_scene()
+    s["windows"]["skip"] = [[True], [True, False]]
+    out, warn = validate_facade(s)
+    assert out["windows"]["skip"] == [[False] * 4]
+    assert any("skip" in w for w in warn)
+    # балкон с этажем вне диапазона выкидывается
+    s = sample_facade_scene()
+    s["balconies"] = [{"floor": 9, "x_m": 4, "w_m": 3, "d_m": 1},
+                      {"floor": 1, "x_m": 40, "w_m": 3, "d_m": 1}]
+    out, warn = validate_facade(s)
+    assert len(out["balconies"]) == 0 and len(warn) >= 2
+    # цвет не hex -> дефолт + warning
+    s = sample_facade_scene()
+    s["colors"] = {"walls": "red"}
+    out, warn = validate_facade(s)
+    assert out["colors"]["walls"] == "#c8b89a" and any("walls" in w for w in warn)
+    # не dict / пустышка -> ValueError
+    for bad in ([1, 2], {"prompt": "x"}, None):
+        try:
+            validate_facade(bad)
+            raise AssertionError("ожидалась ошибка")
+        except ValueError:
+            pass
+    print("test_validate_facade OK")
+
+
 def _mock_vlm_ok(text):
     def call(system, prompt, image_url, model):
         return text
@@ -302,6 +352,7 @@ if __name__ == "__main__":
     test_build_genplan()
     test_extract_json()
     test_validate_genplan()
+    test_validate_facade()
     test_generate_impl()
     test_model_choice_and_put()
     test_setup_threed()
