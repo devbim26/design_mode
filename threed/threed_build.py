@@ -359,8 +359,11 @@ def build_facade(scene, ifc_path, preview_path, meta):
                     storeys[f], object_type="CONCEPTUAL_WINDOW")
                 windows_total += 1
     for b_idx, bal in enumerate(data["balconies"], start=1):
+        # пол балкона = уровень пола его этажа (k-1)*fh: plate толщиной 0.18
+        # верхом вровень с полом (box экструдирует вверх от z)
+        bal_z = (bal["floor"] - 1) * fh - 0.18
         box(f"Балкон {b_idx} · этаж {bal['floor']}", bal["w_m"], bal["d_m"], 0.18,
-            bal["x_m"], d / 2 + bal["d_m"] / 2, bal["floor"] * fh - 0.18, "balcony",
+            bal["x_m"], d / 2 + bal["d_m"] / 2, bal_z, "balcony",
             storeys[bal["floor"] - 1], object_type="CONCEPTUAL_BALCONY")
     box("Цоколь", w + 0.2, d + 0.2, 0.6, 0.0, 0.0, 0.0, "plinth", building,
         object_type="CONCEPTUAL_PLINTH")
@@ -437,13 +440,14 @@ def _draw_facade_preview(data, preview_path):
                      [x, f * fh + z_in + win["h_m"]]],
                     facecolor=colors["glazing"], edgecolor="white", linewidth=0.7))
     for b_idx, bal in enumerate(data["balconies"], start=1):
+        bal_lo = (bal["floor"] - 1) * fh
         ax.add_patch(PlotPolygon(
-            [[bal["x_m"] - bal["w_m"] / 2, bal["floor"] * fh - 1.0],
-             [bal["x_m"] + bal["w_m"] / 2, bal["floor"] * fh - 1.0],
-             [bal["x_m"] + bal["w_m"] / 2, bal["floor"] * fh],
-             [bal["x_m"] - bal["w_m"] / 2, bal["floor"] * fh]],
+            [[bal["x_m"] - bal["w_m"] / 2, bal_lo],
+             [bal["x_m"] + bal["w_m"] / 2, bal_lo],
+             [bal["x_m"] + bal["w_m"] / 2, bal_lo + 1.0],
+             [bal["x_m"] - bal["w_m"] / 2, bal_lo + 1.0]],
             facecolor="none", edgecolor=colors["balcony"], hatch="////", linewidth=1.2))
-        ax.text(bal["x_m"], bal["floor"] * fh - 0.5, f"Б{b_idx}", ha="center", va="center",
+        ax.text(bal["x_m"], bal_lo + 0.5, f"Б{b_idx}", ha="center", va="center",
                 fontsize=7, color="#15232e")
     top = H
     if data["roof"] == "gable":

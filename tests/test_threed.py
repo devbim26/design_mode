@@ -70,6 +70,12 @@ def test_build_facade():
     assert by_type.get("CONCEPTUAL_STOREY") == 5            # поэтажные тома
     assert by_type.get("CONCEPTUAL_WINDOW") == 3 * 5        # 4 минус skip, на этаж
     assert by_type.get("CONCEPTUAL_BALCONY") == 2
+    # балкон этажа k стоит на уровне ПОЛА этого этажа: верх плиты (k-1)*fh
+    # (регресс: раньше строились на этаж выше — floor*fh)
+    from ifcopenshell.util.placement import get_local_placement
+    bal2 = [p for p in proxies if p.ObjectType == "CONCEPTUAL_BALCONY"
+            and "этаж 2" in (p.Name or "")][0]
+    assert abs(get_local_placement(bal2.ObjectPlacement)[2, 3] - (1 * 3.0 - 0.18)) < 1e-6
     assert by_type.get("CONCEPTUAL_PLINTH") == 1
     assert by_type.get("CONCEPTUAL_ROOF") == 1              # двускатная призма
     # этажи на своих отметках
