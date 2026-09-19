@@ -1565,6 +1565,44 @@ invokeai==6.2.0` их нужно запускать повторно в поря
       тесты `tests/test_threed.py` (12 функций). Фаза 3 (интерьер) —
       план отдельным документом.
 
+40. **3D Design (фаза 3): сценарий «Интерьер»** (19.09, ветка `3d`; план
+    `docs/superpowers/plans/2026-09-19-3d-design-phase3-interior.md`,
+    7 задач; все три сценария спеки закрыты).
+    - **Конвейер** — плитка «Интерьер» активна (заглушек больше нет),
+      placeholder по 3 сценариям (карта `{plan, facade, interior}` с
+      фолбэком на plan). `POST /api/v1/threed/generate`
+      {scenario:"interior"} → VLM по `SYSTEM_INTERIOR` (вход — 2D-план,
+      НЕ фото интерьера; ЕДИНОЕ ПРАВИЛО: позиции в ПИКСЕЛЯХ, размеры/
+      высоты в МЕТРАХ; опоры масштаба: дверь 0,9–1 м, кровать 2×1,6,
+      унитаз 0,4; размерная линия точнее) → `validate_interior` (гейты:
+      не-dict / нет outline+walls / пусто после чистки; дефолты scale
+      0.01 м/px, wall_height 2.7; клампы толщин стен 0.05–0.6, проёмов,
+      мебели; openings валидируются по ОЧИЩЕННОМУ списку стен; имя
+      комнаты только str, иначе «Комната N»; типы комнат/мебели по
+      whitelist → other) → `build_interior`: плита IfcSlab
+      CONCEPTUAL_FLOOR по outline, стены IfcWall CONCEPTUAL_WALL
+      сегментами с поворотом Rz и толщиной с плана, проёмы
+      IfcBuildingElementProxy CONCEPTUAL_DOOR/WINDOW СКВОЗЬ стену
+      (толщина+0.06 — урок фазы 2), комнаты IfcSpace CONCEPTUAL_ROOM с
+      именами с плана + pset Room{Type}, мебель IfcFurnishingElement с
+      ObjectType FURNITURE_<TYPE> и палитрой цветов типов (поворот
+      −rot_deg — Y-флип инвертирует угол), pset InteriorModel на
+      IfcBuilding, превью — чертёж плана в метрах.
+    - **ГРАБЛИ**: (1) IfcSpace в ifcopenshell 0.8.5 НЕ имеет
+      ContainedInStructure — `spatial.assign_container` на нём ПАДАЕТ;
+      агрегировать в storey только `aggregate.assign_object`
+      (IfcRelAggregates). (2) INTERIOR_SCALE_MAX=0.5 (не 0.1): мини-
+      планы тестов масштаба ~0.25 м/px валидны. (3) Каталог tests/
+      затеняется site-packages/tests — фокус-тесты запускать из
+      каталога tests (`cd tests && python -c "import test_threed …"`).
+    - **Артефакты**: `data/ifc/3D_interior_20260919-193010.ifc` + превью
+      (живой smoke 20 с, warnings=[], VLM прочитал синтетический план
+      идеально: 5 стен / 2 двери+окно / «Кухня»+«Спальня» / кровать+стол);
+      скриншоты `docs/3d-design-interior-{modal,result}.png`; тесты
+      `tests/test_threed.py` (16 функций). E2E без живой генерации —
+      бюджет фазы (одна живая = smoke), автозагрузка через localStorage
+      lastModel; UI-путь генерации идентичен фазе 2 (run3D не менялся).
+
 
 ```powershell
 cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
