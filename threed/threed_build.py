@@ -352,7 +352,10 @@ def build_facade(scene, ifc_path, preview_path, meta):
                 if j < len(skip) and i < len(skip[j]) and skip[j][i]:
                     continue
                 box(f"Окно Э{f + 1}-{i + 1}", win["w_m"], 0.12, win["h_m"],
-                    x + win["w_m"] / 2, d / 2 - 0.06, f * fh + z_in, "glazing",
+                    # центр по Y = d/2: наполовину в стене, передняя грань
+                    # на 0.06 м перед фасадом — иначе луч выбора вьювера
+                    # упирается в стену заподлицо и окно не кликабельно в 3D
+                    x + win["w_m"] / 2, d / 2, f * fh + z_in, "glazing",
                     storeys[f], object_type="CONCEPTUAL_WINDOW")
                 windows_total += 1
     for b_idx, bal in enumerate(data["balconies"], start=1):
