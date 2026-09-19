@@ -576,6 +576,13 @@ def test_widget_3d_modal():
     assert "promptPhInterior: 'Уточнения:" in src
     # переключение placeholder-а через карту сценариев
     assert "var ph = {plan: t().promptPhPlan" in src
+    # фаза 4: плитка «Сцена» активна, placeholder, camHint
+    assert '<button class="devbim-3d-tile" data-s="scene"><span>🌇</span>' in src
+    assert 'data-s="scene" disabled' not in src
+    assert "promptPhScene: 'Уточнения:" in src
+    assert "promptPhScene: 'Hints:" in src
+    assert "var ph = {plan: t().promptPhPlan" in src and "scene: t().promptPhScene" in src
+    assert "devbim:ifc:camHint" in src
     print("test_widget_3d_modal OK")
 
 

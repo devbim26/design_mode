@@ -41,10 +41,12 @@
       noSource: 'Положите картинку на Холст или выберите в галерее/вьювере',
       generate: 'Сгенерировать 3D', generating: 'Анализ модели…',
       done: 'Модель создана:', plan: 'Генплан', facade: 'Фасад', interior: 'Интерьер',
+      scene: 'Сцена',
       pickScenario: 'Что генерируем?',
       promptPhPlan: 'Уточнения: «жилой 5 этажей, школа 3, масштаб 0.5 м/px»',
       promptPhFacade: 'Уточнения: «5 этажей, двускатная крыша, окна 4 в ряд, балконы со 2 этажа, глубина 14 м»',
       promptPhInterior: 'Уточнения: «высота стен 2.8, масштаб 0.01 м/px, стены по чертежу»',
+      promptPhScene: 'Уточнения: «2 дома: главный 7 этажей, второй 3 справа; деревья вдоль дороги; камера слева»',
       netErr: 'Ошибка сети/сервера',
       needTab: 'Откройте вкладку Generate или Холст и повторите'
     },
@@ -54,10 +56,12 @@
       noSource: 'Put an image on the Canvas or select one in the viewer',
       generate: 'Generate 3D', generating: 'Analyzing the model…',
       done: 'Model created:', plan: 'Master plan', facade: 'Facade', interior: 'Interior',
+      scene: 'Scene',
       pickScenario: 'What to generate?',
       promptPhPlan: 'Hints: "residential 5 floors, school 3, scale 0.5 m/px"',
       promptPhFacade: 'Hints: "5 storeys, gable roof, 4 windows per row, balconies from floor 2, depth 14 m"',
       promptPhInterior: 'Hints: "wall height 2.8, scale 0.01 m/px, walls as drawn"',
+      promptPhScene: 'Hints: "2 houses: main 7 storeys, second 3 on the right; trees along the road; camera on the left"',
       netErr: 'Network/server error',
       needTab: 'Open the Generate or Canvas tab and try again'
     }
@@ -342,6 +346,7 @@
       '<button class="devbim-3d-tile" data-s="plan"><span>🗺</span>' + t().plan + '</button>' +
       '<button class="devbim-3d-tile" data-s="facade"><span>🏢</span>' + t().facade + '</button>' +
       '<button class="devbim-3d-tile" data-s="interior"><span>🛋</span>' + t().interior + '</button>' +
+      '<button class="devbim-3d-tile" data-s="scene"><span>🌇</span>' + t().scene + '</button>' +
       '</div>' +
       '<div class="devbim-3d-src"><img alt=""><span class="devbim-3d-badge">—</span></div>' +
       '<div id="devbim-3d-hint" style="display:none">' + t().noSource + '</div>' +
@@ -360,7 +365,7 @@
         var ta = document.getElementById('devbim-3d-prompt');
         if (ta) {
           var ph = {plan: t().promptPhPlan, facade: t().promptPhFacade,
-                    interior: t().promptPhInterior};
+                    interior: t().promptPhInterior, scene: t().promptPhScene};
           ta.placeholder = ph[b.getAttribute('data-s')] || t().promptPhPlan;
         }
       });
@@ -392,6 +397,8 @@
       if (!r.ok) throw new Error((j && (j.detail || j.message)) || ('HTTP ' + r.status));
       if (j.warnings && j.warnings.length) toast(j.warnings.join(' · '));
       try { localStorage.setItem('devbim:ifc:lastModel', j.name); } catch (e) {}
+      if (j.camHint) { try { localStorage.setItem('devbim:ifc:camHint',
+        JSON.stringify(j.camHint)); } catch (e) {} }
       close3D();
       if (window.__devbimSwitchTab) window.__devbimSwitchTab('ifc');
       toast(t().done + ' ' + j.name);
