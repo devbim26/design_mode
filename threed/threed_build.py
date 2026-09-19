@@ -352,10 +352,11 @@ def build_facade(scene, ifc_path, preview_path, meta):
                 if j < len(skip) and i < len(skip[j]) and skip[j][i]:
                     continue
                 box(f"Окно Э{f + 1}-{i + 1}", win["w_m"], 0.12, win["h_m"],
-                    # центр по Y = d/2: наполовину в стене, передняя грань
-                    # на 0.06 м перед фасадом — иначе луч выбора вьювера
-                    # упирается в стену заподлицо и окно не кликабельно в 3D
-                    x + win["w_m"] / 2, d / 2, f * fh + z_in, "glazing",
+                    # центр по Y = -d/2: фасад на IFC -Y (после трансформа
+                    # вьювера -> world +Z, дефолтная камера видит окна);
+                    # передняя грань на 0.06 м перед фасадом — иначе луч
+                    # выбора упирается в стену заподлицо и окно не кликается
+                    x + win["w_m"] / 2, -d / 2, f * fh + z_in, "glazing",
                     storeys[f], object_type="CONCEPTUAL_WINDOW")
                 windows_total += 1
     for b_idx, bal in enumerate(data["balconies"], start=1):
@@ -363,7 +364,7 @@ def build_facade(scene, ifc_path, preview_path, meta):
         # верхом вровень с полом (box экструдирует вверх от z)
         bal_z = (bal["floor"] - 1) * fh - 0.18
         box(f"Балкон {b_idx} · этаж {bal['floor']}", bal["w_m"], bal["d_m"], 0.18,
-            bal["x_m"] - w / 2, d / 2 + bal["d_m"] / 2, bal_z, "balcony",
+            bal["x_m"] - w / 2, -(d / 2 + bal["d_m"] / 2), bal_z, "balcony",
             storeys[bal["floor"] - 1], object_type="CONCEPTUAL_BALCONY")
     box("Цоколь", w + 0.2, d + 0.2, 0.6, 0.0, 0.0, 0.0, "plinth", building,
         object_type="CONCEPTUAL_PLINTH")
@@ -381,10 +382,10 @@ def build_facade(scene, ifc_path, preview_path, meta):
         _api("spatial.assign_container", file=model, products=[gable],
              relating_structure=building)
         # локальная X -> мировая X; локальная Y (высота профиля) -> мировая Z;
-        # выдавливание (+Z локали) -> -Y (от лицевой грани вглубь), origin на грани
+        # выдавливание (+Z локали) -> +Y (от лицевой грани -Y вглубь), origin на грани
         matrix = np.array([
             [1.0, 0.0, 0.0, 0.0],
-            [0.0, 0.0, -1.0, d / 2],
+            [0.0, 0.0, 1.0, -d / 2],
             [0.0, 1.0, 0.0, n * fh],
             [0.0, 0.0, 0.0, 1.0],
         ])
