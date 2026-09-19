@@ -45,6 +45,93 @@ def sample_facade_scene():
     }
 
 
+def sample_interior_scene():
+    """Интерьер: прямоугольник 40×30 px-контур (scale 0.25 м/px -> 10×7.5 м),
+    внутренняя стена с дверью, окно на контуре, 2 комнаты, кровать 90°."""
+    return {
+        "trace_width": 40, "trace_height": 30, "metres_per_trace_pixel": 0.25,
+        "wall_height": 2.7,
+        "outline": [[2, 2], [38, 2], [38, 28], [2, 28]],
+        "walls": [
+            {"points_px": [[2, 2], [38, 2]], "thickness_m": 0.4, "exterior": True},
+            {"points_px": [[38, 2], [38, 28]], "thickness_m": 0.4, "exterior": True},
+            {"points_px": [[38, 28], [2, 28]], "thickness_m": 0.4, "exterior": True},
+            {"points_px": [[2, 28], [2, 2]], "thickness_m": 0.4, "exterior": True},
+            {"points_px": [[20, 2], [20, 28]], "thickness_m": 0.15, "exterior": False},
+        ],
+        "openings": [
+            {"wall_idx": 0, "x_px": 6, "width_m": 0.9, "height_m": 2.1,
+             "sill_m": 0.0, "kind": "door"},
+            {"wall_idx": 1, "x_px": 12, "width_m": 1.4, "height_m": 1.5,
+             "sill_m": 0.9, "kind": "window"},
+            {"wall_idx": "outline", "x_px": 4, "width_m": 0.9, "height_m": 2.1,
+             "sill_m": 0.0, "kind": "door"},
+        ],
+        "rooms": [
+            {"name": "Кухня", "type": "kitchen",
+             "points_px": [[2, 2], [20, 2], [20, 28], [2, 28]]},
+            {"name": "Спальня", "type": "bedroom",
+             "points_px": [[20, 2], [38, 2], [38, 28], [20, 28]]},
+        ],
+        "furniture": [
+            {"type": "bed", "x_px": 10, "y_px": 20, "w_m": 2.0, "d_m": 1.6,
+             "h_m": 0.5, "rot_deg": 90},
+            {"type": "table", "x_px": 29, "y_px": 20, "w_m": 1.2, "d_m": 0.8,
+             "h_m": 0.75, "rot_deg": 0},
+        ],
+    }
+
+
+def test_build_interior():
+    import ifcopenshell
+    from ifcopenshell.util.element import get_psets
+    from ifcopenshell.util.placement import get_local_placement
+    from threed.threed_build import build_interior
+
+    TMP.mkdir(exist_ok=True)
+    ifc = TMP / "3D_interior_test.ifc"
+    prev = TMP / "3D_interior_test_preview.png"
+    path = build_interior(sample_interior_scene(), ifc, prev,
+                          {"Scenario": "interior", "Prompt": "тест",
+                           "Model": "test/model", "Source": "3D Design"})
+    assert path == ifc and ifc.is_file() and prev.is_file()
+
+    m = ifcopenshell.open(str(ifc))
+    assert m.schema == "IFC4"
+    gids = [r.GlobalId for r in m.by_type("IfcRoot")]
+    assert len(gids) == len(set(gids)), "GlobalId не уникальны"
+    assert len(m.by_type("IfcSlab")) == 1                    # плита пола
+    assert len(m.by_type("IfcWall")) == 5                    # 5 сегментов
+    assert len(m.by_type("IfcSpace")) == 2                   # комнаты
+    space_names = sorted(s.Name for s in m.by_type("IfcSpace"))
+    assert space_names == ["Кухня", "Спальня"]               # имена с плана
+    # все IfcSpace в одном сторе
+    assert len(m.by_type("IfcBuildingStorey")) == 1
+    proxies = [p for p in m.by_type("IfcBuildingElementProxy")]
+    kinds = {}
+    for p in proxies:
+        kinds[p.ObjectType] = kinds.get(p.ObjectType, 0) + 1
+    assert kinds.get("CONCEPTUAL_DOOR") == 2                 # 2 двери
+    assert kinds.get("CONCEPTUAL_WINDOW") == 1               # окно
+    furn = m.by_type("IfcFurnishingElement")
+    assert len(furn) == 2
+    ftypes = sorted(f.ObjectType for f in furn)
+    assert ftypes == ["FURNITURE_BED", "FURNITURE_TABLE"]
+    # кровать повёрнута на 90° (в сборке Rz(-90) из-за Y-флипа):
+    # mat = [[0,1,0],[-1,0,0],…] -> mat[0,0]≈0, mat[1,0]≈-1
+    bed = [f for f in furn if f.ObjectType == "FURNITURE_BED"][0]
+    mat = get_local_placement(bed.ObjectPlacement)
+    assert abs(mat[0, 0] - 0.0) < 1e-6 and abs(mat[1, 0] - (-1.0)) < 1e-6, \
+        "кровать должна быть повёрнута Rz(-90)"
+    # pset DevBIM у проекта + InteriorModel у здания
+    assert get_psets(m.by_type("IfcProject")[0]).get("DevBIM", {}).get("Scenario") \
+        == "interior"
+    fm = get_psets(m.by_type("IfcBuilding")[0]).get("InteriorModel", {})
+    assert fm.get("WallHeight") == 2.7 and fm.get("Rooms") == 2 \
+        and fm.get("Furniture") == 2
+    print("test_build_interior OK")
+
+
 def test_build_facade():
     import ifcopenshell
     from threed.threed_build import build_facade
@@ -407,6 +494,7 @@ def test_admin_threed_section():
 
 if __name__ == "__main__":
     test_build_facade()
+    test_build_interior()
     test_build_genplan()
     test_extract_json()
     test_validate_genplan()

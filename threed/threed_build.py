@@ -471,3 +471,341 @@ def _draw_facade_preview(data, preview_path):
     preview_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(preview_path, dpi=160, facecolor="white")
     plt.close(fig)
+
+
+# ===================== Фаза 3: сценарий «Интерьер» =====================
+
+ASSUMPTION_INTERIOR = (
+    "Концептуальная модель квартиры по растровому плану (3D Design). Стены, проёмы "
+    "и мебель — оценочные блоки по обводке плана; размеры по опорным объектам или "
+    "размерным линиям. Не использовать как обмерную или рабочую документацию."
+)
+
+INTERIOR_DEFAULT_COLORS = {
+    "slab": "#d9d4c8", "wall": "#c8b89a", "opening": "#202830", "room": "#e6ecf2",
+    "bed": "#8fa3bf", "sofa": "#7f9b8e", "table": "#c9a227", "chair": "#d4ac9e",
+    "wardrobe": "#a58d6f", "kitchen": "#9aa3ad", "bath": "#bfd8e6",
+    "toilet": "#e0e4e8", "sink": "#d6e0e8", "lamp": "#f0d68a", "other": "#b8bcc2",
+}
+
+FURNITURE_RU = {
+    "bed": "Кровать", "sofa": "Диван", "table": "Стол", "chair": "Стул",
+    "wardrobe": "Шкаф", "kitchen": "Кухня", "bath": "Ванна", "toilet": "Унитаз",
+    "sink": "Раковина", "lamp": "Лампа", "other": "Предмет",
+}
+
+
+def _rot_z(deg):
+    a = np.radians(float(deg))
+    c, s = np.cos(a), np.sin(a)
+    return np.array([[c, -s, 0.0, 0.0], [s, c, 0.0, 0.0],
+                     [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]])
+
+
+def _px_to_m(data, x, y):
+    """Пиксели картинки -> метры плана (Y-флип: y=0 — верх картинки)."""
+    s = data["metres_per_trace_pixel"]
+    return float(x) * s, (data["trace_height"] - float(y)) * s
+
+
+def _outline_point_at(data, dist_px):
+    """Точка на контуре outline на расстоянии dist_px вдоль периметра от 1-й
+    точки + направление сегмента (градусы). None = контура нет."""
+    pts_m = [_px_to_m(data, x, y) for x, y in data["outline"]]
+    segs = []
+    total = 0.0
+    for i in range(len(pts_m)):
+        a, b = pts_m[i], pts_m[(i + 1) % len(pts_m)]
+        ln = float(np.hypot(b[0] - a[0], b[1] - a[1])) / data["metres_per_trace_pixel"]
+        segs.append((a, b, ln))  # ln в пикселях исходника
+        total += ln
+    t = max(0.0, min(float(dist_px), total))
+    acc = 0.0
+    for a, b, ln in segs:
+        if ln <= 0:
+            continue
+        if acc + ln >= t or (a, b, ln) is segs[-1]:
+            frac = (t - acc) / ln
+            x = a[0] + (b[0] - a[0]) * frac
+            y = a[1] + (b[1] - a[1]) * frac
+            ang = np.degrees(np.arctan2(b[1] - a[1], b[0] - a[0]))
+            return x, y, ang, ln
+        acc += ln
+    return None
+
+
+def build_interior(scene, ifc_path, preview_path, meta):
+    """Сцена интерьера (validate_interior) -> IFC4 + чертёж-превью."""
+    data = dict(scene)
+    colors = dict(INTERIOR_DEFAULT_COLORS)
+    data["colors"] = colors  # сборщик не красит по VLM-цветам — палитра типов
+    scale = data["metres_per_trace_pixel"]
+    wh = data["wall_height"]
+
+    model = _api("project.create_file", version="IFC4")
+    project = _api("root.create_entity", file=model, ifc_class="IfcProject",
+                   name=data.get("project_name", "3D Design — интерьер"))
+    project.Description = ASSUMPTION_INTERIOR
+    units = [_api("unit.add_si_unit", file=model, unit_type=t)
+             for t in ("LENGTHUNIT", "AREAUNIT", "VOLUMEUNIT")]
+    _api("unit.assign_unit", file=model, units=units)
+    context = _api("context.add_context", file=model, context_type="Model")
+    body = _api("context.add_context", file=model, context_type="Model",
+                context_identifier="Body", target_view="MODEL_VIEW", parent=context)
+    site = _api("root.create_entity", file=model, ifc_class="IfcSite", name="Участок")
+    _api("aggregate.assign_object", file=model, products=[site], relating_object=project)
+    _api("geometry.edit_object_placement", file=model, product=site, matrix=np.eye(4))
+    building = _api("root.create_entity", file=model, ifc_class="IfcBuilding",
+                    name=data.get("building_name", "Квартира по плану"))
+    building.Description = ASSUMPTION_INTERIOR
+    _api("aggregate.assign_object", file=model, products=[building],
+         relating_object=site)
+    _api("geometry.edit_object_placement", file=model, product=building, matrix=np.eye(4))
+    storey = _api("root.create_entity", file=model, ifc_class="IfcBuildingStorey",
+                  name="Этаж 01")
+    storey.Elevation = 0.0
+    _api("aggregate.assign_object", file=model, products=[storey], relating_object=building)
+    _api("geometry.edit_object_placement", file=model, product=storey, matrix=np.eye(4))
+    _properties(model, project, "DevBIM", {
+        "Source": meta.get("Source", "3D Design"), "Scenario": "interior",
+        "Prompt": (meta.get("Prompt") or "")[:1024], "Model": meta.get("Model", ""),
+        "ApproximateGeometry": True, "Notes": ASSUMPTION_INTERIOR,
+    })
+    fstyles = {}
+    for key, color in colors.items():
+        r, g, b = matplotlib.colors.to_rgb(color)
+        style = _api("style.add_style", file=model, name=f"Interior{key.capitalize()}")
+        _api("style.add_surface_style", file=model, style=style,
+             ifc_class="IfcSurfaceStyleShading",
+             attributes={"SurfaceColour": {"Name": key, "Red": r, "Green": g, "Blue": b},
+                         "Transparency": 0.0})
+        fstyles[key] = style
+
+    def rbox(name, bw, bd, bh, cx, cy, z, rot_deg, color_key, container,
+             ifc_class, object_type, predefined=None):
+        """Прямоугольный блок с поворотом вокруг Z: профиль bw×bd, выдавливание
+        bh вверх от z. rot_deg — против часовой в метрах плана."""
+        kwargs = dict(file=model, ifc_class=ifc_class, name=name)
+        if predefined is not None:
+            kwargs["predefined_type"] = predefined
+        product = _api("root.create_entity", **kwargs)
+        if object_type is not None:
+            product.ObjectType = object_type
+        pts = [[-bw / 2, -bd / 2], [bw / 2, -bd / 2], [bw / 2, bd / 2], [-bw / 2, bd / 2]]
+        profile = _api("profile.add_arbitrary_profile", file=model, profile=pts, name=name)
+        representation = _api("geometry.add_profile_representation", file=model,
+                              context=body, profile=profile, depth=bh, cardinal_point=None)
+        _api("geometry.assign_representation", file=model, product=product,
+             representation=representation)
+        _api("spatial.assign_container", file=model, products=[product],
+             relating_structure=container)
+        matrix = _rot_z(rot_deg)
+        matrix[0, 3], matrix[1, 3], matrix[2, 3] = float(cx), float(cy), float(z)
+        _api("geometry.edit_object_placement", file=model, product=product, matrix=matrix)
+        _api("style.assign_representation_styles", file=model,
+             shape_representation=representation, styles=[fstyles[color_key]])
+        return product
+
+    def poly(name, points_px, depth, z, color_key, container, ifc_class,
+             object_type, predefined=None):
+        """Полигон px -> профиль относительно центроида, выдавливание depth от z."""
+        kwargs = dict(file=model, ifc_class=ifc_class, name=name)
+        if predefined is not None:
+            kwargs["predefined_type"] = predefined
+        product = _api("root.create_entity", **kwargs)
+        if object_type is not None:
+            product.ObjectType = object_type
+        pts_m = [_px_to_m(data, x, y) for x, y in points_px]
+        polygon = orient(Polygon(pts_m), sign=1.0)
+        if not polygon.is_valid or polygon.area <= 0:
+            raise ValueError(f"Некорректный контур: {name}")
+        xy = np.array(polygon.exterior.coords, dtype=float)
+        origin = np.array(polygon.centroid.coords[0])
+        profile = _api("profile.add_arbitrary_profile", file=model,
+                       profile=(xy - origin).tolist(), name=name)
+        representation = _api("geometry.add_profile_representation", file=model,
+                              context=body, profile=profile, depth=depth,
+                              cardinal_point=None)
+        _api("geometry.assign_representation", file=model, product=product,
+             representation=representation)
+        # IfcSpace — сам пространственный элемент: в IFC4 он входит в этаж через
+        # IfcRelAggregates (spatial.assign_container умеет только элементы и
+        # падает на IfcSpace: нет ContainedInStructure)
+        if ifc_class == "IfcSpace":
+            _api("aggregate.assign_object", file=model, products=[product],
+                 relating_object=container)
+        else:
+            _api("spatial.assign_container", file=model, products=[product],
+                 relating_structure=container)
+        matrix = np.eye(4)
+        matrix[:3, 3] = [float(origin[0]), float(origin[1]), float(z)]
+        _api("geometry.edit_object_placement", file=model, product=product, matrix=matrix)
+        _api("style.assign_representation_styles", file=model,
+             shape_representation=representation, styles=[fstyles[color_key]])
+        return product
+
+    # --- плита пола: outline, толщина 0.1 м, верх на z=0
+    if data["outline"]:
+        poly("Пол", data["outline"], 0.1, -0.1, "slab", storey,
+             "IfcSlab", "CONCEPTUAL_FLOOR", predefined="FLOOR")
+
+    # --- стены: сегменты -> повёрнутые боксы
+    wall_geo = []  # (p1_m, p2_m, length_m, angle_deg) для проёмов
+    for idx, wall in enumerate(data["walls"], start=1):
+        p1 = _px_to_m(data, *wall["points_px"][0])
+        p2 = _px_to_m(data, *wall["points_px"][1])
+        dx, dy = p2[0] - p1[0], p2[1] - p1[1]
+        length = float(np.hypot(dx, dy))
+        wall_geo.append((p1, p2, length))
+        if length < 0.05:
+            continue
+        ang = np.degrees(np.arctan2(dy, dx))
+        ext = " нар." if wall.get("exterior") else ""
+        rbox(f"Стена {idx:02d}{ext}", length, wall["thickness_m"], wh,
+             (p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2, 0.0, ang,
+             "wall", storey, "IfcWall", "CONCEPTUAL_WALL", predefined="USERDEFINED")
+
+    # --- проёмы: сквозь стену с выступом 0.03 м (урок фазы 2: заподлицо
+    #     совпадающие грани не рендерятся и не кликаются)
+    n_doors = n_windows = 0
+    for op in data["openings"]:
+        widx = op["wall_idx"]
+        if widx == "outline":
+            hit = _outline_point_at(data, op["x_px"]) if data["outline"] else None
+            if hit is None:
+                continue
+            cx, cy, ang, len_px = hit
+            thickness = 0.4
+        else:
+            p1, p2, length = wall_geo[widx]
+            if length < 0.05:  # вырожденный сегмент (пропущен стеной)
+                continue
+            thickness = data["walls"][widx]["thickness_m"]
+            t = max(0.0, min(op["x_px"] * scale, length))
+            ux, uy = (p2[0] - p1[0]) / length, (p2[1] - p1[1]) / length
+            cx, cy = p1[0] + ux * t, p1[1] + uy * t
+            ang = np.degrees(np.arctan2(p2[1] - p1[1], p2[0] - p1[0]))
+        if op["kind"] == "door":
+            n_doors += 1
+            name, otype = f"Дверь {n_doors}", "CONCEPTUAL_DOOR"
+        else:
+            n_windows += 1
+            name, otype = f"Окно {n_windows}", "CONCEPTUAL_WINDOW"
+        rbox(name, op["width_m"], thickness + 0.06, op["height_m"], cx, cy,
+             op["sill_m"], ang, "opening", storey,
+             "IfcBuildingElementProxy", otype, predefined="USERDEFINED")
+
+    # --- комнаты: IfcSpace с именами с плана + pset Room
+    for room in data["rooms"]:
+        space = poly(room["name"], room["points_px"], 0.02, 0.005, "room",
+                     storey, "IfcSpace", "CONCEPTUAL_ROOM", predefined="SPACE")
+        _properties(model, space, "Room", {"Type": room.get("type", "other")})
+
+    # --- мебель: IfcFurnishingElement, цвет/имя по типу, поворот
+    for idx, item in enumerate(data["furniture"], start=1):
+        cx, cy = _px_to_m(data, item["x_px"], item["y_px"])
+        ftype = item["type"] if item["type"] in FURNITURE_RU else "other"
+        rbox(f"{FURNITURE_RU[ftype]} {idx:02d}", item["w_m"], item["d_m"],
+             item["h_m"], cx, cy, 0.0, -item["rot_deg"],  # Y-флип инвертирует угол
+             ftype, storey, "IfcFurnishingElement", f"FURNITURE_{ftype.upper()}")
+
+    _properties(model, building, "InteriorModel", {
+        "WallHeight": wh, "ScaleMPerPx": scale,
+        "Walls": len(data["walls"]), "Openings": len(data["openings"]),
+        "Rooms": len(data["rooms"]), "Furniture": len(data["furniture"]),
+        "ApproximateGeometry": True, "Notes": ASSUMPTION_INTERIOR,
+    })
+
+    _write_header(model, ifc_path)
+    ifc_path.parent.mkdir(parents=True, exist_ok=True)
+    model.write(str(ifc_path))
+    _draw_interior_preview(data, preview_path)
+    return ifc_path
+
+
+def _draw_interior_preview(data, preview_path):
+    """Чертёж плана в метрах: контур, стены, проёмы, подписи комнат, мебель."""
+    scale = data["metres_per_trace_pixel"]
+    wh = data["wall_height"]
+
+    def rect_corners(cx, cy, bw, bd, deg):
+        a = np.radians(deg)
+        c, s = np.cos(a), np.sin(a)
+        loc = [(-bw / 2, -bd / 2), (bw / 2, -bd / 2), (bw / 2, bd / 2), (-bw / 2, bd / 2)]
+        return [(cx + x * c - y * s, cy + x * s + y * c) for x, y in loc]
+
+    fig, ax = plt.subplots(figsize=(12, 8), facecolor="white")
+    if data["outline"]:
+        pts = [_px_to_m(data, x, y) for x, y in data["outline"]]
+        ax.add_patch(PlotPolygon(pts + [pts[0]], facecolor="#efece5",
+                                 edgecolor="#263747", linewidth=1.0))
+    for idx, wall in enumerate(data["walls"], start=1):
+        p1 = _px_to_m(data, *wall["points_px"][0])
+        p2 = _px_to_m(data, *wall["points_px"][1])
+        length = float(np.hypot(p2[0] - p1[0], p2[1] - p1[1]))
+        if length < 0.05:
+            continue
+        ang = np.degrees(np.arctan2(p2[1] - p1[1], p2[0] - p1[0]))
+        t = wall["thickness_m"]
+        ax.add_patch(PlotPolygon(rect_corners((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2,
+                                              length, t, ang),
+                                 facecolor=data["colors"]["wall"], edgecolor="#263747",
+                                 linewidth=0.8))
+    for op in data["openings"]:
+        widx = op["wall_idx"]
+        if widx == "outline":
+            hit = _outline_point_at(data, op["x_px"]) if data["outline"] else None
+            if hit is None:
+                continue
+            cx, cy, ang, _ = hit
+            thickness = 0.4
+        else:
+            if not (isinstance(widx, int) and 0 <= widx < len(data["walls"])):
+                continue
+            p1, p2, length = (_px_to_m(data, *data["walls"][widx]["points_px"][0]),
+                              _px_to_m(data, *data["walls"][widx]["points_px"][1]), 0.0)
+            length = float(np.hypot(p2[0] - p1[0], p2[1] - p1[1]))
+            if length < 0.05:
+                continue
+            thickness = data["walls"][widx]["thickness_m"]
+            t = max(0.0, min(op["x_px"] * scale, length))
+            ux, uy = ((p2[0] - p1[0]) / length, (p2[1] - p1[1]) / length) if length else (0, 0)
+            cx, cy = p1[0] + ux * t, p1[1] + uy * t
+            ang = np.degrees(np.arctan2(p2[1] - p1[1], p2[0] - p1[0]))
+        ax.add_patch(PlotPolygon(rect_corners(cx, cy, op["width_m"], thickness + 0.06, ang),
+                                 facecolor=data["colors"]["opening"], edgecolor="white",
+                                 linewidth=0.6))
+    for room in data["rooms"]:
+        pts = [_px_to_m(data, x, y) for x, y in room["points_px"]]
+        centroid = Polygon(pts).centroid
+        ax.text(centroid.x, centroid.y, room["name"], ha="center", va="center",
+                fontsize=10, color="#15232e")
+    for item in data["furniture"]:
+        cx, cy = _px_to_m(data, item["x_px"], item["y_px"])
+        ftype = item["type"] if item["type"] in FURNITURE_RU else "other"
+        ax.add_patch(PlotPolygon(rect_corners(cx, cy, item["w_m"], item["d_m"],
+                                              -item["rot_deg"]),
+                                 facecolor=data["colors"][ftype], edgecolor="#263747",
+                                 linewidth=0.7, alpha=.9))
+        ax.text(cx, cy, FURNITURE_RU[ftype][:1], ha="center", va="center",
+                fontsize=7, color="#15232e")
+    xs, ys = [], []
+    for x, y in (data["outline"] or []):
+        mx, my = _px_to_m(data, x, y)
+        xs.append(mx); ys.append(my)
+    for w in data["walls"]:
+        for x, y in w["points_px"]:
+            mx, my = _px_to_m(data, x, y)
+            xs.append(mx); ys.append(my)
+    if xs:
+        pad = 0.5
+        ax.set_xlim(min(xs) - pad, max(xs) + pad)
+        ax.set_ylim(min(ys) - pad, max(ys) + pad)
+    ax.set_aspect("equal")
+    ax.axis("off")
+    ax.set_title(f"3D Design — интерьер: стены {wh:g} м, масштаб {scale:g} м/px",
+                 fontsize=13)
+    fig.tight_layout()
+    preview_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(preview_path, dpi=160, facecolor="white")
+    plt.close(fig)
