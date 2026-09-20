@@ -1954,6 +1954,58 @@ invokeai==6.2.0` их нужно запускать повторно в поря
       + рестарт; data/ifc/_threed_last.json.verify.history — первый
       инструмент разбора «что думала петля».
 
+46. **3D Design (фаза 6): сцена — мебель + люди на высоте + петля всех
+    сценариев** (20.09, ветка `3d`; план
+    `docs/superpowers/plans/2026-09-20-3d-scene-furniture-people-loop.md`,
+    5 задач; кейс-триггер: фото вида с балкона — «человека на балконе
+    нет»; разбор дампа показал: референс ДОХОДИЛ, VLM людей видел, но
+    схема scene не умела их поднять с земли, мебели не существовало).
+    - **Схема** (`threed/threed_scenarios.py`: SYSTEM_SCENE +
+      validate_scene): `context.people[].z_m` — базовая высота над
+      землёй (0=стоит на земле; балкон/терраса/крыша = уровень плиты
+      (floor-1)*floor_height); `context.furniture[]` —
+      bench/chair/lounger/table/sofa/umbrella/planter/other с
+      дефолтами размеров по типу (SCENE_FURNITURE_TYPES; имя НЕ
+      конфликтует с интерьерным FURNITURE_TYPES из validate_interior —
+      грабля первой итерации), w/d 0.1..8, h 0.05..3.5, rot ±180,
+      x/y ±150, z 0..90. Правила промпта требуют перечислять КАЖДЫЙ
+      предмет мебели (включая балконные) и ставить z_m плиты.
+    - **Сборка** (`threed/threed_build.py` build_scene): мебель —
+      боксы CONCEPTUAL_FURNITURE (цвет furniture #a4703f, поворот
+      вокруг Z как у машин), человек — низ фигуры на z_m; земля
+      габаритится и по мебели; SceneModel + Furniture; превью
+      дорисовывает мебель повёрнутыми прямоугольниками.
+    - **Verify** (`threed/threed_verify.py`): scene_overview.context
+      += furniture{type:count} и people_elevated (z_m>0.05);
+      SYSTEM_VERIFY — context amounts теперь
+      trees/cars/people/furniture.
+    - **Петля самокоррекции — ВСЕ сценарии** (`threed/threed_router.py`
+      _generate_impl): снят гейт «только facade» (max_iters общий);
+      поведение/ранги/гейты те же (п.44-45): повтор только при строгом
+      ok=False с непустыми issues. Раньше сцена теряла выпавшие VLM
+      предметы без шанса на коррекцию.
+    - **Файлы/тесты**: деплой setup_threed.py (4 файла без изменений
+      плана копирования). `tests/test_threed.py` (20 функций:
+      сэмпл сцены + человек на балконе z=3.1 + мебель, валидатор,
+      сборка CONCEPTUAL_FURNITURE=3, SceneModel.Furniture,
+      scene_overview мебели), `tests/test_threed_verify.py` (6:
+      +test_generate_impl_scene_loop — петля сцены ok=False→
+      CORRECTIONS→ok=True, победитель _r2).
+    - **Живой прогон** (фото вида с балкона, 21:00,
+      `data/ifc/3D_scene_20260920-210054.ifc`): итерация 1 сразу
+      ok=True; built: PERSON=1 z=12.0, FURNITURE=3 (chair+table+
+      other) z=12.0 — КРЕСЛО И ЧЕЛОВЕК НА БАЛКОНЕ ВЕРХНЕГО ЭТАЖА,
+      overview: people_elevated=1, furniture chair/table/other.
+      Verify больше НЕ пишет «Furniture: built none».
+    - **ГРАБЛИ**: (1) test_threed.py на импорте ставит THREED_VERIFY=0
+      («ретро-тесты без второй VLM-генерации») — тесты verify/петли
+      живут в test_threed_verify.py (THREED_VERIFY=1); тест петли,
+      положенный в test_threed.py, «не видит» ветку verify. (2) CLI-прогон
+      _generate_impl пишет в `~/invokeai/ifc` (get_config().root_path без
+      серверного конфига) — результат копируй в data/ifc руками. (3)
+      Тесты роутера из дерева тянут VENV-копии threed-модулей (п.45
+      грабля 3) — после правок threed/* сперва setup_threed.py.
+
 
 ```powershell
 cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
