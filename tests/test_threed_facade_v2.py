@@ -95,6 +95,34 @@ def test_validate_facade_v2():
     print("test_validate_facade_v2 OK")
 
 
+def test_validate_facade_v2_guards():
+    from threed.threed_scenarios import validate_facade
+
+    # не-списки вместо dormers/chimneys/towers -> дефолты + warnings, не TypeError
+    bad = villa_raw()
+    bad["dormers"] = {"floor": 2}
+    bad["chimneys"] = 5
+    bad["towers"] = "x"
+    clean, warns = validate_facade(bad)
+    assert clean["dormers"] == [] and clean["chimneys"] == [] and clean["towers"] == []
+    assert any("dormers: не список" in w for w in warns)
+    assert any("chimneys: не список" in w for w in warns)
+    assert any("towers: не список" in w for w in warns)
+
+    # переполнение: chimneys > 6, towers > 4 — срез + warning
+    over = villa_raw()
+    over["chimneys"] = [{"x_m": float(i), "floor": 2} for i in range(7)]
+    over["towers"] = [{"x_m": -4.0, "w_m": 3.0, "depth_m": 3.0, "floors": 3,
+                       "roof": "cone", "roof_h_m": 2.0} for _ in range(5)]
+    clean2, warns2 = validate_facade(over)
+    assert len(clean2["chimneys"]) == 6
+    assert len(clean2["towers"]) == 4
+    assert any("chimneys: больше 6" in w for w in warns2)
+    assert any("towers: больше 4" in w for w in warns2)
+    print("test_validate_facade_v2_guards OK")
+
+
 if __name__ == "__main__":
     test_validate_facade_v2()
+    test_validate_facade_v2_guards()
     print("ALL OK")

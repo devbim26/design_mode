@@ -412,7 +412,12 @@ def validate_facade(scene):
         out["balconies"].append({"floor": floor, "x_m": x, "w_m": w_b, "d_m": d_b})
 
     out["dormers"] = []
-    for idx, d in enumerate((scene.get("dormers") or [])[:12], start=1):
+    raw_dormers = scene.get("dormers")
+    if not isinstance(raw_dormers, list):
+        if raw_dormers:
+            warnings.append("dormers: не список — пропущены")
+        raw_dormers = []
+    for idx, d in enumerate(raw_dormers[:12], start=1):
         if not isinstance(d, dict):
             warnings.append(f"Dormer {idx}: не объект — пропущен")
             continue
@@ -429,7 +434,14 @@ def validate_facade(scene):
         warnings.append("dormers: больше 12 — лишние отброшены")
 
     out["chimneys"] = []
-    for idx, c in enumerate((scene.get("chimneys") or [])[:6], start=1):
+    raw_chimneys = scene.get("chimneys")
+    if not isinstance(raw_chimneys, list):
+        if raw_chimneys:
+            warnings.append("chimneys: не список — пропущены")
+        raw_chimneys = []
+    if len(raw_chimneys) > 6:
+        warnings.append("chimneys: больше 6 — лишние отброшены")
+    for idx, c in enumerate(raw_chimneys[:6], start=1):
         if not isinstance(c, dict):
             warnings.append(f"Труба {idx}: не объект — пропущена")
             continue
@@ -452,7 +464,14 @@ def validate_facade(scene):
         out["entrance"] = {"x_m": x_e, "w_m": w_e, "style": style}
 
     out["towers"] = []
-    for idx, t in enumerate((scene.get("towers") or [])[:4], start=1):
+    raw_towers = scene.get("towers")
+    if not isinstance(raw_towers, list):
+        if raw_towers:
+            warnings.append("towers: не список — пропущены")
+        raw_towers = []
+    if len(raw_towers) > 4:
+        warnings.append("towers: больше 4 — лишние отброшены")
+    for idx, t in enumerate(raw_towers[:4], start=1):
         if not isinstance(t, dict):
             warnings.append(f"Башня {idx}: не объект — пропущена")
             continue
