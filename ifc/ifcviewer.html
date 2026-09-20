@@ -528,6 +528,9 @@ function fitModel() {
 
 // Фаза 4 (сцена): одноразовая подсказка камеры от 3D-генерации — камера
 // как на фото (az 0 = фронтально со стороны world +Z, «+» = вправо).
+// П.46: hint.focus (балкон с людьми/мебелью, IFC-метры; view = (x, z, -y)) —
+// наводим камеру на фокус БЕЗ отъезда на 0.35 диагонали: сцена ~100 м,
+// человек 1.7 м — при фокусе нужна близость, а не охват всей сцены.
 function applyCamHint() {
   let hint = null;
   try { hint = JSON.parse(localStorage.getItem("devbim:ifc:camHint") || "null"); }
@@ -538,9 +541,22 @@ function applyCamHint() {
   if (!box || box.isEmpty()) return false;
   const c = box.getCenter(new Vector3());
   const size = box.getSize(new Vector3());
-  const dist = Math.max(hint.dist_m || 35, size.length() * 0.35);
   const az = hint.azimuth_deg * Math.PI / 180;
   const h = Math.max(0.5, Math.min(30, hint.eye_height_m || 1.6));
+  if (hint.focus && Number.isFinite(+hint.focus.x_m)
+      && Number.isFinite(+hint.focus.y_m)) {
+    const fx = +hint.focus.x_m, fy = +hint.focus.y_m, fz = +(hint.focus.z_m || 0);
+    const dist = Math.max(6, Math.min(+hint.dist_m || 15, 60));
+    // глаз выше фокуса на 4 м: сверху-под-углом балконная плита
+    // раскрывается и дворовые деревья реже перекрывают человека/мебель
+    world.camera.controls.setLookAt(
+      fx + dist * Math.sin(az), Math.max(h, fz + 4),
+      -fy + dist * Math.cos(az), fx, fz, -fy);
+    world.camera.controls.update();
+    setStatus("Камера на фокус сцены (балкон: человек и мебель)");
+    return true;
+  }
+  const dist = Math.max(hint.dist_m || 35, size.length() * 0.35);
   world.camera.controls.setLookAt(
     c.x + dist * Math.sin(az), box.min.y + h, c.z + dist * Math.cos(az),
     c.x, c.y, c.z);

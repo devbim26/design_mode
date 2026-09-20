@@ -336,7 +336,15 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
         rank = (1 if ok is True else 0, 0 if ok is None else 1, -len(issues))
         res_i = {"name": ifc_path.name, "warnings": warnings}
         if scenario == "scene":
-            res_i["camHint"] = scene["camera"]
+            res_i["camHint"] = dict(scene["camera"])
+            # фокус: центроид людей/мебели НА ВЫСОТЕ (балконный мотив фото) —
+            # вьювер наводит камеру на них, а не на центр 100-метровой сцены
+            elev = [it for it in scene["context"]["people"]
+                    + scene["context"]["furniture"] if it.get("z_m", 0) > 0.05]
+            if elev:
+                res_i["camHint"]["focus"] = {
+                    k: round(sum(it[k] for it in elev) / len(elev), 2)
+                    for k in ("x_m", "y_m", "z_m")}
         if verify_payload is not None:
             res_i["verify"] = verify_payload
         if best is None or rank >= best[0]:

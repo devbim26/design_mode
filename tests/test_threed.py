@@ -764,7 +764,10 @@ def test_generate_impl_scene():
     res = R._generate_impl("scene", "тест сцены", img, TMP)
     assert res["name"].startswith("3D_scene_") and res["name"].endswith(".ifc")
     assert (TMP / res["name"]).is_file()
-    assert res["camHint"] == {"azimuth_deg": -30, "eye_height_m": 1.7, "dist_m": 40}
+    assert res["camHint"] == {"azimuth_deg": -30, "eye_height_m": 1.7, "dist_m": 40,
+                              # фокус: центроид человека на балконе (-12,-8.1,3.1)
+                              # и лаунжера (-12,-8.3,3.1)
+                              "focus": {"x_m": -12.0, "y_m": -8.2, "z_m": 3.1}}
     assert "scene" in R.SCENARIOS
     try:
         R._generate_impl("attic", "", img, TMP)
