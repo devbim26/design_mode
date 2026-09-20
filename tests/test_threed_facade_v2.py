@@ -37,11 +37,11 @@ def villa_raw():
         "towers": [{"x_m": -4.75, "w_m": 3.0, "depth_m": 3.0, "floors": 3,
                     "round": True, "roof": "cone", "roof_h_m": 2.0}],
         "custom_parts": [
-            {"kind": "box", "size": [1.0, 0.6, 0.6], "pos": [2.0, -6.0, 4.5],
+            {"kind": "box", "size": [1.0, 0.6, 0.6], "pos": [2.0, 0.3, 4.5],
              "rot_deg": 0, "color": "plinth"},
-            {"kind": "prism", "size": [2.0, 0.8, 0.9], "pos": [-2.5, -6.05, 5.0],
+            {"kind": "prism", "size": [2.0, 0.8, 0.9], "pos": [-2.5, 0.3, 5.0],
              "profile": [[-1.0, 0.0], [1.0, 0.0], [0.0, 0.9]], "color": "roof"},
-            {"kind": "cone", "size": [1.2, 1.2, 1.0], "pos": [0.0, -5.9, 8.0],
+            {"kind": "cone", "size": [1.2, 1.2, 1.0], "pos": [0.0, 0.3, 8.0],
              "color": "#8d8d8d"},
         ],
         "colors": {"walls": "#c5b58c", "roof": "#555b60", "plinth": "#8a8575"},
@@ -169,8 +169,70 @@ def test_build_facade_v2_villa():
     assert counts["CONCEPTUAL_WINDOW"] == 2 * 2 * 2 + 2
     assert counts["CONCEPTUAL_ROOF"] == 1       # hip
     assert counts["CONCEPTUAL_CUSTOM"] == 3
+    # M1: круглой башне офсет по w_m (цилиндр игнорирует depth_m):
+    # w=3, глубина здания 12 -> центр Y = -6 + 1.5 - 0.06
+    tower = next(p for p in m.by_type("IfcBuildingElementProxy")
+                 if p.ObjectType == "CONCEPTUAL_TOWER" and p.Name == "Башня 01")
+    coords = tower.Representation.Representations[0].Items[0].Coordinates.CoordList
+    assert abs(sum(c[1] for c in coords) / len(coords) - (-4.56)) < 0.01
     assert prev.is_file()
     print("test_build_facade_v2_villa OK")
+
+
+def test_round_tower_depth_independent():
+    """M1: меш-цилиндр башни не знает depth_m — эффективная глубина = w_m.
+    Villa с towers[0].depth_m=5 (≠ w_m=3): центр Y обязан остаться -6+1.5-0.06,
+    а не «боксовым» -6+2.5-0.06."""
+    import ifcopenshell
+    from threed.threed_scenarios import validate_facade
+    from threed.threed_build import build_facade
+    raw = villa_raw()
+    raw["towers"][0]["depth_m"] = 5.0
+    clean, _ = validate_facade(raw)
+    TMP.mkdir(exist_ok=True)
+    ifc = TMP / "3D_v2_tower.ifc"
+    build_facade(clean, ifc, TMP / "3D_v2_tower_preview.png", {"Scenario": "facade"})
+    m = ifcopenshell.open(str(ifc))
+    tower = next(p for p in m.by_type("IfcBuildingElementProxy")
+                 if p.ObjectType == "CONCEPTUAL_TOWER" and p.Name == "Башня 01")
+    item = tower.Representation.Representations[0].Items[0]
+    assert item.is_a("IfcPolygonalFaceSet")
+    coords = item.Coordinates.CoordList
+    center_y = sum(c[1] for c in coords) / len(coords)
+    assert abs(center_y - (-6.0 + 1.5 - 0.06)) < 0.01, center_y
+    print("test_round_tower_depth_independent OK")
+
+
+def test_custom_parts_build():
+    """Edge: cylinder+cone -> 2 CONCEPTUAL_CUSTOM, геометрия PolygonalFaceSet."""
+    import ifcopenshell
+    from ifcopenshell.util.placement import get_local_placement
+    from threed.threed_scenarios import validate_facade
+    from threed.threed_build import build_facade
+    raw = _legacy().sample_facade_scene()
+    raw["custom_parts"] = [
+        {"kind": "cylinder", "size": [0.8, 0.8, 1.0], "pos": [3.0, 0.5, 0.0],
+         "rot_deg": 0, "color": "plinth"},
+        {"kind": "cone", "size": [1.0, 1.0, 0.8], "pos": [-3.0, 0.5, 1.0],
+         "rot_deg": 0, "color": "#123456"},
+    ]
+    clean, _ = validate_facade(raw)
+    TMP.mkdir(exist_ok=True)
+    ifc = TMP / "3D_v2_custom.ifc"
+    build_facade(clean, ifc, TMP / "3D_v2_custom_preview.png", {"Scenario": "facade"})
+    m = ifcopenshell.open(str(ifc))
+    customs = [p for p in m.by_type("IfcBuildingElementProxy")
+               if p.ObjectType == "CONCEPTUAL_CUSTOM"]
+    assert len(customs) == 2
+    kinds = sorted(i.is_a() for p in customs
+                   for r in p.Representation.Representations
+                   for i in r.Items)
+    assert any("PolygonalFaceSet" in k for k in kinds)
+    # M5: pos.y — от фасадного фронта вглубь: мир Y = -depth/2 + yv
+    # (depth 12, yv 0.5 -> центр цилиндра на -5.5, в плоскости фронта)
+    cyl = next(p for p in customs if p.Name == "Деталь 01")
+    assert abs(get_local_placement(cyl.ObjectPlacement)[1, 3] - (-5.5)) < 0.01
+    print("test_custom_parts_build OK")
 
 
 def test_chimney_clears_roof():
@@ -205,5 +267,7 @@ if __name__ == "__main__":
     test_validate_facade_v2_guards()
     test_build_facade_v2_hip()
     test_build_facade_v2_villa()
+    test_custom_parts_build()
+    test_round_tower_depth_independent()
     test_chimney_clears_roof()
     print("ALL OK")

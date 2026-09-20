@@ -493,7 +493,10 @@ def build_facade(scene, ifc_path, preview_path, meta):
     for idx, t in enumerate(data.get("towers") or [], start=1):
         cx, half_w, half_d = t["x_m"], t["w_m"] / 2, t["depth_m"] / 2
         top_t = t["floors"] * fh
-        cy = -d / 2 + half_d - 0.06  # фронт башни чуть перед фасадом (как окна)
+        # фронт башни чуть перед фасадом (как окна); меш-цилиндр игнорирует
+        # depth_m — его эффективная глубина равна диаметру w_m
+        eff_half = half_w if t.get("round") else half_d
+        cy = -d / 2 + eff_half - 0.06
         if t.get("round"):
             pts = [[x + cx, y + cy, z] for x, y, z in _ring(half_w, 0.0)] + \
                   [[x + cx, y + cy, z] for x, y, z in _ring(half_w, top_t)]
@@ -526,11 +529,14 @@ def build_facade(scene, ifc_path, preview_path, meta):
 
     # --- v2: трубы на крыше (у конька) ---
     for idx, c in enumerate(data.get("chimneys") or [], start=1):
-        # труба обязана выходить над коньком скатной крыши, иначе не видна
-        ch_h = 1.2 + (data["roof_height"]
-                      if data["roof"] in ("gable", "hip", "mansard") else 0.0)
+        # труба обязана выходить над коньком скатной крыши, иначе не видна:
+        # от своего этажа через все вышележащие до конька + 0.9 м
+        base = min(c["floor"], n)
+        ch_h = (n - base) * fh + 1.2 + (data["roof_height"]
+                                        if data["roof"] in ("gable", "hip", "mansard")
+                                        else 0.0)
         box(f"Труба {idx:02d}", 0.6, 0.6, ch_h, c["x_m"] - w / 2, 0.0,
-            min(c["floor"], n) * fh - 0.3, "plinth", building,
+            base * fh - 0.3, "plinth", building,
             object_type="CONCEPTUAL_CHIMNEY")
 
     # --- v2: вход (porch: крыльцо+дверь; portico: колонны+навес+дверь) ---
@@ -551,26 +557,34 @@ def build_facade(scene, ifc_path, preview_path, meta):
             "glazing", building, object_type="CONCEPTUAL_ENTRANCE")
 
     # --- v2: custom_parts (грамматика примитивов) ---
+    # pos.y в схеме — от фасадного фронта вглубь здания (SYSTEM_FACADE):
+    # мировая Y = -d/2 + yv; pos.x/pos.z — уже мировые (от центра/от земли)
     for idx, p in enumerate(data.get("custom_parts") or [], start=1):
         color = p["color"]
         if color.startswith("#"):
             color = _ensure_style(model, fstyles, f"custom{idx:02d}", color)
         xv, yv, zv = p["pos"]
         wv, dv, hv = p["size"]
+        cy = -d / 2 + yv
         rot = p.get("rot_deg", 0.0)
         if p["kind"] == "box":
-            box(f"Деталь {idx:02d}", wv, dv, hv, xv, yv, zv, color, building,
+            box(f"Деталь {idx:02d}", wv, dv, hv, xv, cy, zv, color, building,
                 object_type="CONCEPTUAL_CUSTOM", rot_deg=rot)
         elif p["kind"] == "cylinder":
-            pts = [[x + xv, y + yv, zv] for x, y, _z in _ring(wv / 2, 0.0)] + \
-                  [[x + xv, y + yv, zv + hv] for x, y, _z in _ring(wv / 2, 0.0)]
+            # кольца локальны, позиция — в placement-матрице (радиус = w/2)
+            pts = [[x, y, 0.0] for x, y, _z in _ring(wv / 2, 0.0)] + \
+                  [[x, y, hv] for x, y, _z in _ring(wv / 2, 0.0)]
+            matrix = np.eye(4)
+            matrix[:3, 3] = [xv, cy, zv]
             _mesh_product(model, body, sb, f"Деталь {idx:02d}", *_hull(pts),
-                          building, "CONCEPTUAL_CUSTOM", fstyles, color)
+                          building, "CONCEPTUAL_CUSTOM", fstyles, color, matrix)
         elif p["kind"] == "cone":
-            pts = [[x + xv, y + yv, zv] for x, y, _z in _ring(wv / 2, 0.0)]
-            pts.append([xv, yv, zv + hv])
+            pts = [[x, y, 0.0] for x, y, _z in _ring(wv / 2, 0.0)]
+            pts.append([0.0, 0.0, hv])
+            matrix = np.eye(4)
+            matrix[:3, 3] = [xv, cy, zv]
             _mesh_product(model, body, sb, f"Деталь {idx:02d}", *_hull(pts),
-                          building, "CONCEPTUAL_CUSTOM", fstyles, color)
+                          building, "CONCEPTUAL_CUSTOM", fstyles, color, matrix)
         elif p["kind"] == "prism":
             # closed=True: OuterCurve профиля обязан быть замкнут
             curve = sb.polyline([[float(x), float(y)] for x, y in p["profile"]],
@@ -588,7 +602,7 @@ def build_facade(scene, ifc_path, preview_path, meta):
             yaw = np.radians(rot)
             matrix = np.array([
                 [np.cos(yaw), -np.sin(yaw), 0.0, xv],
-                [np.sin(yaw), np.cos(yaw), 0.0, yv],
+                [np.sin(yaw), np.cos(yaw), 0.0, cy],
                 [0.0, 0.0, 1.0, zv],
                 [0.0, 0.0, 0.0, 1.0]])
             _api("geometry.edit_object_placement", file=model, product=product,
@@ -680,13 +694,16 @@ def _draw_facade_preview(data, preview_path):
                                     (dr["floor"] - 1) * fh + fh * 0.15),
                                    dr["w_m"], dr["h_m"], fill=False, ls=":",
                                    ec="#7c5cff", lw=1.0))
-    # трубы — как в IFC: база min(floor,n)*fh-0.3, высота 1.2+rh для скатных
+    # трубы — как в IFC: база min(floor,n)*fh-0.3, высота через вышележащие
+    # этажи до конька + 0.9 ((n-floor)*fh + 1.2 + rh для скатных)
     rh_ch = data["roof_height"] if data["roof"] in ("gable", "hip", "mansard") else 0.0
     for c in data.get("chimneys") or []:
-        cz = min(c["floor"], n) * fh - 0.3
-        ax.add_patch(plt.Rectangle((c["x_m"] - w / 2 - 0.3, cz), 0.6, 1.2 + rh_ch,
+        base = min(c["floor"], n)
+        cz = base * fh - 0.3
+        ch_h = (n - base) * fh + 1.2 + rh_ch
+        ax.add_patch(plt.Rectangle((c["x_m"] - w / 2 - 0.3, cz), 0.6, ch_h,
                                    fill=False, ls=":", ec="#8a8575", lw=1.0))
-        top = max(top, cz + 1.2 + rh_ch)  # труба выше конька — раздвинуть ylim
+        top = max(top, cz + ch_h)  # труба выше конька — раздвинуть ylim
     e = data.get("entrance")
     if e:
         ax.add_patch(plt.Rectangle((e["x_m"] - w / 2 - e["w_m"] / 2, 0), e["w_m"], 2.4,
