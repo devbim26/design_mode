@@ -1075,6 +1075,7 @@ SCENE_COLORS = {
     "walls": "#c8b89a", "roof": "#52616b", "plinth": "#8d8d8d",
     "glazing": "#202830", "balcony": "#9aa3ad", "tree": "#4e7a4e",
     "trunk": "#7a5b3a", "car": "#5a6470", "person": "#38424e", "ground": "#b9c2b4",
+    "furniture": "#a4703f",
 }
 
 
@@ -1241,14 +1242,19 @@ def build_scene(scene, ifc_path, preview_path, meta):
         boxx(f"Машина {c_idx}", 1.8, 4.5, 1.4, car["x_m"], car["y_m"], 0.0,
              "car", "CONCEPTUAL_CAR", rot=car.get("rot_deg", 0.0))
     for p_idx, per in enumerate(ctx.get("people", []), start=1):
-        boxx(f"Человек {p_idx}", 0.5, 0.3, 1.7, per["x_m"], per["y_m"], 0.0,
-             "person", "CONCEPTUAL_PERSON")
+        boxx(f"Человек {p_idx}", 0.5, 0.3, 1.7, per["x_m"], per["y_m"],
+             per.get("z_m", 0.0), "person", "CONCEPTUAL_PERSON")
+    for f_idx, fu in enumerate(ctx.get("furniture", []), start=1):
+        boxx(f"Мебель {f_idx} · {fu['type']}", fu["w_m"], fu["d_m"], fu["h_m"],
+             fu["x_m"], fu["y_m"], fu.get("z_m", 0.0), "furniture",
+             "CONCEPTUAL_FURNITURE", rot=fu.get("rot_deg", 0.0))
 
     # земля: общий габарит + запас 4 м
     all_xy = [(b["x_m"] - b["width_m"] / 2, b["y_m"] - b["depth_m"] / 2,
                b["x_m"] + b["width_m"] / 2, b["y_m"] + b["depth_m"] / 2)
               for b in data["buildings"]]
-    for it in ctx.get("trees", []) + ctx.get("cars", []) + ctx.get("people", []):
+    for it in ctx.get("trees", []) + ctx.get("cars", []) + ctx.get("people", []) \
+            + ctx.get("furniture", []):
         all_xy.append((it["x_m"] - 2, it["y_m"] - 2, it["x_m"] + 2, it["y_m"] + 2))
     x0 = min(p[0] for p in all_xy) - 4 if all_xy else -20
     y0 = min(p[1] for p in all_xy) - 4 if all_xy else -20
@@ -1268,6 +1274,7 @@ def build_scene(scene, ifc_path, preview_path, meta):
         "Trees": len(ctx.get("trees", [])),
         "Cars": len(ctx.get("cars", [])),
         "People": len(ctx.get("people", [])),
+        "Furniture": len(ctx.get("furniture", [])),
         "WindowsTotal": windows_total,
         "OrthoAssumption": True, "Source": "3D Design", "Notes": ASSUMPTION_SCENE,
     })
@@ -1302,6 +1309,15 @@ def _draw_scene_preview(data, preview_path):
             c["x_m"], c["y_m"], rot) + ax.transData
         rect = Rectangle((c["x_m"] - 0.9, c["y_m"] - 2.25), 1.8, 4.5,
                          facecolor="#9aa3ad", edgecolor="#263747")
+        rect.set_transform(tr)
+        ax.add_patch(rect)
+    for fu in ctx.get("furniture", []):
+        rot = fu.get("rot_deg", 0.0) or 0.0
+        tr = matplotlib.transforms.Affine2D().rotate_deg_around(
+            fu["x_m"], fu["y_m"], rot) + ax.transData
+        rect = Rectangle((fu["x_m"] - fu["w_m"] / 2, fu["y_m"] - fu["d_m"] / 2),
+                         fu["w_m"], fu["d_m"], facecolor="#a4703f",
+                         edgecolor="#5e3d1f", alpha=.9)
         rect.set_transform(tr)
         ax.add_patch(rect)
     for p in ctx.get("people", []):

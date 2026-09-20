@@ -723,12 +723,21 @@ def test_build_scene():
     assert by_type.get("CONCEPTUAL_TREE") == 4            # 2 дерева × (ствол+крона)
     assert by_type.get("CONCEPTUAL_CAR") == 1
     assert by_type.get("CONCEPTUAL_PERSON") == 2
+    assert by_type.get("CONCEPTUAL_FURNITURE") == 3
     assert by_type.get("CONCEPTUAL_GROUND") == 1
     # фронт главного здания на IFC -Y: окна при y_m=0 -> центры -depth/2
     from ifcopenshell.util.placement import get_local_placement
     wins = [p for p in proxies if p.ObjectType == "CONCEPTUAL_WINDOW"
             and "Гл" in (p.Name or "") and "бок" not in (p.Name or "")]
     assert wins and all(get_local_placement(w.ObjectPlacement)[1, 3] < -5.0 for w in wins)
+    # человек 1 стоит на балконе главного: низ фигуры z = (2-1)*3.1
+    p1 = next(p for p in proxies if p.ObjectType == "CONCEPTUAL_PERSON"
+              and (p.Name or "").startswith("Человек 1"))
+    assert abs(get_local_placement(p1.ObjectPlacement)[2, 3] - 3.1) < 1e-6
+    # мебель 1 (lounger) — тоже на балконе: низ бокса z = 3.1
+    f1 = next(p for p in proxies if p.ObjectType == "CONCEPTUAL_FURNITURE"
+              and "lounger" in (p.Name or ""))
+    assert abs(get_local_placement(f1.ObjectPlacement)[2, 3] - 3.1) < 1e-6
     # CameraHint на проекте
     from ifcopenshell.util.element import get_psets
     hint = get_psets(m.by_type("IfcProject")[0]).get("CameraHint", {})
@@ -736,6 +745,7 @@ def test_build_scene():
     assert abs(hint.get("EyeHeightM", 0) - 1.7) < 1e-6
     sm = get_psets(m.by_type("IfcBuilding")[0]).get("SceneModel", {})
     assert sm.get("Buildings") == 2 and sm.get("WindowsTotal") == 112 + 12
+    assert sm.get("Furniture") == 3
     # превью: план рисуется (содержательная проверка — E2E задачи 11)
     from PIL import Image
     im = Image.open(prev)
