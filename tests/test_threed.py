@@ -279,9 +279,9 @@ def test_validate_facade():
     # клампы
     out, warn = validate_facade({"storeys": 99, "floor_height": 9.0, "width_m": 500.0})
     assert out["storeys"] == 30 and out["floor_height"] == 6.0 and out["width_m"] == 200.0
-    # крыша вне белого списка -> flat + warning
-    out, warn = validate_facade({"storeys": 2, "roof": "hip", "roof_height": 1.0})
-    assert out["roof"] == "flat" and any("hip" in w for w in warn)
+    # крыша вне белого списка -> flat + warning (v2: hip/mansard уже валидны)
+    out, warn = validate_facade({"storeys": 2, "roof": "onion", "roof_height": 1.0})
+    assert out["roof"] == "flat" and any("onion" in w for w in warn)
     # FIT: окна не влезают по ширине -> w_m сжат
     s = {"storeys": 2, "width_m": 10.0,
          "windows": {"rows": 1, "cols": 4, "w_m": 3.0, "h_m": 1.5,
