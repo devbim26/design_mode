@@ -46,10 +46,46 @@ def test_scene_overview():
     assert fac["windows"]["skipped_cells"] == 1  # skip-матрица = паттерн этажа
     assert fac["balconies_count"] == 2 and fac["roof"] == "gable"
     assert fac["colors"]["walls"] == "#d9c7a7"
+    # v1-сэмпл: новых полей нет — нули/False и дефолт shape (обратная совместимость)
+    assert fac["roof_height_m"] == 2.5 and fac["windows"]["shape"] == "rect"
+    assert fac["dormers"] == 0 and fac["chimneys"] == 0 and fac["towers"] == 0
+    assert fac["entrance"] is False and fac["custom_parts"] == 0
+
+    # v2-поля фасада (финальное ревью): сторона A «задумано» обязана их
+    # видеть, иначе верификатор не кросс-чекнет детали против B «построено»
+    villa = {
+        "storeys": 2, "floor_height": 4.0, "width_m": 9.5, "depth_m": 12.0,
+        "roof": "hip", "roof_height": 1.8,
+        "windows": {"rows": 2, "cols": 2, "w_m": 1.3, "h_m": 2.6,
+                    "shape": "arched"},
+        "balconies": [],
+        "dormers": [{"floor": 2, "x_m": 3.0, "w_m": 1.4, "h_m": 1.6},
+                    {"floor": 2, "x_m": 6.5, "w_m": 1.4, "h_m": 1.6}],
+        "chimneys": [{"x_m": 2.0, "floor": 2}],
+        "entrance": {"x_m": 4.75, "w_m": 2.2, "style": "portico"},
+        "towers": [{"x_m": -4.75, "w_m": 3.0, "depth_m": 3.0, "floors": 3,
+                    "round": True, "roof": "cone", "roof_h_m": 2.0}],
+        "custom_parts": [{"kind": "box", "size": [1.0, 0.6, 0.6], "pos": [0, 0, 0]},
+                         {"kind": "cylinder", "size": [1.0, 1.0, 1.0], "pos": [0, 0, 0]},
+                         {"kind": "cone", "size": [1.0, 1.0, 1.0], "pos": [0, 0, 0]}],
+        "colors": {},
+    }
+    v2 = scene_overview("facade", villa)
+    assert v2["roof_height_m"] == 1.8          # hip тоже отдаёт высоту крыши
+    assert v2["windows"]["shape"] == "arched"
+    assert v2["dormers"] == 2 and v2["chimneys"] == 1
+    assert v2["towers"] == 1 and v2["custom_parts"] == 3
+    assert v2["entrance"] is True
 
     sc = scene_overview("scene", s["scene"])
     assert sc["buildings"] and sc["buildings"][0]["main"] is True
     assert isinstance(sc["context"]["trees"], int) and "azimuth_deg" in sc["camera"]
+    # мягкие ассерты scene-сэмпла на новые ключи: нули/False, flat -> None
+    b0 = sc["buildings"][0]
+    assert b0["dormers"] == 0 and b0["chimneys"] == 0 and b0["towers"] == 0
+    assert b0["entrance"] is False and b0["custom_parts"] == 0
+    assert b0["windows"]["shape"] == "rect" and b0["roof_height_m"] is None
+    assert sc["buildings"][1]["roof_height_m"] == 2.0  # gable
 
     pl = scene_overview("plan", s["plan"])
     assert {sec["id"] for sec in pl["sections"]} == {"Ж-1", "Ш-1"}

@@ -529,8 +529,10 @@ def build_facade(scene, ifc_path, preview_path, meta):
 
     # --- v2: трубы на крыше (у конька) ---
     for idx, c in enumerate(data.get("chimneys") or [], start=1):
-        # труба обязана выходить над коньком скатной крыши, иначе не видна:
-        # от своего этажа через все вышележащие до конька + 0.9 м
+        # труба обязана выходить над коньком скатной крыши, иначе не видна.
+        # Высота = вышележащие этажи (n-floor)*fh + roof_height + 1.2:
+        # номинал «1.2 м над коньком» минус 0.3 м базы врезки (база трубы
+        # на 0.3 м ниже уровня своего этажа) -> верх = конёк + 0.9
         base = min(c["floor"], n)
         ch_h = (n - base) * fh + 1.2 + (data["roof_height"]
                                         if data["roof"] in ("gable", "hip", "mansard")
@@ -694,8 +696,9 @@ def _draw_facade_preview(data, preview_path):
                                     (dr["floor"] - 1) * fh + fh * 0.15),
                                    dr["w_m"], dr["h_m"], fill=False, ls=":",
                                    ec="#7c5cff", lw=1.0))
-    # трубы — как в IFC: база min(floor,n)*fh-0.3, высота через вышележащие
-    # этажи до конька + 0.9 ((n-floor)*fh + 1.2 + rh для скатных)
+    # трубы — как в IFC: база min(floor,n)*fh-0.3; высота (n-floor)*fh+1.2+rh
+    # (rh — только для скатных) = номинал 1.2 м над коньком, при этом
+    # верх = конёк + 0.9 (0.3 м уходит в базу врезки ниже этажа)
     rh_ch = data["roof_height"] if data["roof"] in ("gable", "hip", "mansard") else 0.0
     for c in data.get("chimneys") or []:
         base = min(c["floor"], n)

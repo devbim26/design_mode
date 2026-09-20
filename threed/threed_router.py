@@ -287,7 +287,9 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
 
     # петля самокоррекции — только facade: ok is False с непустыми issues ->
     # повторный анализ с блоком CORRECTIONS; победитель — ok=True, иначе
-    # меньше issues, при равенстве ранга — последняя попытка. Любой сбой
+    # меньше issues; тай-брейк — попытка, чей verify ОТВЕТИЛ (ok=False),
+    # бьёт «молчаливую» (ok=None, сбой verify): у той нет ни issues, ни
+    # обзора; при равенстве ранга — последняя попытка. Любой сбой
     # (верификации ИЛИ попытки >= 2) НЕ роняет генерацию: предупреждение в
     # history/дампе, выход на лучшего (п.44; C1/I2 ревью задачи 5).
     history = []
@@ -326,7 +328,10 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
                                           or {}).get("scene"),
                         "verdict": v})
         ok = v.get("ok")
-        rank = (1 if ok is True else 0, -len(issues))
+        # 1) ok=True лучше остальных; 2) ответивший verify (ok=False) лучше
+        # молчащего (ok=None): иначе (0,0)>(0,-1) и сбойная попытка перебивала
+        # информативную; 3) меньше issues. Равенство — последняя попытка.
+        rank = (1 if ok is True else 0, 0 if ok is None else 1, -len(issues))
         res_i = {"name": ifc_path.name, "warnings": warnings}
         if scenario == "scene":
             res_i["camHint"] = scene["camera"]

@@ -428,6 +428,45 @@ def test_loop_gate():
     print("test_loop_gate OK")
 
 
+def test_loop_rank_verified_wins():
+    """Финальное ревью (ранг петли): попытка, чей verify ОТВЕТИЛ (ok=False
+    + issues), бьёт попытку со сбоем verify (ok=None). Старый ранг
+    (ok is True, -issues) давал (0,0) > (0,-1) — «молчаливая» попытка 2
+    перебивала информативную попытку 1. Новый: (ok is True, ok is not None,
+    -issues) — при прочих равных предпочитаем ответившего верификатора."""
+    from PIL import Image
+    R = _router()
+    R._vlm_list_cached = lambda: []
+    scene = _legacy().sample_facade_scene()   # до env: импорт ставит VERIFY=0
+    os.environ["THREED_VERIFY"] = "1"
+    os.environ["THREED_VERIFY_ITERS"] = "1"
+    verify_n = [0]
+
+    def branch(system, prompt, image_url, model):
+        if "QA verifier" in system:
+            verify_n[0] += 1
+            if verify_n[0] == 1:  # попытка 1: verify ответил ok=False, 1 issue
+                return '{"ok": false, "issues": ["storeys: built 5, image shows 4"]}'
+            raise RuntimeError("500 Internal")  # попытка 2: verify сломался
+        return json.dumps(scene)
+    R._call_vlm = branch
+    TMP.mkdir(exist_ok=True)
+    img = Image.new("RGB", (600, 800), (250, 250, 250))
+    res = R._generate_impl("facade", "", img, TMP)
+    # победитель — ПОПЫТКА 1: её вердикт/обзор живы, файл жив, _r2 удалён
+    assert res["verify"]["verdict"]["ok"] is False
+    assert res["verify"]["verdict"]["issues"] == ["storeys: built 5, image shows 4"]
+    assert res["verify"]["overview"]["scene"]["storeys"] == 5
+    assert not res["name"].endswith("_r2.ifc") and (TMP / res["name"]).is_file()
+    stem = Path(res["name"]).stem
+    assert not (TMP / f"{stem}_r2.ifc").exists()
+    assert not (TMP / f"{stem}_r2_preview.png").exists()
+    dump = json.loads((TMP / "_threed_last.json").read_text(encoding="utf-8"))
+    h = dump["verify"]["history"]
+    assert len(h) == 2 and h[1]["verdict"]["ok"] is None  # сбой — в history
+    print("test_loop_rank_verified_wins OK")
+
+
 if __name__ == "__main__":
     test_validate_facade_v2()
     test_validate_facade_v2_guards()
@@ -439,4 +478,5 @@ if __name__ == "__main__":
     test_router_loop()
     test_loop_iteration2_failure_survives()
     test_loop_gate()
+    test_loop_rank_verified_wins()
     print("ALL OK")

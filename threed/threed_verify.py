@@ -51,7 +51,9 @@ def _r(value, nd=2):
 
 
 def _facade_summary(b):
-    """Общий хелпер фасад-части (facade/scene): окна/балконы/цвета компактно."""
+    """Общий хелпер фасад-части (facade/scene): окна/балконы/цвета компактно.
+    v2-детали (dormers/chimneys/towers/entrance/custom_parts, windows.shape)
+    — счётчиками: верификатор кросс-чекает их против built_overview."""
     win = b.get("windows") or {}
     return {
         "storeys": b.get("storeys"),
@@ -59,10 +61,16 @@ def _facade_summary(b):
         "width_m": _r(b.get("width_m")),
         "depth_m": _r(b.get("depth_m")),
         "roof": b.get("roof"),
-        "roof_height_m": _r(b.get("roof_height")) if b.get("roof") == "gable" else None,
+        "roof_height_m": _r(b.get("roof_height")) if b.get("roof") in ("gable", "hip", "mansard") else None,
         "windows": {"rows": win.get("rows"), "cols": win.get("cols"),
-                    "w_m": _r(win.get("w_m")), "h_m": _r(win.get("h_m"))},
+                    "w_m": _r(win.get("w_m")), "h_m": _r(win.get("h_m")),
+                    "shape": win.get("shape", "rect")},
         "balconies_count": len(b.get("balconies") or []),
+        "dormers": len(b.get("dormers") or []),
+        "chimneys": len(b.get("chimneys") or []),
+        "towers": len(b.get("towers") or []),
+        "entrance": bool(b.get("entrance")),
+        "custom_parts": len(b.get("custom_parts") or []),
         "colors": b.get("colors") or {},
     }
 
