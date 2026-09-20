@@ -173,9 +173,37 @@ def test_build_facade_v2_villa():
     print("test_build_facade_v2_villa OK")
 
 
+def test_chimney_clears_roof():
+    """Ревью задачи 3: труба обязана выходить над коньком скатной крыши.
+
+    Villa: hip, roof_height 1.8, storeys 2 × floor_height 4 -> карниз 8 м,
+    конёк 9.8 м. База трубы min(floor,n)*fh-0.3 = 7.7; высота 1.2+rh = 3.0 ->
+    верх 10.7 > конька (иначе труба целиком погребена под кровлей)."""
+    import ifcopenshell
+    from ifcopenshell.util.placement import get_local_placement
+    from threed.threed_scenarios import validate_facade
+    from threed.threed_build import build_facade
+    clean, _ = validate_facade(villa_raw())
+    TMP.mkdir(exist_ok=True)
+    ifc = TMP / "3D_v2_chimney.ifc"
+    build_facade(clean, ifc, TMP / "3D_v2_chimney_preview.png", {"Scenario": "facade"})
+    m = ifcopenshell.open(str(ifc))
+    chim = [p for p in m.by_type("IfcBuildingElementProxy")
+            if p.ObjectType == "CONCEPTUAL_CHIMNEY"]
+    assert len(chim) == 1
+    item = chim[0].Representation.Representations[0].Items[0]
+    assert item.is_a("IfcExtrudedAreaSolid")
+    z = get_local_placement(chim[0].ObjectPlacement)[2, 3]
+    assert abs(z - 7.7) < 0.01, z                    # база: 2*4 - 0.3
+    assert abs(item.Depth - 3.0) < 0.01, item.Depth  # 1.2 + roof_height 1.8
+    assert z + item.Depth > 2 * 4.0 + 1.8            # 10.7 > конёк 9.8
+    print("test_chimney_clears_roof OK")
+
+
 if __name__ == "__main__":
     test_validate_facade_v2()
     test_validate_facade_v2_guards()
     test_build_facade_v2_hip()
     test_build_facade_v2_villa()
+    test_chimney_clears_roof()
     print("ALL OK")

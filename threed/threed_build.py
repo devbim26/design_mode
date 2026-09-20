@@ -304,7 +304,8 @@ def _mesh_product(model, body, sb, name, points, faces, container, object_type,
 
 def _arched_window(model, body, sb, name, wm, hm, cx, cy, z, container, fstyles):
     """Окно с полудугой сверху: профиль-эллипс -> экструзия 0.12 м, лицом на -Y."""
-    pts = [[-wm / 2, 0.0], [wm / 2, 0.0], [wm / 2, 0.6 * hm]]
+    # a=0 даёт [wm/2, 0.6*hm] — правый верхний угол не дублируем явно
+    pts = [[-wm / 2, 0.0], [wm / 2, 0.0]]
     ang = np.linspace(0.0, np.pi, 10, endpoint=False)  # от правого края к левому
     pts += [[np.cos(a) * wm / 2, 0.6 * hm + np.sin(a) * 0.4 * hm] for a in ang]
     # closed=True: OuterCurve у IfcArbitraryClosedProfileDef обязан быть замкнут
@@ -525,7 +526,10 @@ def build_facade(scene, ifc_path, preview_path, meta):
 
     # --- v2: трубы на крыше (у конька) ---
     for idx, c in enumerate(data.get("chimneys") or [], start=1):
-        box(f"Труба {idx:02d}", 0.6, 0.6, 1.2, c["x_m"] - w / 2, 0.0,
+        # труба обязана выходить над коньком скатной крыши, иначе не видна
+        ch_h = 1.2 + (data["roof_height"]
+                      if data["roof"] in ("gable", "hip", "mansard") else 0.0)
+        box(f"Труба {idx:02d}", 0.6, 0.6, ch_h, c["x_m"] - w / 2, 0.0,
             min(c["floor"], n) * fh - 0.3, "plinth", building,
             object_type="CONCEPTUAL_CHIMNEY")
 
@@ -666,7 +670,6 @@ def _draw_facade_preview(data, preview_path):
                 fontsize=7, color="#15232e")
     # v2: силуэты деталей (x_m dormers/труб/входа — от левой кромки фасада,
     # как в IFC-сборке: -w/2; башенки — центр, как в схеме)
-    n_fh = data["storeys"] * data["floor_height"]
     for t in data.get("towers") or []:
         x0 = t["x_m"] - t["w_m"] / 2
         ax.add_patch(plt.Rectangle((x0, 0), t["w_m"], t["floors"] * fh,
@@ -677,9 +680,13 @@ def _draw_facade_preview(data, preview_path):
                                     (dr["floor"] - 1) * fh + fh * 0.15),
                                    dr["w_m"], dr["h_m"], fill=False, ls=":",
                                    ec="#7c5cff", lw=1.0))
+    # трубы — как в IFC: база min(floor,n)*fh-0.3, высота 1.2+rh для скатных
+    rh_ch = data["roof_height"] if data["roof"] in ("gable", "hip", "mansard") else 0.0
     for c in data.get("chimneys") or []:
-        ax.add_patch(plt.Rectangle((c["x_m"] - w / 2 - 0.3, n_fh - 0.3), 0.6, 1.2,
+        cz = min(c["floor"], n) * fh - 0.3
+        ax.add_patch(plt.Rectangle((c["x_m"] - w / 2 - 0.3, cz), 0.6, 1.2 + rh_ch,
                                    fill=False, ls=":", ec="#8a8575", lw=1.0))
+        top = max(top, cz + 1.2 + rh_ch)  # труба выше конька — раздвинуть ylim
     e = data.get("entrance")
     if e:
         ax.add_patch(plt.Rectangle((e["x_m"] - w / 2 - e["w_m"] / 2, 0), e["w_m"], 2.4,
