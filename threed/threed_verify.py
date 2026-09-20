@@ -30,7 +30,7 @@ Reply with STRICT JSON ONLY - no markdown fences, no comments, no extra keys:
 Verdict rules:
 - ok=true when the model plausibly represents the image: storey count, window
   grid (rows x cols), roof shape, balconies, building/room/furniture counts,
-  context amounts (trees/cars/people), general colors.
+  context amounts (trees/cars/people/furniture), general colors.
 - ok=false ONLY for real mismatches a person would also call out: wrong storey
   count, missing or extra window columns/rows, wrong roof type (gable vs flat),
   missing balconies, a building/room/furniture category missing entirely.
@@ -84,6 +84,11 @@ def scene_overview(scenario, scene):
         out["windows"]["skipped_cells"] = sum(1 for row in skip for cell in row if cell)
         return out
     if scenario == "scene":
+        people = (scene.get("context") or {}).get("people") or []
+        kinds = {}
+        for item in (scene.get("context") or {}).get("furniture") or []:
+            ftype = item.get("type", "other")
+            kinds[ftype] = kinds.get(ftype, 0) + 1
         return {
             "camera": {k: _r(v) for k, v in (scene.get("camera") or {}).items()},
             "buildings": [dict(_facade_summary(b),
@@ -92,7 +97,10 @@ def scene_overview(scenario, scene):
                           for b in scene.get("buildings") or []],
             "context": {"trees": len((scene.get("context") or {}).get("trees") or []),
                         "cars": len((scene.get("context") or {}).get("cars") or []),
-                        "people": len((scene.get("context") or {}).get("people") or [])},
+                        "people": len(people),
+                        "people_elevated": sum(
+                            1 for p in people if float(p.get("z_m") or 0.0) > 0.05),
+                        "furniture": kinds},
         }
     if scenario == "interior":
         kinds = {}

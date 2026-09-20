@@ -774,6 +774,18 @@ def test_generate_impl_scene():
     print("test_generate_impl_scene OK")
 
 
+def test_scene_overview_furniture():
+    """verify-обзор сцены: счётчики мебели и людей на высоте (задача 46-3)."""
+    from threed.threed_scenarios import validate_scene
+    from threed.threed_verify import scene_overview, SYSTEM_VERIFY
+    clean, _ = validate_scene(sample_scene_scene())
+    ov = scene_overview("scene", clean)
+    assert ov["context"]["furniture"] == {"lounger": 1, "bench": 1, "other": 1}
+    assert ov["context"]["people"] == 2 and ov["context"]["people_elevated"] == 1
+    assert "furniture" in SYSTEM_VERIFY
+    print("test_scene_overview_furniture OK")
+
+
 def test_admin_threed_section():
     src = (ROOT / "imagerouter" / "imagerouter.html").read_text(encoding="utf-8")
     assert 'id="threedsec"' in src
@@ -792,6 +804,7 @@ if __name__ == "__main__":
     test_validate_interior()
     test_validate_facade_balcony_fit()
     test_validate_scene()
+    test_scene_overview_furniture()
     test_build_scene()
     test_generate_impl_scene()
     test_generate_impl()
