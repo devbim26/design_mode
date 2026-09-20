@@ -274,25 +274,32 @@
   }
 
   // Композит холста (как в E2E п.30: stage.toCanvas). null = контента нет.
+  // ГРАБЛЯ (fix 20.09): на оторванном/нулевом стейдже Konva toCanvas КИДАЕТ
+  // InvalidStateError (drawImage width 0); исключение из composite убивало
+  // refresh3DSource на полпути — превью пустое, а S3.image хранил СТАРУЮ
+  // картинку и Generate молча слал её. Теперь любой сбой = null -> фолбэк.
   function canvasComposite() {
-    var b = window.__devbimCanvasBridge;
-    var m = b && b.getManager && b.getManager();
-    if (!m || !m.stage || !m.stage.konva || !m.stage.konva.stage) return null;
-    var ents = null;
-    try { var cState = window.__devbimPEStore.getState().canvas;
-          var cPresent = cState && cState.present ? cState.present : cState;
-          ents = (cPresent.entities || [])
-            .concat((cPresent.rasterLayers && cPresent.rasterLayers.entities) || [])
-            .concat((cPresent.controlLayers && cPresent.controlLayers.entities) || []); } catch (e) {}
-    var has = false;
-    (ents || []).forEach(function (en) {
-      if ((en.type === 'raster_layer' || en.type === 'control_layer') &&
-          (en.objects || []).length) has = true;
-    });
-    if (!has) return null;
-    var st = m.stage.konva.stage;
-    return st.toCanvas({ x: 0, y: 0, width: st.width(), height: st.height(),
-                         pixelRatio: 1 }).toDataURL('image/png');
+    try {
+      var b = window.__devbimCanvasBridge;
+      var m = b && b.getManager && b.getManager();
+      if (!m || !m.stage || !m.stage.konva || !m.stage.konva.stage) return null;
+      var st = m.stage.konva.stage;
+      if (!(st.width() > 0) || !(st.height() > 0)) return null;
+      var ents = null;
+      try { var cState = window.__devbimPEStore.getState().canvas;
+            var cPresent = cState && cState.present ? cState.present : cState;
+            ents = (cPresent.entities || [])
+              .concat((cPresent.rasterLayers && cPresent.rasterLayers.entities) || [])
+              .concat((cPresent.controlLayers && cPresent.controlLayers.entities) || []); } catch (e) {}
+      var has = false;
+      (ents || []).forEach(function (en) {
+        if ((en.type === 'raster_layer' || en.type === 'control_layer') &&
+            (en.objects || []).length) has = true;
+      });
+      if (!has) return null;
+      return st.toCanvas({ x: 0, y: 0, width: st.width(), height: st.height(),
+                           pixelRatio: 1 }).toDataURL('image/png');
+    } catch (e) { return null; }
   }
 
   // Выбранная во вьювере картинка (последняя из selection) -> dataURL.
@@ -326,7 +333,11 @@
     var badge = document.querySelector('#devbim-3d-modal .devbim-3d-badge');
     var hint = document.getElementById('devbim-3d-hint');
     if (img) img.src = '';
-    S3.image = canvasComposite(); S3.source = t().srcCanvas;
+    // сброс ДО попытки: после сбоя composite здесь не должно оставаться
+    // картинки из ПРОШЛОГО открытия модалки (иначе Generate молча шлёт её)
+    S3.image = null;
+    try { S3.image = canvasComposite(); } catch (e) { S3.image = null; }
+    S3.source = t().srcCanvas;
     if (!S3.image) {
       try { S3.image = await viewerImage(); S3.source = t().srcViewer; } catch (e) {}
     }
@@ -401,7 +412,15 @@
         JSON.stringify(j.camHint)); } catch (e) {} }
       close3D();
       if (window.__devbimSwitchTab) window.__devbimSwitchTab('ifc');
-      toast(t().done + ' ' + j.name);
+      // VLM-самопроверка собранной модели: ✓ / ⚠ issues; сбой (ok=null) — молча
+      var vNote = '';
+      if (j.verify && j.verify.verdict) {
+        var v = j.verify.verdict;
+        if (v.ok === true) vNote = ' · \u2713 VLM';
+        else if (v.ok === false && v.issues && v.issues.length)
+          vNote = ' · \u26A0 ' + v.issues.join('; ');
+      }
+      toast(t().done + ' ' + j.name + vNote);
     } catch (e) {
       S3.busy = false; go.disabled = false; go.textContent = t().generate;
       if (S3.timer) { clearInterval(S3.timer); S3.timer = null; }

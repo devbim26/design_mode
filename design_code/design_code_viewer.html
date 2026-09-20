@@ -140,6 +140,7 @@
     <div id="err" role="alert"></div>
     <div class="row">
       <button type="submit" id="btnOpen">Open</button>
+      <button type="button" class="ghost" id="btnDefault" hidden title="Fill in the default site address from the server config">&#x21BA; Default</button>
       <button type="button" class="ghost" id="btnCancel" hidden>Cancel</button>
     </div>
   </form>
@@ -153,12 +154,24 @@
   var $ = function (id) { return document.getElementById(id); };
   var gate = $("gate"), form = $("form"), urlIn = $("url"), codeIn = $("code"),
       codeLabel = $("codeLabel"), errIn = $("err"), btnOpen = $("btnOpen"),
-      btnCancel = $("btnCancel"), bar = $("bar"), host = $("host"),
-      frame = $("site"), frameWrap = $("frameWrap");
-  var protectedMode = true, currentUrl = null, busy = false;
+      btnDefault = $("btnDefault"), btnCancel = $("btnCancel"), bar = $("bar"),
+      host = $("host"), frame = $("site"), frameWrap = $("frameWrap");
+  var protectedMode = true, currentUrl = null, busy = false, defaultUrl = "";
 
   function savedUrl() {
     try { return localStorage.getItem(LS_URL) || ""; } catch (e) { return ""; }
+  }
+
+  // Локальные/аппаратные адреса — не «сайт дизайн-кода» (фикс 15.09:
+  // сохранённый при тестах http://127.0.0.1:9090/pdfviewer.html превращал
+  // вкладку во второй PDF-вьювер). Петля + хост самого приложения.
+  function isLocalSiteUrl(url) {
+    try {
+      var h = new URL(url).hostname.toLowerCase();
+      if (h === "localhost" || h === "0.0.0.0" || h === "::1" || h === "[::1]" ||
+          /^127\./.test(h)) return true;
+      try { return h === location.hostname.toLowerCase(); } catch (e) { return false; }
+    } catch (e) { return false; }
   }
 
   function openSite(url) {
@@ -176,8 +189,9 @@
   function showGate() {
     errIn.textContent = "";
     codeLabel.hidden = codeIn.hidden = !protectedMode;
+    btnDefault.hidden = !defaultUrl;  // есть адрес по умолчанию — можно сбросить к нему
     btnCancel.hidden = !currentUrl;   // отменить можно, только когда есть что показать
-    urlIn.value = savedUrl();
+    urlIn.value = savedUrl() || defaultUrl;
     gate.hidden = false;
     bar.classList.remove("on");
     frameWrap.classList.remove("on");
@@ -195,6 +209,11 @@
     if (!/^https?:\/\//i.test(url)) {
       errIn.textContent = "URL must start with http:// or https://";
       urlIn.focus();
+      return;
+    }
+    if (isLocalSiteUrl(url)) {
+      errIn.textContent = "This is a local app address, not the Design Code site \u2014 enter the external site URL";
+      urlIn.select();
       return;
     }
     if (protectedMode && !code) {
@@ -221,6 +240,12 @@
     });
   });
 
+  btnDefault.addEventListener("click", function () {
+    if (!defaultUrl) return;
+    errIn.textContent = "";
+    urlIn.value = defaultUrl;
+    (protectedMode && !codeIn.hidden ? codeIn : urlIn).focus();
+  });
   btnCancel.addEventListener("click", function () { if (currentUrl) openSite(currentUrl); });
   $("btnReload").addEventListener("click", function () {
     if (currentUrl) { frame.src = "about:blank"; frame.src = currentUrl; }
@@ -507,13 +532,22 @@
   btnToCanvas.addEventListener("click", function () { sendFragment(true); });
   btnToAssets.addEventListener("click", function () { sendFragment(false); });
 
+  // отладка (как __ifc/__pdf у соседних вьюеров)
+  window.__dc = { openSite: openSite, showGate: showGate, isLocalSiteUrl: isLocalSiteUrl };
+
   // старт: код уже вводился в этой сессии браузера + сохранённый URL → сразу сайт
   var unlocked = false;
   try { unlocked = sessionStorage.getItem(SS_UNLOCK) === "1"; } catch (e) {}
   fetch("/api/v1/designcode/auth").then(function (r) { return r.json(); })
     .then(function (status) {
       protectedMode = !!status.protected;
-      var url = savedUrl() || (status.default_url || "");
+      defaultUrl = status.default_url || "";
+      var su = savedUrl();
+      if (su && isLocalSiteUrl(su)) {   // сохранённый при тестах локальный адрес — мусор
+        try { localStorage.removeItem(LS_URL); } catch (e) {}
+        su = "";
+      }
+      var url = su || defaultUrl;
       if (url && (!protectedMode || unlocked)) openSite(url);
       else { showGate(); urlIn.value = url; }
     }).catch(function () { showGate(); });  // сервер недоступен — форма покажет ошибку при отправке

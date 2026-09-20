@@ -125,6 +125,33 @@ def main():
         import os as _os
         _os.unlink(chk)
 
+    # --- фикс 15.09: локальный адрес — не «сайт» + кнопка сброса Default ---
+    assert page.count("isLocalSiteUrl(") >= 3, \
+        "гвард локальных URL: определение + вызовы в submit и на старте"
+    assert 'id="btnDefault"' in page, "кнопка «↺ Default» в модалке"
+    assert "localStorage.removeItem(LS_URL)" in page, \
+        "сохранённый при тестах локальный URL вычищается при загрузке"
+    assert "window.__dc" in page, "отладочный хук __dc (как __ifc/__pdf)"
+    fn = _re.search(r"function isLocalSiteUrl\(url\) \{.*?\n  \}", page, _re.S)
+    assert fn, "функция isLocalSiteUrl не найдена"
+    with _tf.NamedTemporaryFile("w", suffix=".js", delete=False, encoding="utf-8") as fh:
+        fh.write("var location={hostname:'app.local'};\n" + fn.group(0) + """
+function T(u, exp){ var r = isLocalSiteUrl(u); if (r !== exp){ console.error('fail:', u, '->', r); process.exit(1); } }
+T('http://127.0.0.1:9090/pdfviewer.html', true);
+T('http://localhost:8080/', true);
+T('http://[::1]:9090/', true);
+T('http://app.local:9100/page', true);
+T('https://nw.dev-bim.com/', false);
+T('http://other.host:9090/', false);
+T('not a url', false);
+""")
+        guard_chk = fh.name
+    try:
+        r = _sp.run(["node", guard_chk], capture_output=True, text=True)
+        assert r.returncode == 0, "isLocalSiteUrl ведёт себя не так:\n" + r.stdout + r.stderr
+    finally:
+        _os.unlink(guard_chk)
+
     print("OK")
 
 
