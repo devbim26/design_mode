@@ -1867,6 +1867,90 @@ invokeai==6.2.0` их нужно запускать повторно в поря
       (CONCEPTUAL_ROOF=1 в IFC есть); если судья занижает — крутить камеру
       на боковой фасад до orthoFacade.
 
+45. **3D Design (фаза 5): «Фасад v2» — язык деталей + петля
+    самокоррекции** (20.09, ветка `3d`; спека
+    `docs/superpowers/specs/2026-09-20-3d-facade-v2-parts-loop-design.md`,
+    план `docs/superpowers/plans/2026-09-20-3d-facade-v2-parts-loop.md`,
+    6 задач).
+    - **Схема v2** (`threed/threed_scenarios.py`: SYSTEM_FACADE +
+      validate_facade; все новые поля опциональны — старые сцены v1
+      проходят неизменно): `roof` flat/gable/hip/mansard,
+      `windows.shape` rect/arched (профиль с полудугой, 8 сегментов),
+      `dormers` (≤12, floor кламп 2..storeys), `chimneys` (≤6,
+      коробка 0.6×0.6), `entrance` porch/portico, `towers` (≤4,
+      тело box/цилиндр по этажам + крыша cone/pyramid/flat —
+      тестовому дому нужна круглая, cylinder вошёл сразу) и
+      **custom_parts** — грамматика примитивов box/prism(по профилю
+      3..32 точки)/cylinder/cone, ≤60 шт, pos от центра фасада,
+      rot_deg вокруг Z, цвет по палитре/своим #rrggbb.
+    - **Геометрия** (`threed/threed_build.py`): hip/mansard-крыши,
+      конусы, пирамиды, цилиндры — выпуклая оболочка точек через
+      `scipy.spatial.ConvexHull` → `IfcPolygonalFaceSet`
+      (IfcBuildingElementProxy, один меш = один продукт, НЕ
+      сегментируем). ТРУБА обязана выходить НАД КОНЬКОМ скатной
+      крыши: от своего этажа через все вышележащие до конька
+      (+ roof_height) + 1.2 м. Дормер = коробка на фронте + панель
+      остекления (как окна, −0.46 от грани). Новые ObjectType:
+      CONCEPTUAL_DORMER/TOWER/CHIMNEY/ENTRANCE/CUSTOM — built_overview
+      п.44 подхватил сам. Превью дорисовывает силуэты деталей
+      (dormer/башни/трубы/вход) линиями.
+    - **Петля самокоррекции** (`threed/threed_router.py`,
+      `_generate_impl`; только facade): после сборки+verify — при
+      СТРОГОМ `verdict.ok is False` с непустыми issues (ok=None/пустые
+      issues итерацию НЕ запускают — платный повтор только ради
+      конкретных коррекций) повторный анализ с блоком
+      «CORRECTIONS from QA verification» → validate → build → verify.
+      Победитель: rank=(ok=True, меньше issues), при равенстве —
+      последняя попытка. Файлы попыток ≥2 — суффикс `_rN`
+      (не перезаписывают друг друга), ПРОИГРАВШИЕ (IFC+превью)
+      удаляются — в data/ifc остаётся только победитель. Сбой попытки
+      ≥2 или verify не роняет генерацию (выход на лучшего). Ответ
+      несёт `verify.iterations`, дамп `_threed_last.json` — полную
+      `verify.history` (scene_summary/warnings/verdict по итерациям).
+      Env: **THREED_VERIFY_ITERS** (0..2, дефолт 1 = один повтор;
+      0 — петлю выключить) поверх THREED_VERIFY п.44 (выключатель
+      верификации вообще).
+    - **Файлы/тесты**: деплой `setup_threed.py` (4 файла: threed.py,
+      threed_scenarios.py, threed_build.py, threed_verify.py — теперь
+      и verify-модуль в плане копирования). Тесты:
+      `tests/test_threed.py` (19 функций), новый
+      `tests/test_threed_facade_v2.py` (10: клампы/дропы v2, сэмпл
+      «вилла», custom_parts, петля ветвящимися моками),
+      `tests/test_threed_verify.py` (5, п.44). Стоимость: база 2
+      VLM-вызова, худший случай 4 (~$0.2–0.3); живой прогон —
+      4 вызова / 85 с.
+    - **Живой roundtrip** (`tests/_e2e_3d_roundtrip.py`, vlm_test_house):
+      **score 35 → 43**, match=false; iterations=2 — петля СРАБОТАЛА:
+      итерация 1 дала окна 1×2, verify поймал «image shows 2 rows»,
+      итерация 2 с CORRECTIONS → окна 2×2, ok=True, победила
+      (`3D_facade_20260920-142416_r2.ifc`, iter-1 файлы вычищены).
+      Built победителя: DORMER=2, TOWER=2, CHIMNEY=2, ENTRANCE=2,
+      CUSTOM=7, WINDOW=10, ROOF=1 — всё, что анализ запросил, схема
+      построила. Цель спеки 55-60 НЕ достигнута — разбор issues судьи:
+      (а) «башня не та» — анализ выдал ДВЕ прямоугольные башни вместо
+      одной центральной круглой (схема умеет round+cone — не запрошено);
+      (б) «дормеры пропали» — построены на фронте (DORMER=2), но с
+      дефолтного ракурса fitModel судья их не зачёл; (в) «окна
+      приземистые» — FIT сжал h_m 2.6→1.4 при этаже 4.2 м,
+      `shape:"arched"` не запрошен; (г) «вход без фронтона» — portico
+      есть, пропорции от анализа. ВЫВОД пилота: узкое место — качество
+      АНАЛИЗА VLM (позиции/форма деталей), не выразительность схемы;
+      конвейер и петля работают как задумано.
+    - **ГРАБЛИ**: (1) trimesh из спеки НЕ понадобился — scipy уже был
+      в venv, новая зависимость не вводилась. (2) Грани hull'а обязаны
+      быть plain int (`list(map(int, ...))`): numpy int64 валит
+      ShapeBuilder ValueError'ом. (3) Тесты роутера из дерева тянут
+      VENV-копии модулей — после правок threed/* сперва setup_threed.py
+      (в test_threed_facade_v2.py для дерева есть изолятор `_router()`,
+      импортирующий threed.threed_router). (4) Счётчики продуктов:
+      башня = 2 (тело+крыша-меш), dormer-стекло = CONCEPTUAL_WINDOW
+      (коробка = CONCEPTUAL_DORMER), portico = 4 ENTRANCE (2 колонны +
+      навес + дверь) — не удивляться цифрам в built_overview. (5)
+      skip-матрица окон — паттерн ЭТАЖА (rows×cols), не всего фасада
+      (п.44, грабля 2 — остаётся актуальной). Деплой: setup_threed.py
+      + рестарт; data/ifc/_threed_last.json.verify.history — первый
+      инструмент разбора «что думала петля».
+
 
 ```powershell
 cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
