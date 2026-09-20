@@ -115,6 +115,14 @@ def _verify_enabled() -> bool:
         "0", "false", "no", "off")
 
 
+def _verify_iters() -> int:
+    """Доп. итерации петли самокоррекции (только facade): 0..2, дефолт 1."""
+    try:
+        return max(0, min(2, int(os.environ.get("THREED_VERIFY_ITERS", "1"))))
+    except ValueError:
+        return 1
+
+
 def _vlm_list_cached() -> list[dict]:
     """VLM каталога (вход image, выход text), кэш VLM_LIST_CACHE_S."""
     now = time.time()
@@ -205,7 +213,10 @@ def _call_vlm(system: str, prompt: str, image_url: str, model: str) -> str:
 
 
 def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = None) -> dict:
-    """Без HTTP: анализ -> сцена -> IFC + превью. Raises ValueError (роутер даст 422)."""
+    """Без HTTP: анализ -> сцена -> IFC + превью (+ петля самокоррекции фасада,
+    задача 5: вердикт с issues -> повторный анализ с CORRECTIONS -> пересборка
+    -> повторный verify; победитель по ok/числу issues).
+    Raises ValueError (роутер даст 422)."""
     if scenario not in SCENARIOS:
         raise ValueError(f"Сценарий «{scenario}» в разработке (доступны: plan, facade, interior, scene)")
     model, source = _load_model_choice()
@@ -214,51 +225,114 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
     except ValueError:
         raise ValueError(f"Модель 3D-анализа {model} недоступна (не VLM или нет в каталоге)")
     image_url = _to_dataurl(image)
-
-    scene = None
-    last_err = ""
-    raw_head = ""  # голова успешного сырого ответа VLM (диагностика дампа)
-    for attempt in (1, 2):  # один ретрай на невалидный JSON
-        system = (threed_scenarios.SYSTEM_SCENE if scenario == "scene"
-                  else threed_scenarios.SYSTEM_INTERIOR if scenario == "interior"
-                  else threed_scenarios.SYSTEM_FACADE if scenario == "facade"
-                  else threed_scenarios.SYSTEM_GENPLAN)
-        raw = _call_vlm(system,
-                        prompt + ("\n(attempt 2: return ONLY the strict JSON)" if attempt == 2
-                                  else ""),
-                        image_url, model)
-        scene = threed_scenarios.extract_json(raw)
-        if scene is not None:
-            raw_head = raw[:300]
-            break
-        last_err = raw[:200]
-    if scene is None:
-        raise ValueError(f"Модель не смогла описать сцену (не JSON): {last_err}")
-
-    if scenario == "interior":
-        scene, warnings = threed_scenarios.validate_interior(
-            scene, image.width, image.height)
-    elif scenario == "scene":
-        scene, warnings = threed_scenarios.validate_scene(scene)
-    elif scenario == "facade":
-        scene, warnings = threed_scenarios.validate_facade(scene)
-    else:
-        scene, warnings = threed_scenarios.validate_genplan(
-            scene, image.width, image.height)
-    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    name = f"3D_{scenario}_{stamp}.ifc"
     out_dir = Path(out_dir) if out_dir else _ifc_dir()
-    ifc_path = out_dir / name
-    preview_path = out_dir / (Path(name).stem + "_preview.png")
-    meta = {"Scenario": scenario, "Prompt": prompt, "Model": model, "Source": "3D Design"}
-    if scenario == "interior":
-        threed_build.build_interior(scene, ifc_path, preview_path, meta)
-    elif scenario == "scene":
-        threed_build.build_scene(scene, ifc_path, preview_path, meta)
-    elif scenario == "facade":
-        threed_build.build_facade(scene, ifc_path, preview_path, meta)
-    else:
-        threed_build.build_genplan(scene, image, ifc_path, preview_path, meta)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    system = (threed_scenarios.SYSTEM_SCENE if scenario == "scene"
+              else threed_scenarios.SYSTEM_INTERIOR if scenario == "interior"
+              else threed_scenarios.SYSTEM_FACADE if scenario == "facade"
+              else threed_scenarios.SYSTEM_GENPLAN)
+
+    def _attempt(user_prompt: str, attempt_no: int):
+        """Анализ -> валидация -> сборка IFC+превью (одна попытка петли).
+        Попытки >= 2 получают суффикс _rN — не перезаписывают друг друга."""
+        scene = None
+        last_err = ""
+        raw_head = ""  # голова успешного сырого ответа VLM (диагностика дампа)
+        for try_no in (1, 2):  # один ретрай на невалидный JSON
+            raw = _call_vlm(system,
+                            user_prompt + ("\n(attempt 2: return ONLY the strict JSON)" if try_no == 2
+                                           else ""),
+                            image_url, model)
+            scene = threed_scenarios.extract_json(raw)
+            if scene is not None:
+                raw_head = raw[:300]
+                break
+            last_err = raw[:200]
+        if scene is None:
+            raise ValueError(f"Модель не смогла описать сцену (не JSON): {last_err}")
+        if scenario == "interior":
+            scene, warnings = threed_scenarios.validate_interior(
+                scene, image.width, image.height)
+        elif scenario == "scene":
+            scene, warnings = threed_scenarios.validate_scene(scene)
+        elif scenario == "facade":
+            scene, warnings = threed_scenarios.validate_facade(scene)
+        else:
+            scene, warnings = threed_scenarios.validate_genplan(
+                scene, image.width, image.height)
+        name = (f"3D_{scenario}_{stamp}.ifc" if attempt_no == 1
+                else f"3D_{scenario}_{stamp}_r{attempt_no}.ifc")
+        ifc_path = out_dir / name
+        preview_path = out_dir / (Path(name).stem + "_preview.png")
+        meta = {"Scenario": scenario, "Prompt": prompt, "Model": model, "Source": "3D Design"}
+        if scenario == "interior":
+            threed_build.build_interior(scene, ifc_path, preview_path, meta)
+        elif scenario == "scene":
+            threed_build.build_scene(scene, ifc_path, preview_path, meta)
+        elif scenario == "facade":
+            threed_build.build_facade(scene, ifc_path, preview_path, meta)
+        else:
+            threed_build.build_genplan(scene, image, ifc_path, preview_path, meta)
+        return scene, warnings, ifc_path, preview_path, raw_head
+
+    def _verify_attempt(scene, ifc_path):
+        """Самопроверка (пилот MCP4IFC-паттерна): обзор «задумано + построено»
+        -> второй VLM-запрос с исходной картинкой -> вердикт {ok, issues}."""
+        overview = {"scene": threed_verify.scene_overview(scenario, scene),
+                    "built": threed_verify.built_overview(ifc_path)}
+        return {"overview": overview,
+                "verdict": threed_verify.verify(
+                    image_url, overview, _call_vlm, model)}
+
+    # петля самокоррекции — только facade: ok не True -> повторный анализ
+    # с блоком CORRECTIONS; победитель — ok=True, иначе меньше issues,
+    # при равенстве ранга — последняя попытка. Любой сбой верификации НЕ
+    # роняет генерацию: ok=None, ошибка в вердикте/дампе (п.44).
+    history = []
+    best = None  # (rank, res_i, verify_payload, ifc_path, preview_path, raw_head)
+    extra = ""
+    max_iters = 1 + (_verify_iters() if scenario == "facade" and _verify_enabled() else 0)
+    attempt_files = []
+    for attempt_no in range(1, max_iters + 1):
+        scene, warnings, ifc_path, preview_path, raw_head = _attempt(prompt + extra, attempt_no)
+        attempt_files.append((ifc_path, preview_path))
+        verify_payload = None
+        if _verify_enabled():
+            try:
+                verify_payload = _verify_attempt(scene, ifc_path)
+            except Exception as e:
+                verify_payload = {"overview": None,
+                                  "verdict": {"ok": None, "error": str(e)}}
+        v = (verify_payload or {}).get("verdict") or {}
+        history.append({"attempt": attempt_no, "warnings": warnings,
+                        "scene_summary": ((verify_payload or {}).get("overview")
+                                          or {}).get("scene"),
+                        "verdict": v})
+        ok, n_issues = v.get("ok"), len(v.get("issues") or [])
+        rank = (1 if ok is True else 0, -n_issues)
+        res_i = {"name": ifc_path.name, "warnings": warnings}
+        if scenario == "scene":
+            res_i["camHint"] = scene["camera"]
+        if verify_payload is not None:
+            res_i["verify"] = verify_payload
+        if best is None or rank >= best[0]:
+            best = (rank, res_i, verify_payload, ifc_path, preview_path, raw_head)
+        if ok is True or attempt_no == max_iters:
+            break
+        extra = ("\nCORRECTIONS from QA verification - fix these in your JSON:\n- "
+                 + "\n- ".join(v.get("issues") or []))
+    _, res, verify_payload, ifc_path, preview_path, raw_head = best
+    if verify_payload is not None:
+        verify_payload["iterations"] = len(history)  # res["verify"] — победитель
+    # проигравшие попытки (IFC+превью) удаляем: в out_dir остаётся только
+    # победитель (файл финала = файл победителя, имя = имя его попытки)
+    for p_ifc, p_prev in attempt_files:
+        for p in (p_ifc, p_prev):
+            if p not in (ifc_path, preview_path):
+                try:
+                    p.unlink(missing_ok=True)
+                except OSError:
+                    pass
     # что реально ушло в VLM (диагностика «не тот дом»: сравнить sha1 с файлом)
     import hashlib
     img_b64 = image_url.split(",", 1)[-1]
@@ -267,35 +341,20 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
         img_bytes = len(img_b64) * 3 // 4
     except Exception:
         img_sha1, img_bytes = "?", 0
-    # самопроверка (пилот MCP4IFC-паттерна): обзор «задумано + построено» ->
-    # второй VLM-запрос с исходной картинкой -> вердикт {ok, issues}.
-    # Любой сбой НЕ роняет генерацию: ok=None, ошибка в вердикте/дампе.
-    verify_payload = None
-    if _verify_enabled():
-        try:
-            overview = {"scene": threed_verify.scene_overview(scenario, scene),
-                        "built": threed_verify.built_overview(ifc_path)}
-            verify_payload = {"overview": overview,
-                              "verdict": threed_verify.verify(
-                                  image_url, overview, _call_vlm, model)}
-        except Exception as e:
-            verify_payload = {"overview": None,
-                              "verdict": {"ok": None, "error": str(e)}}
+    dump_verify = None
+    if verify_payload is not None:  # история итераций — только в дампе
+        dump_verify = dict(verify_payload)
+        dump_verify["history"] = history
     dump = {"ts": datetime.now().isoformat(), "scenario": scenario, "prompt": prompt,
-            "model": model, "warnings": warnings, "name": name,
+            "model": model, "warnings": res["warnings"], "name": ifc_path.name,
             "image": {"bytes": img_bytes, "sha1": img_sha1,
                       "w": image.width, "h": image.height},
-            "vlm_head": raw_head, "verify": verify_payload}
+            "vlm_head": raw_head, "verify": dump_verify}
     try:
         (out_dir / "_threed_last.json").write_text(
             json.dumps(dump, ensure_ascii=False, indent=1), encoding="utf-8")
     except Exception:
         pass
-    res = {"name": name, "warnings": warnings}
-    if scenario == "scene":
-        res["camHint"] = scene["camera"]
-    if verify_payload is not None:
-        res["verify"] = verify_payload
     return res
 
 

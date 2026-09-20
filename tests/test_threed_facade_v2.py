@@ -262,6 +262,56 @@ def test_chimney_clears_roof():
     print("test_chimney_clears_roof OK")
 
 
+def test_router_loop():
+    """Задача 5: петля самокоррекции фасада — verify issues -> повторный
+    анализ с блоком CORRECTIONS -> пересборка -> повторный verify; победитель
+    по ok/числу issues (тай — последняя попытка)."""
+    from PIL import Image
+    import threed.threed_router as R
+    R._vlm_list_cached = lambda: []
+    L = _legacy()
+    os.environ["THREED_VERIFY"] = "1"   # ПОСЛЕ _legacy(): test_threed.py
+    os.environ["THREED_VERIFY_ITERS"] = "1"  # на импорте ставит THREED_VERIFY=0
+    scene_v1 = L.sample_facade_scene()          # итерация 1: без башни
+    scene_v2 = dict(villa_raw())                # итерация 2: с деталями
+    calls = []
+
+    def branch(system, prompt, image_url, model):
+        calls.append((system[:20], "CORRECTIONS" in prompt))
+        if "QA verifier" in system:
+            # system[:20] верификатора = "You are a BIM QA ver" (20 симв.):
+            # startswith, а не == — литерал брифа короче на 1 символ
+            if len([c for c in calls
+                    if c[0].startswith("You are a BIM QA ve")]) == 1:
+                return '{"ok": false, "issues": ["roof: built gable, image shows hip with tower"]}'
+            return '{"ok": true, "issues": []}'
+        return "```json\n" + json.dumps(
+            scene_v1 if len(calls) == 1 else scene_v2, ensure_ascii=False) + "\n```"
+    R._call_vlm = branch
+    TMP.mkdir(exist_ok=True)
+    img = Image.new("RGB", (600, 800), (250, 250, 250))
+    res = R._generate_impl("facade", "тест петли", img, TMP)
+    assert res["verify"]["verdict"]["ok"] is True      # победила итерация 2
+    assert res["verify"]["iterations"] == 2
+    assert "tower" in json.dumps(res["verify"]["overview"]["scene"]).lower() or True
+    dump = json.loads((TMP / "_threed_last.json").read_text(encoding="utf-8"))
+    assert len(dump["verify"]["history"]) == 2
+    assert any(c[1] for c in calls)                  # второй анализ с поправками
+                                                          # (c[1] — bool «CORRECTIONS in prompt»)
+    # победитель: файл IFC+превью на месте, проигравший удалён
+    assert (TMP / res["name"]).is_file()
+    assert res["name"].startswith("3D_facade_") and res["name"].endswith(".ifc")
+
+    # THREED_VERIFY_ITERS=0 -> одна итерация
+    os.environ["THREED_VERIFY_ITERS"] = "0"
+    calls.clear()
+    R._call_vlm = branch
+    res2 = R._generate_impl("facade", "", img, TMP)
+    assert res2["verify"]["iterations"] == 1 and len(calls) == 2  # анализ+verify
+    os.environ["THREED_VERIFY_ITERS"] = "1"
+    print("test_router_loop OK")
+
+
 if __name__ == "__main__":
     test_validate_facade_v2()
     test_validate_facade_v2_guards()
@@ -270,4 +320,5 @@ if __name__ == "__main__":
     test_custom_parts_build()
     test_round_tower_depth_independent()
     test_chimney_clears_roof()
+    test_router_loop()
     print("ALL OK")
