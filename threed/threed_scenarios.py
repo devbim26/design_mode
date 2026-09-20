@@ -162,7 +162,7 @@ Schema (ALL VALUES ARE METERS - no pixel coordinates):
  "width_m": <float m, facade width>,
  "depth_m": <float m, building depth - NOT visible from the facade; use 12 or the
    USER PROMPT if it states one>,
- "roof": "flat" | "gable",
+ "roof": "flat" | "gable" | "hip" | "mansard",
  "roof_height": <float m, ridge height above the eave, only for gable>,
  "windows": {
    "rows": <int 1-4, window rows per storey>,
@@ -170,10 +170,24 @@ Schema (ALL VALUES ARE METERS - no pixel coordinates):
    "w_m": <float m, window width>, "h_m": <float m, window height>,
    "margin_x_m": <float m, side margin>, "margin_y_m": <float m, margin inside a storey>,
    "skip": <rows x cols boolean matrix, true = NO window there (e.g. stair shaft,
-     blind panels); all-false if every cell is glazed>
- },
+     blind panels); all-false if every cell is glazed>,
+   "shape": "rect" | "arched"},
  "balconies": [{"floor": <int 1-based>, "x_m": <center position from facade LEFT edge,
    m>, "w_m": <width>, "d_m": <projection depth>}],
+ "dormers": [{"floor": <int 2..storeys>, "x_m": <center from facade LEFT edge>,
+   "w_m": 0.6-4, "h_m": 0.6-3}],
+ "chimneys": [{"x_m": <from LEFT edge>, "floor": <last storey default>}] (max 6),
+ "entrance": {"x_m": <center from LEFT edge>, "w_m": 0.9-5,
+   "style": "porch" (крыльцо) | "portico" (колонны+навес)} | null,
+ "towers": [{"x_m": <center, may stand beside the facade edge>, "w_m", "depth_m",
+   "floors": <int>, "round": <bool: cylinder body>, "roof": "cone"|"pyramid"|"flat",
+   "roof_h_m": <apex height>}] (max 4),
+ "custom_parts": [free-form details from primitives, max 60:
+   {"kind": "box" | "prism" | "cylinder" | "cone",
+    "size": [w, d, h] m, "pos": [x, y, z] m (x along facade from CENTER, y from
+      facade face positive INTO the building, z from ground),
+    "rot_deg": <yaw>, "profile": [[x, y], ...] (prism only, 3-32 pts, local),
+    "color": "#rrggbb" | "walls"|"roof"|"plinth"|"glazing"|"balcony"}],
  "colors": {"walls": "#rrggbb", "roof": "#rrggbb", "plinth": "#rrggbb"}
 }
 
@@ -182,6 +196,8 @@ Rules:
   anchors: storey ~3 m, window ~1.5 x 1.5 m, entrance door ~2.1 m, balcony ~3 x 1.2 m.
 - Count storeys and window columns CAREFULLY; one window row per storey is typical.
 - Perspective in photos: treat the facade as flat (orthographic).
+- Use dormers/towers/chimneys/entrance/custom_parts when the image shows them
+  (dormer windows in the roof, corner turrets, chimneys, entrance porches).
 - The USER PROMPT overrides your guesses (storeys, depth, roof, colors) wherever it
   states them.
 """
@@ -208,6 +224,79 @@ def _is_hex(value):
     return isinstance(value, str) and _re.fullmatch(r"#[0-9a-fA-F]{6}", value) is not None
 
 
+CUSTOM_KINDS = {"box", "prism", "cylinder", "cone"}
+CUSTOM_COLOR_KEYS = {"walls", "roof", "plinth", "glazing", "balcony"}
+
+
+def _valid_custom_parts(raw, out, warnings):
+    """Грамматика примитивов -> чистый список (клампы/дропы с warnings)."""
+    if not isinstance(raw, list):
+        if raw:
+            warnings.append("custom_parts: не список — пропущены")
+        return []
+    parts = []
+    # лимит 60 — на ВЫХОДЕ: дропнутый мусор не съедает квоту валидным частям
+    for idx, p in enumerate(raw, start=1):
+        if len(parts) >= 60:
+            break
+        if not isinstance(p, dict):
+            warnings.append(f"custom_parts {idx}: не объект — пропущен")
+            continue
+        kind = p.get("kind")
+        if kind not in CUSTOM_KINDS:
+            warnings.append(f"custom_parts {idx}: kind «{kind}» не поддержан — пропущен")
+            continue
+        try:
+            wv, dv, hv = (float(v) for v in (p.get("size") or [1.0, 1.0, 1.0]))
+            xv, yv, zv = (float(v) for v in (p.get("pos") or [0.0, 0.0, 0.0]))
+        except (TypeError, ValueError):
+            warnings.append(f"custom_parts {idx}: size/pos не числа — пропущен")
+            continue
+        if wv != wv or dv != dv or hv != hv or xv != xv or yv != yv or zv != zv:
+            warnings.append(f"custom_parts {idx}: NaN — пропущен")
+            continue
+        h_max = out["storeys"] * out["floor_height"] + 15.0
+        part = {"kind": kind,
+                "size": [_clamp(wv, 0.05, out["width_m"]),
+                         _clamp(dv, 0.05, out["depth_m"] + 10.0),
+                         _clamp(hv, 0.05, h_max)],
+                "pos": [_clamp(xv, -out["width_m"], out["width_m"]),
+                        _clamp(yv, -(out["depth_m"] + 10.0), out["depth_m"] + 10.0),
+                        _clamp(zv, 0.0, h_max)],
+                "rot_deg": _facade_float(p.get("rot_deg", 0), 0, -180.0, 180.0,
+                                         f"custom_parts {idx}.rot_deg", warnings)}
+        if kind == "prism":
+            profile, ok = [], True
+            raw_pts = p.get("profile")
+            if not isinstance(raw_pts, list) or not 3 <= len(raw_pts) <= 32:
+                ok = False
+            else:
+                for pt in raw_pts:
+                    if not isinstance(pt, (list, tuple)) or len(pt) != 2:
+                        ok = False
+                        break
+                    try:
+                        px, py = float(pt[0]), float(pt[1])
+                    except (TypeError, ValueError):
+                        ok = False
+                        break
+                    if px != px or py != py:
+                        ok = False
+                        break
+                    profile.append([_clamp(px, -30.0, 30.0), _clamp(py, -30.0, 30.0)])
+            if not ok:
+                warnings.append(f"custom_parts {idx}: профиль нужен 3..32 точки — пропущен")
+                continue
+            part["profile"] = profile
+        color = p.get("color")
+        part["color"] = color if (isinstance(color, str) and
+                                  (color in CUSTOM_COLOR_KEYS or _is_hex(color))) else "walls"
+        parts.append(part)
+    if len(raw) > 60:
+        warnings.append("custom_parts: больше 60 — лишние отброшены")
+    return parts
+
+
 def validate_facade(scene):
     """Сцена фасада от VLM -> (чистая сцена, warnings). ValueError — не фасад."""
     if not isinstance(scene, dict) or not any(
@@ -223,7 +312,7 @@ def validate_facade(scene):
     out["depth_m"] = _facade_float(scene.get("depth_m", 12.0), 12.0, 3.0, 60.0,
                                    "depth_m", warnings)
     roof = scene.get("roof", "flat")
-    if roof not in ("flat", "gable"):
+    if roof not in ("flat", "gable", "hip", "mansard"):
         warnings.append(f"roof: «{roof}» не поддержан — flat")
         roof = "flat"
     out["roof"] = roof
@@ -274,6 +363,11 @@ def validate_facade(scene):
                     skip[j][i] = bool(raw_skip[j][i])
         else:
             warnings.append("windows.skip: неверная форма — все окна считаются остеклёнными")
+    shape = src.get("shape", "rect")
+    if shape not in ("rect", "arched"):
+        warnings.append(f"windows.shape «{shape}» не поддержан — rect")
+        shape = "rect"
+    win["shape"] = shape
     win["skip"] = skip
     out["windows"] = win
 
@@ -316,6 +410,70 @@ def validate_facade(scene):
                 f"центр смещён до {clamped:g}")
             x = clamped
         out["balconies"].append({"floor": floor, "x_m": x, "w_m": w_b, "d_m": d_b})
+
+    out["dormers"] = []
+    for idx, d in enumerate((scene.get("dormers") or [])[:12], start=1):
+        if not isinstance(d, dict):
+            warnings.append(f"Dormer {idx}: не объект — пропущен")
+            continue
+        floor = int(_facade_float(d.get("floor", 2), 2, 2, out["storeys"],
+                                  f"dormer {idx}.floor", warnings))
+        w_d = _facade_float(d.get("w_m", 1.2), 1.2, 0.6, 4.0,
+                            f"dormer {idx}.w_m", warnings)
+        h_d = _facade_float(d.get("h_m", 1.2), 1.2, 0.6, 3.0,
+                            f"dormer {idx}.h_m", warnings)
+        x = _facade_float(d.get("x_m", out["width_m"] / 2), out["width_m"] / 2,
+                          w_d / 2, out["width_m"] - w_d / 2, f"dormer {idx}.x_m", warnings)
+        out["dormers"].append({"floor": floor, "x_m": x, "w_m": w_d, "h_m": h_d})
+    if isinstance(scene.get("dormers"), list) and len(scene["dormers"]) > 12:
+        warnings.append("dormers: больше 12 — лишние отброшены")
+
+    out["chimneys"] = []
+    for idx, c in enumerate((scene.get("chimneys") or [])[:6], start=1):
+        if not isinstance(c, dict):
+            warnings.append(f"Труба {idx}: не объект — пропущена")
+            continue
+        x = _facade_float(c.get("x_m", out["width_m"] / 2), out["width_m"] / 2,
+                          0.0, out["width_m"], f"труба {idx}.x_m", warnings)
+        floor = int(_facade_float(c.get("floor", out["storeys"]), out["storeys"],
+                                  1, out["storeys"], f"труба {idx}.floor", warnings))
+        out["chimneys"].append({"x_m": x, "floor": floor})
+
+    out["entrance"] = None
+    e = scene.get("entrance")
+    if isinstance(e, dict):
+        style = e.get("style", "porch")
+        if style not in ("porch", "portico"):
+            warnings.append(f"entrance.style «{style}» не поддержан — porch")
+            style = "porch"
+        w_e = _facade_float(e.get("w_m", 2.0), 2.0, 0.9, 5.0, "entrance.w_m", warnings)
+        x_e = _facade_float(e.get("x_m", out["width_m"] / 2), out["width_m"] / 2,
+                            w_e / 2, out["width_m"] - w_e / 2, "entrance.x_m", warnings)
+        out["entrance"] = {"x_m": x_e, "w_m": w_e, "style": style}
+
+    out["towers"] = []
+    for idx, t in enumerate((scene.get("towers") or [])[:4], start=1):
+        if not isinstance(t, dict):
+            warnings.append(f"Башня {idx}: не объект — пропущена")
+            continue
+        w_t = _facade_float(t.get("w_m", 3.0), 3.0, 1.0, 10.0, f"башня {idx}.w_m", warnings)
+        d_t = _facade_float(t.get("depth_m", w_t), w_t, 1.0, 10.0,
+                            f"башня {idx}.depth_m", warnings)
+        floors = int(_facade_float(t.get("floors", out["storeys"]), out["storeys"],
+                                   1, 30, f"башня {idx}.floors", warnings))
+        x = _facade_float(t.get("x_m", 0.0), 0.0,
+                          -out["width_m"] / 2 - w_t / 2, out["width_m"] / 2 + w_t / 2,
+                          f"башня {idx}.x_m", warnings)
+        roof = t.get("roof", "cone")
+        if roof not in ("cone", "pyramid", "flat"):
+            warnings.append(f"Башня {idx}: крыша «{roof}» не поддержана — cone")
+            roof = "cone"
+        rh = _facade_float(t.get("roof_h_m", 1.5), 1.5, 0.3, 6.0,
+                           f"башня {idx}.roof_h_m", warnings)
+        out["towers"].append({"x_m": x, "w_m": w_t, "depth_m": d_t, "floors": floors,
+                              "round": bool(t.get("round")), "roof": roof, "roof_h_m": rh})
+
+    out["custom_parts"] = _valid_custom_parts(scene.get("custom_parts"), out, warnings)
 
     src_colors = scene.get("colors")
     if not isinstance(src_colors, dict):
