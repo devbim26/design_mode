@@ -146,8 +146,36 @@ def test_build_facade_v2_hip():
     print("test_build_facade_v2_hip OK")
 
 
+def test_build_facade_v2_villa():
+    import ifcopenshell
+    from threed.threed_scenarios import validate_facade
+    from threed.threed_build import build_facade
+    clean, _ = validate_facade(villa_raw())
+    TMP.mkdir(exist_ok=True)
+    ifc = TMP / "3D_v2_villa.ifc"
+    prev = TMP / "3D_v2_villa_preview.png"
+    build_facade(clean, ifc, prev, {"Scenario": "facade"})
+    m = ifcopenshell.open(str(ifc))
+    assert m.schema == "IFC4"
+    counts = {}
+    for p in m.by_type("IfcBuildingElementProxy"):
+        counts[p.ObjectType] = counts.get(p.ObjectType, 0) + 1
+    assert counts["CONCEPTUAL_TOWER"] == 2      # тело-цилиндр + конус
+    assert counts["CONCEPTUAL_DORMER"] == 2
+    assert counts["CONCEPTUAL_CHIMNEY"] == 1
+    assert counts["CONCEPTUAL_ENTRANCE"] == 4   # portico: 2 колонны + навес + дверь
+    # окна: сетка 2x2 без skip на каждом из 2 этажей + 2 dormer-остекления
+    # (2*2*2: storeys × rows × cols — семантика v1, регресс test_build_facade)
+    assert counts["CONCEPTUAL_WINDOW"] == 2 * 2 * 2 + 2
+    assert counts["CONCEPTUAL_ROOF"] == 1       # hip
+    assert counts["CONCEPTUAL_CUSTOM"] == 3
+    assert prev.is_file()
+    print("test_build_facade_v2_villa OK")
+
+
 if __name__ == "__main__":
     test_validate_facade_v2()
     test_validate_facade_v2_guards()
     test_build_facade_v2_hip()
+    test_build_facade_v2_villa()
     print("ALL OK")

@@ -302,6 +302,34 @@ def _mesh_product(model, body, sb, name, points, faces, container, object_type,
     return product
 
 
+def _arched_window(model, body, sb, name, wm, hm, cx, cy, z, container, fstyles):
+    """Окно с полудугой сверху: профиль-эллипс -> экструзия 0.12 м, лицом на -Y."""
+    pts = [[-wm / 2, 0.0], [wm / 2, 0.0], [wm / 2, 0.6 * hm]]
+    ang = np.linspace(0.0, np.pi, 10, endpoint=False)  # от правого края к левому
+    pts += [[np.cos(a) * wm / 2, 0.6 * hm + np.sin(a) * 0.4 * hm] for a in ang]
+    # closed=True: OuterCurve у IfcArbitraryClosedProfileDef обязан быть замкнут
+    curve = sb.polyline([[float(x), float(y)] for x, y in pts], closed=True)
+    profile = sb.profile(curve, name=name)
+    item = sb.extrude(profile, magnitude=0.12)
+    rep = sb.get_representation(body, [item])
+    product = _api("root.create_entity", file=model, ifc_class="IfcBuildingElementProxy",
+                   predefined_type="USERDEFINED", name=name)
+    product.ObjectType = "CONCEPTUAL_WINDOW"
+    _api("geometry.assign_representation", file=model, product=product, representation=rep)
+    _api("spatial.assign_container", file=model, products=[product],
+         relating_structure=container)
+    # локаль X->мир X, Y->мир Z, экструзия -> мир +Y; origin на 0.06 м перед
+    # фасадом (паттерн gable-крыши; профиль симметричен по X — миррор незаметен)
+    matrix = np.array([[1.0, 0.0, 0.0, cx],
+                       [0.0, 0.0, 1.0, cy - 0.06],
+                       [0.0, 1.0, 0.0, z],
+                       [0.0, 0.0, 0.0, 1.0]])
+    _api("geometry.edit_object_placement", file=model, product=product, matrix=matrix)
+    _api("style.assign_representation_styles", file=model,
+         shape_representation=rep, styles=[fstyles["glazing"]])
+    return product
+
+
 def build_facade(scene, ifc_path, preview_path, meta):
     """Сцена-метрики фасада -> IFC4 + PNG-чертёж фасада. Возвращает ifc_path."""
     data = dict(scene)
@@ -356,6 +384,7 @@ def build_facade(scene, ifc_path, preview_path, meta):
         fstyles[key] = style
 
     w, d, fh, n = data["width_m"], data["depth_m"], data["floor_height"], data["storeys"]
+    sb = ShapeBuilder(model)  # v2: арочные окна, крыши/башенки-меши, custom_parts
 
     def box(name, bw, bd, bh, cx, cy, z, color_key, container,
             object_type="CONCEPTUAL_MASS", rot_deg=0.0):
@@ -400,13 +429,18 @@ def build_facade(scene, ifc_path, preview_path, meta):
             for i, x in enumerate(xs):
                 if j < len(skip) and i < len(skip[j]) and skip[j][i]:
                     continue
-                box(f"Окно Э{f + 1}-{i + 1}", win["w_m"], 0.12, win["h_m"],
-                    # центр по Y = -d/2: фасад на IFC -Y (после трансформа
-                    # вьювера -> world +Z, дефолтная камера видит окна);
-                    # передняя грань на 0.06 м перед фасадом — иначе луч
-                    # выбора упирается в стену заподлицо и окно не кликается
-                    x + win["w_m"] / 2, -d / 2, f * fh + z_in, "glazing",
-                    storeys[f], object_type="CONCEPTUAL_WINDOW")
+                # центр по Y = -d/2: фасад на IFC -Y (после трансформа
+                # вьювера -> world +Z, дефолтная камера видит окна);
+                # передняя грань на 0.06 м перед фасадом — иначе луч
+                # выбора упирается в стену заподлицо и окно не кликается
+                if win.get("shape") == "arched":
+                    _arched_window(model, body, sb, f"Окно Э{f + 1}-{i + 1}",
+                                   win["w_m"], win["h_m"], x + win["w_m"] / 2,
+                                   -d / 2, f * fh + z_in, storeys[f], fstyles)
+                else:
+                    box(f"Окно Э{f + 1}-{i + 1}", win["w_m"], 0.12, win["h_m"],
+                        x + win["w_m"] / 2, -d / 2, f * fh + z_in, "glazing",
+                        storeys[f], object_type="CONCEPTUAL_WINDOW")
                 windows_total += 1
     for b_idx, bal in enumerate(data["balconies"], start=1):
         # пол балкона = уровень пола его этажа (k-1)*fh: plate толщиной 0.18
@@ -443,7 +477,6 @@ def build_facade(scene, ifc_path, preview_path, meta):
         _api("style.assign_representation_styles", file=model,
              shape_representation=representation, styles=[fstyles["roof"]])
 
-    sb = ShapeBuilder(model)
     if data["roof"] in ("hip", "mansard") and data["roof_height"] > 0.05:
         rh = data["roof_height"]
         inset = min(rh * (d / w), w / 2 - 0.1, d / 2 - 0.1)
@@ -455,9 +488,113 @@ def build_facade(scene, ifc_path, preview_path, meta):
                       "Крыша вальмовая" if data["roof"] == "hip" else "Крыша мансардная",
                       *_hull(pts), building, "CONCEPTUAL_ROOF", fstyles, "roof")
 
+    # --- v2: башенки (тело + крыша; round = цилиндр-меш) ---
+    for idx, t in enumerate(data.get("towers") or [], start=1):
+        cx, half_w, half_d = t["x_m"], t["w_m"] / 2, t["depth_m"] / 2
+        top_t = t["floors"] * fh
+        cy = -d / 2 + half_d - 0.06  # фронт башни чуть перед фасадом (как окна)
+        if t.get("round"):
+            pts = [[x + cx, y + cy, z] for x, y, z in _ring(half_w, 0.0)] + \
+                  [[x + cx, y + cy, z] for x, y, z in _ring(half_w, top_t)]
+            _mesh_product(model, body, sb, f"Башня {idx:02d}", *_hull(pts),
+                          building, "CONCEPTUAL_TOWER", fstyles, "walls")
+        else:
+            box(f"Башня {idx:02d}", t["w_m"], t["depth_m"], top_t,
+                cx, cy, 0.0, "walls", building, object_type="CONCEPTUAL_TOWER")
+        if t["roof"] == "cone":
+            pts = [[x + cx, y + cy, top_t] for x, y, _z in _ring(half_w, 0.0)]
+            pts.append([cx, cy, top_t + t["roof_h_m"]])
+            _mesh_product(model, body, sb, f"Башня {idx:02d} · шпиль", *_hull(pts),
+                          building, "CONCEPTUAL_TOWER", fstyles, "roof")
+        elif t["roof"] == "pyramid":
+            pts = [[cx - half_w, cy - half_d, top_t], [cx + half_w, cy - half_d, top_t],
+                   [cx + half_w, cy + half_d, top_t], [cx - half_w, cy + half_d, top_t],
+                   [cx, cy, top_t + t["roof_h_m"]]]
+            _mesh_product(model, body, sb, f"Башня {idx:02d} · шпиль", *_hull(pts),
+                          building, "CONCEPTUAL_TOWER", fstyles, "roof")
+
+    # --- v2: dormer-окна (коробка на фасаде + остекление) ---
+    for idx, dr in enumerate(data.get("dormers") or [], start=1):
+        z0 = (dr["floor"] - 1) * fh + fh * 0.15
+        box(f"Dormer {idx:02d} · этаж {dr['floor']}", dr["w_m"], 0.5, dr["h_m"],
+            dr["x_m"] - w / 2, -d / 2 - 0.19, z0, "walls", building,
+            object_type="CONCEPTUAL_DORMER")
+        box(f"Окно dormer {idx:02d}", dr["w_m"] * 0.7, 0.12, dr["h_m"] * 0.6,
+            dr["x_m"] - w / 2, -d / 2 - 0.46, z0 + dr["h_m"] * 0.2, "glazing",
+            building, object_type="CONCEPTUAL_WINDOW")
+
+    # --- v2: трубы на крыше (у конька) ---
+    for idx, c in enumerate(data.get("chimneys") or [], start=1):
+        box(f"Труба {idx:02d}", 0.6, 0.6, 1.2, c["x_m"] - w / 2, 0.0,
+            min(c["floor"], n) * fh - 0.3, "plinth", building,
+            object_type="CONCEPTUAL_CHIMNEY")
+
+    # --- v2: вход (porch: крыльцо+дверь; portico: колонны+навес+дверь) ---
+    e = data.get("entrance")
+    if e:
+        ex = e["x_m"] - w / 2
+        if e["style"] == "portico":
+            box("Вход · колонна Л", 0.25, 1.2, 2.4, ex - e["w_m"] / 2 + 0.2,
+                -d / 2 - 0.6, 0.0, "plinth", building, object_type="CONCEPTUAL_ENTRANCE")
+            box("Вход · колонна П", 0.25, 1.2, 2.4, ex + e["w_m"] / 2 - 0.2,
+                -d / 2 - 0.6, 0.0, "plinth", building, object_type="CONCEPTUAL_ENTRANCE")
+            box("Вход · навес", e["w_m"], 1.4, 0.25, ex, -d / 2 - 0.6, 2.4,
+                "roof", building, object_type="CONCEPTUAL_ENTRANCE")
+        else:
+            box("Вход · крыльцо", e["w_m"], 1.5, 0.25, ex, -d / 2 - 0.75, 0.0,
+                "plinth", building, object_type="CONCEPTUAL_ENTRANCE")
+        box("Вход · дверь", 1.0, 0.12, 2.1, ex, -d / 2 - 0.06, 0.0,
+            "glazing", building, object_type="CONCEPTUAL_ENTRANCE")
+
+    # --- v2: custom_parts (грамматика примитивов) ---
+    for idx, p in enumerate(data.get("custom_parts") or [], start=1):
+        color = p["color"]
+        if color.startswith("#"):
+            color = _ensure_style(model, fstyles, f"custom{idx:02d}", color)
+        xv, yv, zv = p["pos"]
+        wv, dv, hv = p["size"]
+        rot = p.get("rot_deg", 0.0)
+        if p["kind"] == "box":
+            box(f"Деталь {idx:02d}", wv, dv, hv, xv, yv, zv, color, building,
+                object_type="CONCEPTUAL_CUSTOM", rot_deg=rot)
+        elif p["kind"] == "cylinder":
+            pts = [[x + xv, y + yv, zv] for x, y, _z in _ring(wv / 2, 0.0)] + \
+                  [[x + xv, y + yv, zv + hv] for x, y, _z in _ring(wv / 2, 0.0)]
+            _mesh_product(model, body, sb, f"Деталь {idx:02d}", *_hull(pts),
+                          building, "CONCEPTUAL_CUSTOM", fstyles, color)
+        elif p["kind"] == "cone":
+            pts = [[x + xv, y + yv, zv] for x, y, _z in _ring(wv / 2, 0.0)]
+            pts.append([xv, yv, zv + hv])
+            _mesh_product(model, body, sb, f"Деталь {idx:02d}", *_hull(pts),
+                          building, "CONCEPTUAL_CUSTOM", fstyles, color)
+        elif p["kind"] == "prism":
+            # closed=True: OuterCurve профиля обязан быть замкнут
+            curve = sb.polyline([[float(x), float(y)] for x, y in p["profile"]],
+                                closed=True)
+            item = sb.extrude(sb.profile(curve, name=f"Деталь {idx:02d}"), magnitude=hv)
+            rep = sb.get_representation(body, [item])
+            product = _api("root.create_entity", file=model,
+                           ifc_class="IfcBuildingElementProxy",
+                           predefined_type="USERDEFINED", name=f"Деталь {idx:02d}")
+            product.ObjectType = "CONCEPTUAL_CUSTOM"
+            _api("geometry.assign_representation", file=model, product=product,
+                 representation=rep)
+            _api("spatial.assign_container", file=model, products=[product],
+                 relating_structure=building)
+            yaw = np.radians(rot)
+            matrix = np.array([
+                [np.cos(yaw), -np.sin(yaw), 0.0, xv],
+                [np.sin(yaw), np.cos(yaw), 0.0, yv],
+                [0.0, 0.0, 1.0, zv],
+                [0.0, 0.0, 0.0, 1.0]])
+            _api("geometry.edit_object_placement", file=model, product=product,
+                 matrix=matrix)
+            _api("style.assign_representation_styles", file=model,
+                 shape_representation=rep, styles=[fstyles[color]])
+
     _properties(model, building, "FacadeModel", {
         "Storeys": n, "FloorHeight": fh, "WidthM": w, "DepthM": d,
-        "Roof": data["roof"], "RoofHeight": data["roof_height"] if data["roof"] == "gable" else 0.0,
+        "Roof": data["roof"], "RoofHeight": data["roof_height"] if data["roof"] in ("gable", "hip", "mansard") else 0.0,
         "WindowsTotal": windows_total, "BalconiesCount": len(data["balconies"]),
         "Dormers": len(data.get("dormers") or []),
         "Towers": len(data.get("towers") or []),
@@ -527,6 +664,26 @@ def _draw_facade_preview(data, preview_path):
     for i, x in enumerate(xs):
         ax.text(x + win["w_m"] / 2, -0.9, f"О{i + 1}", ha="center", va="center",
                 fontsize=7, color="#15232e")
+    # v2: силуэты деталей (x_m dormers/труб/входа — от левой кромки фасада,
+    # как в IFC-сборке: -w/2; башенки — центр, как в схеме)
+    n_fh = data["storeys"] * data["floor_height"]
+    for t in data.get("towers") or []:
+        x0 = t["x_m"] - t["w_m"] / 2
+        ax.add_patch(plt.Rectangle((x0, 0), t["w_m"], t["floors"] * fh,
+                                   fill=False, ls="--", ec="#7c5cff", lw=1.2))
+        top = max(top, t["floors"] * fh)  # башня выше стен — раздвинуть ylim
+    for dr in data.get("dormers") or []:
+        ax.add_patch(plt.Rectangle((dr["x_m"] - w / 2 - dr["w_m"] / 2,
+                                    (dr["floor"] - 1) * fh + fh * 0.15),
+                                   dr["w_m"], dr["h_m"], fill=False, ls=":",
+                                   ec="#7c5cff", lw=1.0))
+    for c in data.get("chimneys") or []:
+        ax.add_patch(plt.Rectangle((c["x_m"] - w / 2 - 0.3, n_fh - 0.3), 0.6, 1.2,
+                                   fill=False, ls=":", ec="#8a8575", lw=1.0))
+    e = data.get("entrance")
+    if e:
+        ax.add_patch(plt.Rectangle((e["x_m"] - w / 2 - e["w_m"] / 2, 0), e["w_m"], 2.4,
+                                   fill=False, ls="--", ec="#2f855a", lw=1.2))
     ax.set_xlim(-w / 2 - 1.5, w / 2 + 1.5)
     ax.set_ylim(-1.5, top + 1.0)
     ax.set_aspect("equal")
