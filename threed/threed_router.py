@@ -116,7 +116,7 @@ def _verify_enabled() -> bool:
 
 
 def _verify_iters() -> int:
-    """Доп. итерации петли самокоррекции (только facade): 0..2, дефолт 1."""
+    """Доп. итерации петли самокоррекции (все сценарии): 0..2, дефолт 1."""
     try:
         return max(0, min(2, int(os.environ.get("THREED_VERIFY_ITERS", "1"))))
     except ValueError:
@@ -213,10 +213,11 @@ def _call_vlm(system: str, prompt: str, image_url: str, model: str) -> str:
 
 
 def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = None) -> dict:
-    """Без HTTP: анализ -> сцена -> IFC + превью (+ петля самокоррекции фасада,
-    задача 5: вердикт ок=False с issues -> повторный анализ с CORRECTIONS ->
-    пересборка -> повторный verify; победитель по ok/числу issues; сбои
-    верификации и попыток >= 2 генерацию не роняют — выход на лучшего).
+    """Без HTTP: анализ -> сцена -> IFC + превью (+ петля самокоррекции всех
+    сценариев, задача 5 п.44/п.46: вердикт ок=False с issues -> повторный
+    анализ с CORRECTIONS -> пересборка -> повторный verify; победитель по
+    ok/числу issues; сбои верификации и попыток >= 2 генерацию не роняют —
+    выход на лучшего).
     Raises ValueError (роутер даст 422)."""
     if scenario not in SCENARIOS:
         raise ValueError(f"Сценарий «{scenario}» в разработке (доступны: plan, facade, interior, scene)")
@@ -285,17 +286,18 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
                 "verdict": threed_verify.verify(
                     image_url, overview, _call_vlm, model)}
 
-    # петля самокоррекции — только facade: ok is False с непустыми issues ->
-    # повторный анализ с блоком CORRECTIONS; победитель — ok=True, иначе
-    # меньше issues; тай-брейк — попытка, чей verify ОТВЕТИЛ (ok=False),
-    # бьёт «молчаливую» (ok=None, сбой verify): у той нет ни issues, ни
-    # обзора; при равенстве ранга — последняя попытка. Любой сбой
+    # петля самокоррекции — все сценарии (п.46: раньше только facade; сцена
+    # с мебелью без повтора теряла выпавшие VLM предметы): ok is False с
+    # непустыми issues -> повторный анализ с блоком CORRECTIONS; победитель —
+    # ok=True, иначе меньше issues; тай-брейк — попытка, чей verify ОТВЕТИЛ
+    # (ok=False), бьёт «молчаливую» (ok=None, сбой verify): у той нет ни
+    # issues, ни обзора; при равенстве ранга — последняя попытка. Любой сбой
     # (верификации ИЛИ попытки >= 2) НЕ роняет генерацию: предупреждение в
     # history/дампе, выход на лучшего (п.44; C1/I2 ревью задачи 5).
     history = []
     best = None  # (rank, res_i, verify_payload, ifc_path, preview_path, raw_head)
     extra = ""
-    max_iters = 1 + (_verify_iters() if scenario == "facade" and _verify_enabled() else 0)
+    max_iters = 1 + (_verify_iters() if _verify_enabled() else 0)
     attempt_files = []
     for attempt_no in range(1, max_iters + 1):
         try:
