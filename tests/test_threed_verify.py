@@ -215,10 +215,45 @@ def test_verify_never_breaks():
     print("test_verify_never_breaks OK")
 
 
+def test_generate_impl_scene_loop():
+    """Петля самокоррекции работает и для сцены (п.46-4; раньше только
+    facade): ok=False+issues -> повторный анализ с CORRECTIONS -> ok=True
+    побеждает (файл победителя _r2)."""
+    from PIL import Image
+    import threed.threed_router as R
+    R._vlm_list_cached = lambda: []
+    R._model_store_path = lambda: TMP / "missing_threed_model.json"
+    scene = _samples()["scene"]
+    calls = {"scene": 0, "verify": 0, "saw_corrections": False}
+
+    def branch(system, prompt, image_url, model):
+        if "QA verifier" in system:
+            calls["verify"] += 1
+            return json.dumps(
+                {"ok": False,
+                 "issues": ["Furniture: built none, image shows a balcony lounger."]}
+                if calls["verify"] == 1 else {"ok": True, "issues": []})
+        calls["scene"] += 1
+        if calls["scene"] == 2:
+            calls["saw_corrections"] = "CORRECTIONS" in prompt
+        return json.dumps(scene, ensure_ascii=False)
+
+    R._call_vlm = branch
+    TMP.mkdir(exist_ok=True)
+    img = Image.new("RGB", (691, 647), (250, 250, 250))
+    res = R._generate_impl("scene", "тест петли", img, TMP)
+    assert calls["scene"] == 2 and calls["verify"] == 2 and calls["saw_corrections"]
+    assert res["name"].endswith("_r2.ifc")
+    assert (TMP / res["name"]).is_file()
+    assert res["verify"]["verdict"]["ok"] is True and res["verify"]["iterations"] == 2
+    print("test_generate_impl_scene_loop OK")
+
+
 if __name__ == "__main__":
     test_scene_overview()
     test_built_overview()
     test_verify_verdict_parse()
     test_generate_impl_with_verify()
+    test_generate_impl_scene_loop()
     test_verify_never_breaks()
     print("ALL OK")

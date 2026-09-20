@@ -786,39 +786,6 @@ def test_scene_overview_furniture():
     print("test_scene_overview_furniture OK")
 
 
-def test_generate_impl_scene_loop():
-    """Петля самокоррекции работает и для сцены (п.46-4): ok=False+issues ->
-    повторный анализ с CORRECTIONS -> ok=True побеждает (файл _r2)."""
-    import threed.threed_router as R
-    import threed.threed_verify as V
-    from PIL import Image
-    R._vlm_list_cached = lambda: []  # тесты без сети
-    scene = sample_scene_scene()
-    calls = {"scene": 0, "verify": 0, "saw_corrections": False}
-
-    def call(system, prompt, image_url, model):
-        if system.strip().startswith("You are a BIM QA verifier"):
-            calls["verify"] += 1
-            return json.dumps(
-                {"ok": False,
-                 "issues": ["Furniture: built none, image shows a balcony lounger."]}
-                if calls["verify"] == 1 else {"ok": True, "issues": []})
-        calls["scene"] += 1
-        if calls["scene"] == 2:
-            calls["saw_corrections"] = "CORRECTIONS" in prompt
-        return json.dumps(scene, ensure_ascii=False)
-
-    R._call_vlm = call
-    TMP.mkdir(exist_ok=True)
-    img = Image.new("RGB", (691, 647), (250, 250, 250))
-    res = R._generate_impl("scene", "тест петли", img, TMP)
-    assert calls["scene"] == 2 and calls["verify"] == 2 and calls["saw_corrections"]
-    assert res["name"].endswith("_r2.ifc")
-    assert (TMP / res["name"]).is_file()
-    assert res["verify"]["verdict"]["ok"] is True and res["verify"]["iterations"] == 2
-    print("test_generate_impl_scene_loop OK")
-
-
 def test_admin_threed_section():
     src = (ROOT / "imagerouter" / "imagerouter.html").read_text(encoding="utf-8")
     assert 'id="threedsec"' in src
@@ -838,7 +805,6 @@ if __name__ == "__main__":
     test_validate_facade_balcony_fit()
     test_validate_scene()
     test_scene_overview_furniture()
-    test_generate_impl_scene_loop()
     test_build_scene()
     test_generate_impl_scene()
     test_generate_impl()
