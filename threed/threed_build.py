@@ -9,6 +9,7 @@ from pathlib import Path
 
 import ifcopenshell
 import ifcopenshell.api
+from ifcopenshell.util.shape_builder import ShapeBuilder
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.colors
@@ -255,6 +256,52 @@ def _window_skip(data):
     return data["windows"].get("skip") or []
 
 
+def _hull(points):
+    """Точки xyz -> (points, faces) выпуклой оболочки; faces = plain int."""
+    from scipy.spatial import ConvexHull
+    faces = [list(map(int, s)) for s in ConvexHull(np.array(points, dtype=float)).simplices]
+    return points, faces
+
+
+def _ring(radius, z, nseg=16):
+    """Кольцо точек [[x, y, z], ...] — цилиндры/конусы для мешей."""
+    ang = np.linspace(0.0, 2.0 * np.pi, nseg, endpoint=False)
+    return [[float(radius * np.cos(a)), float(radius * np.sin(a)), float(z)]
+            for a in ang]
+
+
+def _ensure_style(model, fstyles, key, hex_color):
+    """Стиль по требованию (custom hex из custom_parts)."""
+    if key in fstyles:
+        return key
+    style = _api("style.add_style", file=model, name=key)
+    r, g, b = matplotlib.colors.to_rgb(hex_color)
+    _api("style.add_surface_style", file=model, style=style,
+         ifc_class="IfcSurfaceStyleShading",
+         attributes={"SurfaceColour": {"Name": key, "Red": r, "Green": g, "Blue": b},
+                     "Transparency": 0.0})
+    fstyles[key] = style
+    return key
+
+
+def _mesh_product(model, body, sb, name, points, faces, container, object_type,
+                  fstyles, color_key, matrix=np.eye(4)):
+    """Меш -> IfcBuildingElementProxy (IfcPolygonalFaceSet) со стилем."""
+    item = sb.mesh(points=[[float(c) for c in p] for p in points], faces=faces)
+    rep = sb.get_representation(body, [item])
+    product = _api("root.create_entity", file=model, ifc_class="IfcBuildingElementProxy",
+                   predefined_type="USERDEFINED", name=name)
+    product.ObjectType = object_type
+    _api("geometry.assign_representation", file=model, product=product, representation=rep)
+    _api("spatial.assign_container", file=model, products=[product],
+         relating_structure=container)
+    _api("geometry.edit_object_placement", file=model, product=product,
+         matrix=np.asarray(matrix, dtype=float))
+    _api("style.assign_representation_styles", file=model,
+         shape_representation=rep, styles=[fstyles[color_key]])
+    return product
+
+
 def build_facade(scene, ifc_path, preview_path, meta):
     """Сцена-метрики фасада -> IFC4 + PNG-чертёж фасада. Возвращает ifc_path."""
     data = dict(scene)
@@ -311,7 +358,7 @@ def build_facade(scene, ifc_path, preview_path, meta):
     w, d, fh, n = data["width_m"], data["depth_m"], data["floor_height"], data["storeys"]
 
     def box(name, bw, bd, bh, cx, cy, z, color_key, container,
-            object_type="CONCEPTUAL_MASS"):
+            object_type="CONCEPTUAL_MASS", rot_deg=0.0):
         product = _api("root.create_entity", file=model, ifc_class="IfcBuildingElementProxy",
                        predefined_type="USERDEFINED", name=name)
         product.ObjectType = object_type
@@ -320,10 +367,12 @@ def build_facade(scene, ifc_path, preview_path, meta):
         representation = _api("geometry.add_profile_representation", file=model, context=body,
                               profile=profile, depth=bh, cardinal_point=None)
         _api("geometry.assign_representation", file=model, product=product,
-             representation=representation)
+              representation=representation)
         _api("spatial.assign_container", file=model, products=[product],
              relating_structure=container)
         matrix = np.eye(4)
+        yaw = np.radians(rot_deg)
+        matrix[:2, :2] = [[np.cos(yaw), -np.sin(yaw)], [np.sin(yaw), np.cos(yaw)]]
         matrix[:3, 3] = [float(cx), float(cy), float(z)]
         _api("geometry.edit_object_placement", file=model, product=product, matrix=matrix)
         _api("style.assign_representation_styles", file=model,
@@ -368,6 +417,7 @@ def build_facade(scene, ifc_path, preview_path, meta):
             storeys[bal["floor"] - 1], object_type="CONCEPTUAL_BALCONY")
     box("Цоколь", w + 0.2, d + 0.2, 0.6, 0.0, 0.0, 0.0, "plinth", building,
         object_type="CONCEPTUAL_PLINTH")
+    top = n * fh
     if data["roof"] == "gable" and data["roof_height"] > 0.05:
         gable = _api("root.create_entity", file=model, ifc_class="IfcBuildingElementProxy",
                      predefined_type="USERDEFINED", name="Крыша двускатная")
@@ -386,17 +436,32 @@ def build_facade(scene, ifc_path, preview_path, meta):
         matrix = np.array([
             [1.0, 0.0, 0.0, 0.0],
             [0.0, 0.0, 1.0, -d / 2],
-            [0.0, 1.0, 0.0, n * fh],
+            [0.0, 1.0, 0.0, top],
             [0.0, 0.0, 0.0, 1.0],
         ])
         _api("geometry.edit_object_placement", file=model, product=gable, matrix=matrix)
         _api("style.assign_representation_styles", file=model,
              shape_representation=representation, styles=[fstyles["roof"]])
 
+    sb = ShapeBuilder(model)
+    if data["roof"] in ("hip", "mansard") and data["roof_height"] > 0.05:
+        rh = data["roof_height"]
+        inset = min(rh * (d / w), w / 2 - 0.1, d / 2 - 0.1)
+        ridge = top + (rh * 0.6 if data["roof"] == "mansard" else rh)  # излом ≈ вальма ниже
+        pts = [[-w / 2, -d / 2, top], [w / 2, -d / 2, top],
+               [w / 2, d / 2, top], [-w / 2, d / 2, top],
+               [-w / 2 + inset, 0.0, ridge], [w / 2 - inset, 0.0, ridge]]
+        _mesh_product(model, body, sb,
+                      "Крыша вальмовая" if data["roof"] == "hip" else "Крыша мансардная",
+                      *_hull(pts), building, "CONCEPTUAL_ROOF", fstyles, "roof")
+
     _properties(model, building, "FacadeModel", {
         "Storeys": n, "FloorHeight": fh, "WidthM": w, "DepthM": d,
         "Roof": data["roof"], "RoofHeight": data["roof_height"] if data["roof"] == "gable" else 0.0,
         "WindowsTotal": windows_total, "BalconiesCount": len(data["balconies"]),
+        "Dormers": len(data.get("dormers") or []),
+        "Towers": len(data.get("towers") or []),
+        "CustomParts": len(data.get("custom_parts") or []),
         "OrthoAssumption": True, "DepthAssumed": True,
         "Source": "3D Design", "Notes": ASSUMPTION_FACADE,
     })

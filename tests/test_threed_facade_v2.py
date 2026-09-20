@@ -122,7 +122,32 @@ def test_validate_facade_v2_guards():
     print("test_validate_facade_v2_guards OK")
 
 
+def test_build_facade_v2_hip():
+    import ifcopenshell
+    from threed.threed_scenarios import validate_facade
+    from threed.threed_build import build_facade
+    clean, _ = validate_facade(villa_raw())
+    clean["roof"] = "hip"
+    TMP.mkdir(exist_ok=True)
+    ifc = TMP / "3D_v2_hip.ifc"
+    prev = TMP / "3D_v2_hip_preview.png"
+    build_facade(clean, ifc, prev, {"Scenario": "facade"})
+    m = ifcopenshell.open(str(ifc))
+    roofs = [p for p in m.by_type("IfcBuildingElementProxy")
+             if p.ObjectType == "CONCEPTUAL_ROOF"]
+    assert len(roofs) == 1
+    item = roofs[0].Representation.Representations[0].Items[0]
+    assert item.is_a("IfcPolygonalFaceSet") and len(item.Faces) >= 4
+    assert prev.is_file()
+    # helpers
+    from threed.threed_build import _hull, _ring
+    pts, faces = _hull([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [.5, .5, 1]])
+    assert all(isinstance(i, int) for f in faces for i in f) and len(_ring(1.0, 0.0)) == 16
+    print("test_build_facade_v2_hip OK")
+
+
 if __name__ == "__main__":
     test_validate_facade_v2()
     test_validate_facade_v2_guards()
+    test_build_facade_v2_hip()
     print("ALL OK")
