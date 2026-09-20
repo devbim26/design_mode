@@ -765,7 +765,13 @@ facade faces SOUTH = -Y and stands near the origin):
  "context": {
    "trees": [{"x_m": <>, "y_m": <>, "h_m": <5-15>, "crown_d_m": <2-6>}],
    "cars": [{"x_m": <>, "y_m": <>, "rot_deg": <heading; 0 = along X>}],
-   "people": [{"x_m": <>, "y_m": <>}]
+   "people": [{"x_m": <>, "y_m": <>, "z_m": <base height above ground, m:
+     0 = standing on the ground; on a balcony/terrace/roof = slab level,
+     i.e. (floor-1) * floor_height of that building>}],
+   "furniture": [{"type": "bench"|"chair"|"lounger"|"table"|"sofa"|"umbrella"|
+       "planter"|"other", "x_m": <>, "y_m": <>, "z_m": <same as people>,
+     "w_m": <width, m>, "d_m": <depth, m>, "h_m": <height, m>,
+     "rot_deg": <0 = along X>}]
  }
 }
 
@@ -777,8 +783,24 @@ Rules:
 - Count storeys and window columns of the MAIN building CAREFULLY; perspective in
   photos: treat facades as flat (orthographic).
 - Side walls get a simplified window grid automatically - do not invent them.
+- Street/yard/balcony furniture (benches, lounge chairs, tables, umbrellas,
+  planters): list EACH visible item in context.furniture with realistic sizes
+  (bench 1.8 x 0.5 x 0.45, chair 0.6 x 0.6 x 0.9, lounger 1.8 x 0.7 x 0.8,
+  table 0.8 x 0.8 x 0.75, umbrella crown 2.0 x 2.0 x 2.2). Do NOT skip items
+  on balconies/terraces.
+- A person or furniture item ON a balcony/terrace/roof: keep x_m/y_m on that
+  slab and set z_m to the slab level, e.g. floor 3 with floor_height 3.2 ->
+  z_m = 6.4. Ground items: z_m = 0.
 - The USER PROMPT overrides your guesses wherever it states them.
 """
+
+
+SCENE_FURNITURE_TYPES = {  # сцена: тип уличной мебели -> дефолты (w_m, d_m, h_m)
+    "bench": (1.8, 0.5, 0.45), "chair": (0.6, 0.6, 0.9),
+    "lounger": (1.8, 0.7, 0.8), "table": (0.8, 0.8, 0.75),
+    "sofa": (2.0, 0.9, 0.8), "umbrella": (2.0, 2.0, 2.2),
+    "planter": (0.5, 0.5, 0.5), "other": (0.8, 0.8, 0.8),
+}
 
 
 def validate_scene(scene):
@@ -891,7 +913,7 @@ def validate_scene(scene):
         out["buildings"][0]["main"] = True  # первое — главное
 
     ctx_raw = scene.get("context") if isinstance(scene.get("context"), dict) else {}
-    ctx = {"trees": [], "cars": [], "people": []}
+    ctx = {"trees": [], "cars": [], "people": [], "furniture": []}
     raw_trees = ctx_raw.get("trees")
     if isinstance(raw_trees, list):
         for it in raw_trees[:40]:
@@ -935,7 +957,53 @@ def validate_scene(scene):
                 continue
             if x != x or y != y:
                 continue
+            try:
+                z = float(it.get("z_m", 0.0))
+            except (TypeError, ValueError):
+                z = 0.0
+            if z != z:  # NaN
+                z = 0.0
             ctx["people"].append({"x_m": _clamp(x, -150.0, 150.0),
-                                  "y_m": _clamp(y, -150.0, 150.0)})
+                                  "y_m": _clamp(y, -150.0, 150.0),
+                                  "z_m": _clamp(z, 0.0, 90.0)})
+    raw_furn = ctx_raw.get("furniture")
+    if isinstance(raw_furn, list):
+        for it in raw_furn[:40]:
+            if not isinstance(it, dict):
+                continue
+            ftype = it.get("type", "other")
+            if ftype not in SCENE_FURNITURE_TYPES:
+                warnings.append(f"Мебель: тип «{ftype}» не поддержан — other")
+                ftype = "other"
+            dw, dd, dh = SCENE_FURNITURE_TYPES[ftype]
+            try:
+                x, y = float(it.get("x_m", 0.0)), float(it.get("y_m", 0.0))
+            except (TypeError, ValueError):
+                continue
+            if x != x or y != y:
+                continue
+            try:
+                z = float(it.get("z_m", 0.0))
+            except (TypeError, ValueError):
+                z = 0.0
+            if z != z:  # NaN
+                z = 0.0
+            try:
+                rot = float(it.get("rot_deg", 0.0))
+            except (TypeError, ValueError):
+                rot = 0.0
+            if rot != rot:  # NaN
+                rot = 0.0
+            ctx["furniture"].append({
+                "type": ftype,
+                "x_m": _clamp(x, -150.0, 150.0), "y_m": _clamp(y, -150.0, 150.0),
+                "z_m": _clamp(z, 0.0, 90.0),
+                "w_m": _facade_float(it.get("w_m", dw), dw, 0.1, 8.0,
+                                     "furniture.w_m", warnings),
+                "d_m": _facade_float(it.get("d_m", dd), dd, 0.1, 8.0,
+                                     "furniture.d_m", warnings),
+                "h_m": _facade_float(it.get("h_m", dh), dh, 0.05, 3.5,
+                                     "furniture.h_m", warnings),
+                "rot_deg": _clamp(rot, -180.0, 180.0)})
     out["context"] = ctx
     return out, warnings

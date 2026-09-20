@@ -641,7 +641,16 @@ def sample_scene_scene():
                       {"x_m": "bad"}, {"x_m": 15.0, "y_m": -14.0, "h_m": 99,
                                        "crown_d_m": 3.0}],
             "cars": [{"x_m": -6.0, "y_m": -10.0, "rot_deg": 15}],
-            "people": [{"x_m": 5.0, "y_m": -9.0}, {"x_m": 6.0, "y_m": -9.5}],
+            # человек 1 — на балконе главного (этаж 2, fh 3.1 -> z_m 3.1;
+            # балкон x_m 1.5 от левого края 27 м -> x=-12, y=-(7.5+0.6)=-8.1)
+            "people": [{"x_m": -12.0, "y_m": -8.1, "z_m": 3.1}, {"x_m": 6.0, "y_m": -9.5}],
+            "furniture": [
+                {"type": "lounger", "x_m": -12.0, "y_m": -8.3, "z_m": 3.1,
+                 "w_m": 1.8, "d_m": 0.7, "h_m": 0.8, "rot_deg": 0},
+                {"type": "bench", "x_m": 10.0, "y_m": -10.0, "z_m": 0, "rot_deg": 30},
+                {"type": "fountain"},
+                {"x_m": "bad"},
+            ],
         },
     }
 
@@ -649,6 +658,7 @@ def sample_scene_scene():
 def test_validate_scene():
     from threed.threed_scenarios import validate_scene, SYSTEM_SCENE
     assert "azimuth_deg" in SYSTEM_SCENE and "crown_d_m" in SYSTEM_SCENE
+    assert "furniture" in SYSTEM_SCENE and "z_m" in SYSTEM_SCENE
     out, warn = validate_scene(sample_scene_scene())
     assert out["camera"] == {"azimuth_deg": -30, "eye_height_m": 1.7, "dist_m": 40}
     b0, b1 = out["buildings"][0], out["buildings"][1]
@@ -662,6 +672,15 @@ def test_validate_scene():
     assert out["context"]["trees"][1]["h_m"] == 30.0
     assert any("tree.h_m" in w for w in warn)
     assert len(out["context"]["people"]) == 2
+    # человек 1 на балконе: z_m прошёл как есть
+    assert out["context"]["people"][0]["z_m"] == 3.1
+    furn = out["context"]["furniture"]
+    assert len(furn) == 3                      # 'bad'-элемент выкинут
+    assert furn[0]["type"] == "lounger" and furn[0]["z_m"] == 3.1
+    # bench без размеров -> дефолты по типу
+    assert furn[1]["w_m"] == 1.8 and furn[1]["d_m"] == 0.5 and furn[1]["h_m"] == 0.45
+    assert furn[2]["type"] == "other"          # fountain -> other + warning
+    assert any("fountain" in w for w in warn)
     # гейты
     for bad in (None, {}, {"buildings": []}, {"buildings": "x"}):
         try:
