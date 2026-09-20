@@ -214,8 +214,9 @@ def _call_vlm(system: str, prompt: str, image_url: str, model: str) -> str:
 
 def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = None) -> dict:
     """Без HTTP: анализ -> сцена -> IFC + превью (+ петля самокоррекции фасада,
-    задача 5: вердикт с issues -> повторный анализ с CORRECTIONS -> пересборка
-    -> повторный verify; победитель по ok/числу issues).
+    задача 5: вердикт ок=False с issues -> повторный анализ с CORRECTIONS ->
+    пересборка -> повторный verify; победитель по ok/числу issues; сбои
+    верификации и попыток >= 2 генерацию не роняют — выход на лучшего).
     Raises ValueError (роутер даст 422)."""
     if scenario not in SCENARIOS:
         raise ValueError(f"Сценарий «{scenario}» в разработке (доступны: plan, facade, interior, scene)")
@@ -284,17 +285,32 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
                 "verdict": threed_verify.verify(
                     image_url, overview, _call_vlm, model)}
 
-    # петля самокоррекции — только facade: ok не True -> повторный анализ
-    # с блоком CORRECTIONS; победитель — ok=True, иначе меньше issues,
-    # при равенстве ранга — последняя попытка. Любой сбой верификации НЕ
-    # роняет генерацию: ok=None, ошибка в вердикте/дампе (п.44).
+    # петля самокоррекции — только facade: ok is False с непустыми issues ->
+    # повторный анализ с блоком CORRECTIONS; победитель — ok=True, иначе
+    # меньше issues, при равенстве ранга — последняя попытка. Любой сбой
+    # (верификации ИЛИ попытки >= 2) НЕ роняет генерацию: предупреждение в
+    # history/дампе, выход на лучшего (п.44; C1/I2 ревью задачи 5).
     history = []
     best = None  # (rank, res_i, verify_payload, ifc_path, preview_path, raw_head)
     extra = ""
     max_iters = 1 + (_verify_iters() if scenario == "facade" and _verify_enabled() else 0)
     attempt_files = []
     for attempt_no in range(1, max_iters + 1):
-        scene, warnings, ifc_path, preview_path, raw_head = _attempt(prompt + extra, attempt_no)
+        try:
+            scene, warnings, ifc_path, preview_path, raw_head = _attempt(
+                prompt + extra, attempt_no)
+        except Exception as e:
+            if attempt_no == 1:
+                raise  # первой попытки нет — генерации нечего отдавать (422)
+            # C1 (ревью з.5): петля НИКОГДА не роняет генерацию — сбой
+            # повтора (двойной мусор VLM/сеть/build) уходит предупреждением
+            # в history, победителем остаётся лучшая выполненная попытка;
+            # cleanup/dump ниже выполняются по общему выходу
+            history.append({"attempt": attempt_no, "warnings": [],
+                            "scene_summary": None,
+                            "verdict": {"ok": None,
+                                        "error": f"attempt failed: {e}"}})
+            break
         attempt_files.append((ifc_path, preview_path))
         verify_payload = None
         if _verify_enabled():
@@ -304,12 +320,13 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
                 verify_payload = {"overview": None,
                                   "verdict": {"ok": None, "error": str(e)}}
         v = (verify_payload or {}).get("verdict") or {}
+        issues = v.get("issues") or []
         history.append({"attempt": attempt_no, "warnings": warnings,
                         "scene_summary": ((verify_payload or {}).get("overview")
                                           or {}).get("scene"),
                         "verdict": v})
-        ok, n_issues = v.get("ok"), len(v.get("issues") or [])
-        rank = (1 if ok is True else 0, -n_issues)
+        ok = v.get("ok")
+        rank = (1 if ok is True else 0, -len(issues))
         res_i = {"name": ifc_path.name, "warnings": warnings}
         if scenario == "scene":
             res_i["camHint"] = scene["camera"]
@@ -319,8 +336,13 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
             best = (rank, res_i, verify_payload, ifc_path, preview_path, raw_head)
         if ok is True or attempt_no == max_iters:
             break
+        if ok is not False or not issues:
+            # I2 (ревью з.5): строгий гейт повтора — только ок=False с
+            # непустыми issues; ok=None (сбой verify) и ок=False без issues
+            # не дают коррекций, платная итерация не запускается
+            break
         extra = ("\nCORRECTIONS from QA verification - fix these in your JSON:\n- "
-                 + "\n- ".join(v.get("issues") or []))
+                 + "\n- ".join(issues))
     _, res, verify_payload, ifc_path, preview_path, raw_head = best
     if verify_payload is not None:
         verify_payload["iterations"] = len(history)  # res["verify"] — победитель

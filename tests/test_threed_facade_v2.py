@@ -262,12 +262,25 @@ def test_chimney_clears_roof():
     print("test_chimney_clears_roof OK")
 
 
+def _router():
+    """Роутер дерева с модулями дерева. ГРАБЛЯ: threed_router импортирует
+    threed_build/scenarios/verify из venv (try-ветка), где лежат копии
+    последнего setup_threed.py — до деплоя v2 они устаревшие (валидатор
+    режет towers/dormers, hip -> flat) и петля молока тестировала старый
+    код. Привязываем текущие модули дерева напрямую."""
+    import threed.threed_router as R
+    from threed import threed_build, threed_scenarios, threed_verify
+    R.threed_build, R.threed_scenarios, R.threed_verify = (
+        threed_build, threed_scenarios, threed_verify)
+    return R
+
+
 def test_router_loop():
     """Задача 5: петля самокоррекции фасада — verify issues -> повторный
     анализ с блоком CORRECTIONS -> пересборка -> повторный verify; победитель
     по ok/числу issues (тай — последняя попытка)."""
     from PIL import Image
-    import threed.threed_router as R
+    R = _router()
     R._vlm_list_cached = lambda: []
     L = _legacy()
     os.environ["THREED_VERIFY"] = "1"   # ПОСЛЕ _legacy(): test_threed.py
@@ -290,10 +303,16 @@ def test_router_loop():
     R._call_vlm = branch
     TMP.mkdir(exist_ok=True)
     img = Image.new("RGB", (600, 800), (250, 250, 250))
+    before_ifc = {p.name for p in TMP.glob("3D_facade_*.ifc")}
+    before_prev = {p.name for p in TMP.glob("3D_facade_*_preview.png")}
     res = R._generate_impl("facade", "тест петли", img, TMP)
     assert res["verify"]["verdict"]["ok"] is True      # победила итерация 2
     assert res["verify"]["iterations"] == 2
-    assert "tower" in json.dumps(res["verify"]["overview"]["scene"]).lower() or True
+    # M3: вакуумный ассерт («... or True») заменён осмысленным: обзор
+    # победителя — от итерации 2 (villa: hip, у сэмпла v1 — gable), и
+    # круглая башня реально дошла до IFC (цилиндр + конус = 2 продукта)
+    assert res["verify"]["overview"]["scene"]["roof"] == "hip"
+    assert res["verify"]["overview"]["built"]["CONCEPTUAL_TOWER"] == 2
     dump = json.loads((TMP / "_threed_last.json").read_text(encoding="utf-8"))
     assert len(dump["verify"]["history"]) == 2
     assert any(c[1] for c in calls)                  # второй анализ с поправками
@@ -301,6 +320,12 @@ def test_router_loop():
     # победитель: файл IFC+превью на месте, проигравший удалён
     assert (TMP / res["name"]).is_file()
     assert res["name"].startswith("3D_facade_") and res["name"].endswith(".ifc")
+    # M4(а): от этого прогона в TMP остался РОВНО один новый IFC — победителя
+    # (с _r2) — и его превью; файлы проигравшей попытки 1 удалены
+    after_ifc = {p.name for p in TMP.glob("3D_facade_*.ifc")}
+    after_prev = {p.name for p in TMP.glob("3D_facade_*_preview.png")}
+    assert after_ifc - before_ifc == {res["name"]}
+    assert after_prev - before_prev == {Path(res["name"]).stem + "_preview.png"}
 
     # THREED_VERIFY_ITERS=0 -> одна итерация
     os.environ["THREED_VERIFY_ITERS"] = "0"
@@ -309,7 +334,98 @@ def test_router_loop():
     res2 = R._generate_impl("facade", "", img, TMP)
     assert res2["verify"]["iterations"] == 1 and len(calls) == 2  # анализ+verify
     os.environ["THREED_VERIFY_ITERS"] = "1"
+
+    # M4(б): победитель «меньше issues»: попытка 1 ok=False (2 issues),
+    # попытка 2 ok=False (1 issue) -> берётся попытка 2 (файл _r2)
+    verify_n = [0]
+
+    def branch_rank(system, prompt, image_url, model):
+        if "QA verifier" in system:
+            verify_n[0] += 1
+            return ('{"ok": false, "issues": ["storeys: built 5, image shows 4", '
+                    '"roof: built gable, image shows hip"]}' if verify_n[0] == 1
+                    else '{"ok": false, "issues": ["roof: built gable, image shows hip"]}')
+        return "```json\n" + json.dumps(scene_v2, ensure_ascii=False) + "\n```"
+    R._call_vlm = branch_rank
+    res3 = R._generate_impl("facade", "", img, TMP)
+    assert res3["name"].endswith("_r2.ifc") and (TMP / res3["name"]).is_file()
+    assert res3["verify"]["verdict"]["ok"] is False
+    assert len(res3["verify"]["verdict"]["issues"]) == 1
+    assert res3["verify"]["iterations"] == 2
     print("test_router_loop OK")
+
+
+def test_loop_iteration2_failure_survives():
+    """C1 (ревью задачи 5): исключение в попытке >= 2 (повторный анализ
+    кидает RuntimeError) НЕ роняет генерацию — победителем остаётся
+    валидная попытка 1, cleanup проигравших и дамп выполняются
+    (п.44: петля НИКОГДА не роняет генерацию)."""
+    from PIL import Image
+    R = _router()
+    R._vlm_list_cached = lambda: []
+    L = _legacy()                      # до env: test_threed.py ставит VERIFY=0
+    os.environ["THREED_VERIFY"] = "1"
+    os.environ["THREED_VERIFY_ITERS"] = "1"
+    scene_v1 = L.sample_facade_scene()
+    analyze_calls = []
+
+    def branch(system, prompt, image_url, model):
+        if "QA verifier" in system:    # итерация 1: ок, но с issues -> повтор
+            return '{"ok": false, "issues": ["roof: built gable, image shows hip"]}'
+        analyze_calls.append(prompt)
+        if len(analyze_calls) >= 2:
+            raise RuntimeError("сеть отвалилась на повторном анализе")
+        return json.dumps(scene_v1)
+    R._call_vlm = branch
+    TMP.mkdir(exist_ok=True)
+    img = Image.new("RGB", (600, 800), (250, 250, 250))
+    res = R._generate_impl("facade", "C1", img, TMP)  # исключение НЕ всплывает
+    assert res["verify"]["verdict"]["ok"] is False    # победитель = попытка 1
+    assert res["verify"]["iterations"] == 2           # сбойная попытка 2 в history
+    assert not res["name"].endswith("_r2.ifc")
+    assert (TMP / res["name"]).is_file()              # файл попытки 1 жив
+    dump = json.loads((TMP / "_threed_last.json").read_text(encoding="utf-8"))
+    h = dump["verify"]["history"]
+    assert len(h) == 2 and h[1]["verdict"]["ok"] is None
+    assert "attempt failed" in h[1]["verdict"]["error"]
+    print("test_loop_iteration2_failure_survives OK")
+
+
+def test_loop_gate():
+    """I2 (ревью задачи 5): повтор строго при ok is False И непустых issues.
+    ok=None (verify кидает) и ок=False с пустыми issues вторую платную
+    итерацию НЕ запускают — без CORRECTIONS исправлять нечем."""
+    from PIL import Image
+    R = _router()
+    R._vlm_list_cached = lambda: []
+    scene = _legacy().sample_facade_scene()   # до env: импорт ставит VERIFY=0
+    os.environ["THREED_VERIFY"] = "1"
+    os.environ["THREED_VERIFY_ITERS"] = "1"
+    img = Image.new("RGB", (600, 800), (250, 250, 250))
+    TMP.mkdir(exist_ok=True)
+
+    def run(verify_answer=None, verify_raises=False):
+        analyze = []
+
+        def branch(system, prompt, image_url, model):
+            if "QA verifier" in system:
+                if verify_raises:
+                    raise RuntimeError("500 Internal")
+                return verify_answer
+            analyze.append(1)
+            return json.dumps(scene)
+        R._call_vlm = branch
+        return R._generate_impl("facade", "", img, TMP), len(analyze)
+
+    # ok=None: verify кидает -> НЕТ второй итерации
+    res, n = run(verify_raises=True)
+    assert n == 1 and res["verify"]["iterations"] == 1
+    assert res["verify"]["verdict"]["ok"] is None
+    # ок=False с ПУСТЫМИ issues -> тоже нет второй итерации
+    res, n = run('{"ok": false, "issues": []}')
+    assert n == 1 and res["verify"]["iterations"] == 1
+    assert res["verify"]["verdict"]["ok"] is False
+    print("test_loop_gate OK")
 
 
 if __name__ == "__main__":
@@ -321,4 +437,6 @@ if __name__ == "__main__":
     test_round_tower_depth_independent()
     test_chimney_clears_roof()
     test_router_loop()
+    test_loop_iteration2_failure_survives()
+    test_loop_gate()
     print("ALL OK")
