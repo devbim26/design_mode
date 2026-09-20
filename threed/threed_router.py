@@ -27,9 +27,9 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 try:  # задеплоено в venv
-    from invokeai.app.api.routers import threed_build, threed_scenarios
+    from invokeai.app.api.routers import threed_build, threed_scenarios, threed_verify
 except ImportError:  # дерево проекта (тесты)
-    from threed import threed_build, threed_scenarios
+    from threed import threed_build, threed_scenarios, threed_verify
 
 from invokeai.app.services.config.config_default import get_config
 
@@ -106,6 +106,13 @@ def _load_model_choice() -> tuple[str, str]:
 def _save_model_choice(model: str) -> None:
     _model_store_path().write_text(
         json.dumps({"model": model}, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def _verify_enabled() -> bool:
+    """VLM-самопроверка собранной модели: по умолчанию ВКЛ, .env THREED_VERIFY=
+    0/false/no/off выключает (вторая VLM-генерация = вторая трата)."""
+    return os.environ.get("THREED_VERIFY", "").strip().lower() not in (
+        "0", "false", "no", "off")
 
 
 def _vlm_list_cached() -> list[dict]:
@@ -210,6 +217,7 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
 
     scene = None
     last_err = ""
+    raw_head = ""  # голова успешного сырого ответа VLM (диагностика дампа)
     for attempt in (1, 2):  # один ретрай на невалидный JSON
         system = (threed_scenarios.SYSTEM_SCENE if scenario == "scene"
                   else threed_scenarios.SYSTEM_INTERIOR if scenario == "interior"
@@ -221,6 +229,7 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
                         image_url, model)
         scene = threed_scenarios.extract_json(raw)
         if scene is not None:
+            raw_head = raw[:300]
             break
         last_err = raw[:200]
     if scene is None:
@@ -250,8 +259,33 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
         threed_build.build_facade(scene, ifc_path, preview_path, meta)
     else:
         threed_build.build_genplan(scene, image, ifc_path, preview_path, meta)
+    # что реально ушло в VLM (диагностика «не тот дом»: сравнить sha1 с файлом)
+    import hashlib
+    img_b64 = image_url.split(",", 1)[-1]
+    try:
+        img_sha1 = hashlib.sha1(base64.b64decode(img_b64)).hexdigest()
+        img_bytes = len(img_b64) * 3 // 4
+    except Exception:
+        img_sha1, img_bytes = "?", 0
+    # самопроверка (пилот MCP4IFC-паттерна): обзор «задумано + построено» ->
+    # второй VLM-запрос с исходной картинкой -> вердикт {ok, issues}.
+    # Любой сбой НЕ роняет генерацию: ok=None, ошибка в вердикте/дампе.
+    verify_payload = None
+    if _verify_enabled():
+        try:
+            overview = {"scene": threed_verify.scene_overview(scenario, scene),
+                        "built": threed_verify.built_overview(ifc_path)}
+            verify_payload = {"overview": overview,
+                              "verdict": threed_verify.verify(
+                                  image_url, overview, _call_vlm, model)}
+        except Exception as e:
+            verify_payload = {"overview": None,
+                              "verdict": {"ok": None, "error": str(e)}}
     dump = {"ts": datetime.now().isoformat(), "scenario": scenario, "prompt": prompt,
-            "model": model, "warnings": warnings, "name": name}
+            "model": model, "warnings": warnings, "name": name,
+            "image": {"bytes": img_bytes, "sha1": img_sha1,
+                      "w": image.width, "h": image.height},
+            "vlm_head": raw_head, "verify": verify_payload}
     try:
         (out_dir / "_threed_last.json").write_text(
             json.dumps(dump, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -260,6 +294,8 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
     res = {"name": name, "warnings": warnings}
     if scenario == "scene":
         res["camHint"] = scene["camera"]
+    if verify_payload is not None:
+        res["verify"] = verify_payload
     return res
 
 

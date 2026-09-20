@@ -2,7 +2,8 @@
 """3D Design: деплой роутера threed в venv InvokeAI 6.2.0.
 
   1. Копирует threed/threed_router.py -> venv/.../routers/threed.py,
-     threed/threed_scenarios.py и threed/threed_build.py -> routers/ (as-is).
+     threed/threed_scenarios.py, threed/threed_build.py и
+     threed/threed_verify.py -> routers/ (as-is).
   2. Патчит api_app.py: импорт + include_router threed после design_code
      (бэкап *.threed-bak).
 
@@ -32,7 +33,8 @@ def deploy_files(venv: Path) -> bool:
         sys.exit(1)
     plan = [(SRC / "threed_router.py", routers / "threed.py"),
             (SRC / "threed_scenarios.py", routers / "threed_scenarios.py"),
-            (SRC / "threed_build.py", routers / "threed_build.py")]
+            (SRC / "threed_build.py", routers / "threed_build.py"),
+            (SRC / "threed_verify.py", routers / "threed_verify.py")]
     if all(dst.is_file() and dst.read_bytes() == src.read_bytes() for src, dst in plan):
         print("Файлы threed уже развернуты, пропуск")
         return False

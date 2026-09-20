@@ -8,6 +8,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+import os
+os.environ["THREED_VERIFY"] = "0"  # ретро-тесты: без второй VLM-генерации
+# (самопроверка — tests/test_threed_verify.py; тут моки считают вызовы)
+
 TMP = ROOT / "tests" / "_threed_tmp"
 
 

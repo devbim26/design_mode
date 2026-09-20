@@ -1560,6 +1560,41 @@ invokeai==6.2.0` их нужно запускать повторно в поря
       верить пиксельным проверкам (PIL-кроп блоба здания). (5) Тесты
       роутера импортируют venv-копии threed-модулей — после правок
       threed/* сперва setup_threed.py, потом тесты.
+
+39. **Вкладка «Модели» на весь экран: ImageRouter без левого списка**
+    (19.09; запрос пользователя «удали слева список, настройки ImageRouter
+    — по всему экрану, видеть параметры/деньги, добавлять/удалять
+    доступность»). Спека:
+    `docs/superpowers/specs/2026-09-19-model-manager-fullscreen-design.md`.
+    - **Патч вкладки** `patch_models_tab_fullscreen()` в setup_imagerouter.py
+      (App-бандл, идемпотентен, бэкап тот же): компонент вкладки «models»
+      `()=>o.jsxs(E,{layerStyle:"body",w:"full",h:"full",gap:"2",p:2,
+      children:[ModelManager,ModelPane]})` заменён на голый iframe
+      `/imagerouter.html` на 100%×100% (p:0). Родной список моделей
+      (ModelManager: поиск/фильтр/«Основные»/корзины) больше НЕ рендерится.
+      Regex не привязан к минифицированным именам; маркер «готово» —
+      `JS_MODELS_TAB_DONE`. Патч InstallModels (JS_NEW_COMPONENT)
+      сохранён: после fullscreen он мёртвый код, но нужен для цепочки
+      идемпотентности на свежеустановленном бандле (patch_js сначала
+      заменяет InstallModels, затем fullscreen перекрывает вкладку).
+    - **imagerouter.html — полноэкранный layout**: шапка в 2 строки
+      (статус ключа + баланс + ссылки; ввод ключа компактно), тело —
+      grid из 4 колонок с независимой прокруткой: Каталог моделей /
+      Генерация и правка / Апскейлинг / (3D-аналитика + тест-генерация).
+      Цены теперь ВО ВСЕХ списках (main-список раньше был без цен; это
+      админ-страница — решение 08.09 «без цен» касалось только
+      пользовательских описаний в инъекции). Новое в строках: бейдж «Q»
+      (поддержка quality), tooltip строки = полный дайджест (цены
+      min/avg/max, входы, quality, размеры), кнопки «Все/Снять»
+      (массовое добавление/снятие по текущему поиску; при state.main
+      =null сначала разворачивается в весь каталог). Все id сохранены
+      (test_threed.py проверяет `id="threedsec"`).
+    - E2E 19.09 (Playwright MCP): вкладка без левого списка, iframe
+      1880×1000 на весь экран, 4 колонки по ~496px, 144 модели каталога,
+      91 апскейлер, 120 VLM, баланс/ключ в шапке, чекбокс/↑↓/Все/Снять
+      работают, обрезки нет (scrollWidth==clientWidth). Скриншот
+      docs/model-manager-fullscreen.png. Тесты: test_threed.py,
+      test_main_models.py, test_upscale_cloud.py — OK.
     - **Артефакты**: `data/ifc/3D_facade_{20260919-173634,20260919-174856}.ifc`
       + превью; скриншоты `docs/3d-design-facade-{modal,result}.png`;
       тесты `tests/test_threed.py` (12 функций). Фаза 3 (интерьер) —
@@ -1571,7 +1606,7 @@ invokeai==6.2.0` их нужно запускать повторно в поря
     - **Конвейер** — плитка «Интерьер» активна (заглушек больше нет),
       placeholder по 3 сценариям (карта `{plan, facade, interior}` с
       фолбэком на plan). `POST /api/v1/threed/generate`
-      {scenario:"interior"} → VLM по `SYSTEM_INTERIOR` (вход — 2D-план,
+    {scenario:"interior"} → VLM по `SYSTEM_INTERIOR` (вход — 2D-план,
       НЕ фото интерьера; ЕДИНОЕ ПРАВИЛО: позиции в ПИКСЕЛЯХ, размеры/
       высоты в МЕТРАХ; опоры масштаба: дверь 0,9–1 м, кровать 2×1,6,
       унитаз 0,4; размерная линия точнее) → `validate_interior` (гейты:
@@ -1603,6 +1638,49 @@ invokeai==6.2.0` их нужно запускать повторно в поря
       бюджет фазы (одна живая = smoke), автозагрузка через localStorage
       lastModel; UI-путь генерации идентичен фазе 2 (run3D не менялся).
 
+41. **Компоновка левой панели: «Генерация» выше «Изображения», без Seed
+    и бейджа базы; описание модели под селектором** (19.09; запрос
+    пользователя по скриншоту с пометками: «поменять вкладки местами…
+    убрать лишнюю кнопку (это из локальной разработки)… вкладку выбора
+    модели сделать чуть более информативной… а ниже блок настроек
+    (image), которые соответствуют выбранной модели»).
+    - **Своп секций** (`patch_panel_layout()` в setup_imagerouter.py,
+      App-бандл, 7 замен, идемпотентен по всем NEW-фрагментам): в
+      ParametersPanelGenerate и ParametersPanelCanvas порядок
+      [промпты, Изображение (Aoe/ise), Генерация (sM)] →
+      [промпты, Генерация, Изображение]. «Лишняя кнопка "SD"» — бейдж
+      базы фейковой модели в заголовке «Генерация»: бейджи были
+      `[t.name, t.base]`, стали `[t.name]` (sdxl — техническое значение
+      инъекции, пользователь видел его как «SD»). Строка Seed
+      (`aw` = ParamSeed: Seed/Random/Shuffle Seed) убрана из аккордеонов
+      «Изображение» обеих панелей (облачный API seed не использует), из
+      бейджей аккордеона убрана пометка «Manual Seed» (селекторы lWe/
+      mGe). Патч обязан идти ПОСЛЕ patch_left_panel — на свежем бандле
+      список детей панелей ещё длинный и фрагментов свопа нет.
+    - **Описание модели** (виджет `imagerouter/devbim_model_info.js` →
+      `dist/devbim-model-info.js` + script в index.html —
+      `deploy_model_info()`, бэкап `index.html.modelinfo-bak`, бандлы НЕ
+      тронуты): под строкой «Модель» аккордеона «Генерация» блок 12px
+      с description выбранной модели; ниже — секция «Изображение».
+      Сервер (`imagerouter_router.py`, `_ir_fake_config` + новый
+      `_ir_size_digest`): описание расширено «форматы PNG, JPEG, WebP» +
+      дайджест размеров каталога (`parameters.size` → «до 3K
+      (3136×1344)», при custom — «произвольный размер»); слово
+      «редактирование» сохранено (гейт Generate-фолбэка), цены по-прежнему
+      нет. ГРАБЛЯ: zod клиента выбрасывает description из стора
+      (`st.params.model.description` === undefined) — виджет читает
+      описание из `GET /api/v2/models/i/{key}` (тот же путь, что гейт
+      фолбэка), ключ модели — из `__devbimPEStore` /
+      `__devbimCanvasBridge`; кэш описаний, тик 500 мс (ремонты
+      аккордеона React), для не-imagerouter моделей блок скрыт.
+      Отладка: `window.__devbimModelInfo` ({key, text, clear}).
+      E2E 19.09 (Playwright): порядок секций (Генерация top=357 выше
+      Изображения), без «Seed»/«Shuffle» и без бейджа «sdxl», описание
+      обновляется при смене модели (gpt-image-2.5-flare → до 2K
+      (1536×1024); seedream-5.0-pro → до 3K (3136×1344) · произвольный
+      размер); на «Холсте» — то же, «Опции Расширенные» целы; консоль
+      чистая. Тесты: `tests/test_panel_layout.py`. Скриншот
+      docs/panel-layout-model-info.png.
 
 42. **3D Design (фаза 4): фиксы фасада + сценарий «Сцена» (camera
     mapping)** (19.09, ветка `3d`; план
@@ -1670,6 +1748,125 @@ invokeai==6.2.0` их нужно запускать повторно в поря
       [кламп roof_height 0→0.5]); тесты `tests/test_threed.py`
       (18 функций).
 
+43. **3D Design: фикс «слит не тот источник» (stale S3.image при
+    исключении в canvasComposite)** (20.09, ветка `3d`; жалоба
+    «генерация из холста даёт совсем другой дом — как будто уходит
+    дефолтное сообщение»; план
+    `docs/superpowers/plans/2026-09-20-3d-canvas-source-fix.md`).
+    - **Диагностика** (systematic-debugging): (1) прямой пробник
+      `data/probe/_vlm_probe.py` — `_call_vlm(SYSTEM_FACADE)` с фото
+      особого дома (Blue House Frome) вернул сцену, ТОЧНО совпадающую с
+      фото (walls #bdb18a, 2 этажа, 3 окна) → сервер и модель
+      НЕ при чём; (2) E2E-репродукция `data/probe/_e2e_canvas_ref.py`
+      (Playwright, программная укладка слоя через
+      `stateApi.addRasterLayer` — путь devbim_text_tool.js) поймала POST
+      `/api/v1/threed/generate`: байты image ПОБАЙТОВО равны старой
+      ВЫБРАННОЙ В ГАЛЕРЕЕ картинке (`08521737-….png`), а не фото с
+      холста.
+    - **Корень**: `canvasComposite()` (devbim_topright_buttons.js) не был
+      защищён от исключений; при существующем, но ОТОРВАННОМ от DOM /
+      нулевом Konva-стейдже `stage.toCanvas({width:0,height:0})` кидает
+      `InvalidStateError` (drawImage на canvas 0×0). Исключение обрывало
+      `refresh3DSource()` на середине: превью успевало затереться
+      (`img.src=''`), бейдж оставался «—», но `S3.image` НЕ
+      сбрасывался — и «Generate» молча слал КАРТИНКУ ПРОШЛОГО открытия
+      модалки (обычно фолбэк-галерейную). Парный путь: открытие модалки
+      на вкладке без менеджера канваса → composite null → тихий фолбэк
+      `viewerImage()` (бейдж «Галерея» — замысел, но со stale
+      превращался в ловушку).
+    - **Фикс** (`imagerouter/devbim_topright_buttons.js`): всё тело
+      `canvasComposite()` в try/catch → любой сбой = null; гвард
+      `width()/height() > 0`; `refresh3DSource()` ставит
+      `S3.image = null` ДО попытки композита и переживает любой сбой.
+      Инвариант: превью-бейдж-POST всегда из одного `S3.image`,
+      скрытых отправок больше нет. Деплой: `setup_imagerouter.py` (файл
+      переписывается при каждом запуске); пользователю после фикса —
+      Ctrl+F5 (script с defer кэшируется).
+    - **Диагностика роутера** (`threed/threed_router.py`): дамп
+      `data/ifc/_threed_last.json` дополнен `image {bytes, sha1, w, h}`
+      (что РЕАЛЬНО ушло в VLM — sha1 ПОСЛЕ `_prepare_png`, т.е. картинки
+      как её видела модель; сравнивать с файлами галереи/холста) и
+      `vlm_head` (голова сырого ответа VLM, 300 символов). Деплой:
+      `setup_threed.py`.
+    - **Проверка**: E2E до фикса — POST(128037 байт) == gallery-файл,
+      != фото холста (400683 байта), превью ПУСТОЕ; после фикса —
+      POST == превью (170738 симв. dataURL), бейдж честный «Галерея»,
+      генерация завершена; `tests/test_threed.py` — ALL OK; живая
+      генерация прошла с новым дампом (scenario=plan по галерейному
+      плану — VLM корректно прочитала именно её).
+    - **ГРАБЛИ/заметки**: (1) в свежем профиле браузера (тесты) панель
+      канваса dockview НЕ аттачится к DOM (dv-react-part оторван, стейдж
+      0×0) — канвас-композит невозможен, теперь деградация честная
+      («Галерея»/«—»); у пользователей с сохранённой раскладкой канвас
+      монтируется нормально. (2) Фронт отправляет ровно то, что в
+      превью модалки — при жалобах «не тот дом» смотреть бейдж
+  Холст/Галерея и `_threed_last.json.image.sha1`. (3) Пробники
+  оставить: `_vlm_probe.py` (живой VLM-тест картинки),
+  `_e2e_canvas_ref.py` (репродукция источника).
+
+44. **3D Design: VLM-верификация собранной модели (самопроверка, пилот
+    паттерна MCP4IFC get_ifc_scene_overview)** (20.09, ветка `3d`; спека
+    `docs/superpowers/specs/2026-09-20-3d-vlm-verify-design.md`, план
+    `docs/superpowers/plans/2026-09-20-3d-vlm-verify.md`; источник идеи —
+    Show2Instruct/ifc-bonsai-mcp, MIT: их get_ifc_scene_overview отдаёт LLM
+    JSON-обзор модели для самопроверки).
+    - **Конвейер**: после build_* — `threed_verify.scene_overview` (что
+      ЗАДУМАНО: метры/счётчики из валидированной сцены, без пикселей) +
+      `built_overview` (что РЕАЛЬНО в IFC: повторное чтение файла,
+      подсчёт продуктов по ObjectType CONCEPTUAL_*/SITE_*/FURNITURE_*) →
+      второй запрос той же VLM-модели с ИСХОДНОЙ картинкой и обзором
+      (SYSTEM_VERIFY: ok=false только за реальные расхождения — этажность,
+      сетка окон, тип крыши; глубина/±20%/цвета — терпи) → вердикт
+      {"ok": bool, "issues": [до 8×160 симв]} → `res["verify"] =
+      {overview, verdict}` + дамп `_threed_last.json.verify`.
+    - **Инвариант**: верификация НИКОГДА не роняет генерацию — любой сбой
+      (сеть/не-JSON/ok не bool) → verdict {"ok": None, "error": ...}.
+      Выключатель: env `THREED_VERIFY` (0/false/no/off; по умолчанию ВКЛ)
+      — вторая VLM-генерация = вторая трата (~$0.03–0.10 сверх анализа).
+    - **Фронт**: done-тост получает суффикс « · ✓ VLM» / « · ⚠ issues»;
+      ok=null — молча (диагностика только в дампе).
+    - **Файлы**: `threed/threed_verify.py` (новый; деплой setup_threed.py
+      добавлен в план копирования), `threed/threed_router.py`
+      (_verify_enabled + блок после build), виджет
+      `imagerouter/devbim_topright_buttons.js`; тесты
+      `tests/test_threed_verify.py` (5 функций) + test_threed.py на
+      уровне модуля ставит THREED_VERIFY=0 (моки считают вызовы — второй
+      запрос ломал ассерт ретрая).
+    - **Живой smoke** (vlm_test_house.png, facade, 26.6 с на два запроса):
+      верификатор ПОЙМАЛ реальные ошибки первого прохода — «сетка окон
+      1×3, на фото 2 ряда», «крыша gable, на фото вальмовая с башенкой»,
+      «нет dormer»; built-подсчёт совпал со сценой (STOREY=2, WINDOW=4,
+      PLINTH=1, ROOF=1). Пилот окупился на первом же прогоне.
+    - **E2E полный круг** `tests/_e2e_3d_roundtrip.py` (20.09, по запросу
+      «вход картинка → выход картинка из вьювера → сравни»): вход
+      data/probe/vlm_test_house.png → живая генерация POST /generate (или
+      `--ifc <имя>` — повторное использование готовой модели без траты) →
+      Playwright (/ifcviewer.html, lastModel [+camHint для scene],
+      `__ifc.capture()`) → пиксельный гейт + судья-VLM (та же модель, ДВЕ
+      картинки в одном запросе, SYSTEM_JUDGE: score 0-100/match/issues,
+      massing-упрощения терпимы). Артефакты: data/ifc/_roundtrip_view.png +
+      _roundtrip_last.json (история score). Живой прогон: content 45.7%,
+      score 35 (дважды стабильно) — судья режет баллы за фичи ВНЕ схемы
+      фасада (вальмовая крыша с башенкой, dormer-окна, арочные окна,
+      портал входа), это ограничения схемы, не конвейера; жёсткий пол
+      score=25 («совсем не то здание»), пиксельный гейт — отклонение от
+      ДОМИНАНТНОГО цвета фона (фон вьювера чёрный — проверка «не белый»
+      из п.38 давала бессмысленные 100%).
+    - **ГРАБЛИ**: (1) в venv есть сторонний пакет `tests`
+      (site-packages/tests/__init__.py) — он ПЕРЕКРЫВАЕТ нашу папку tests
+      как namespace-пакет: `from tests.test_threed import ...` НЕ работает,
+      сэмплы в тестах грузить importlib'ом по пути файла. (2) skip-матрица
+      окон в сцене фасада — паттерн НА ЭТАЖ (1×cols), а не на все этажи:
+      в обзоре skipped_cells=1, а построено окон storeys×(cols−skip).
+      (3) Тост вердикта заменяет предыдущий тост (одиночный слот) —
+      issues видны в done-тосте, полный вердикт в _threed_last.json.
+      (4) E2E импортирует задеплоенный роутер как `routers.threed` (файл
+      threed_router.py деплоится под именем threed.py). (5) Низкий gable
+      (1.5 м на 8 м здании, конёк вдоль глубины) с дефолтного fitModel
+      читается судьёй как «плоская крыша» — вопрос ракурса, не геометрии
+      (CONCEPTUAL_ROOF=1 в IFC есть); если судья занижает — крутить камеру
+      на боковой фасад до orthoFacade.
+
 
 ```powershell
 cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
@@ -1687,6 +1884,7 @@ cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
 .\venv\Scripts\python.exe .\tests\test_ifc_sections.py  # сечения + человек (IFC)
 .\venv\Scripts\python.exe .\tests\test_ifc_ai_render.py # тень/контекст/камера (IFC)
 .\venv\Scripts\python.exe .\tests\test_upscale_cloud.py # облачный апскейлинг
+.\venv\Scripts\python.exe .\tests\test_panel_layout.py  # Генерация выше Изображения, без Seed, описание модели
 .\venv\Scripts\python.exe .\tests\test_main_models.py   # выбор основных моделей
 # синтаксис module-скрипта вьювера после правок ifcviewer.html:
 #   venv\Scripts\python.exe -c "import re,pathlib;s=pathlib.Path('ifc/ifcviewer.html').read_text(encoding='utf-8');pathlib.Path('ifc/_chk.mjs').write_text(re.search(r'<script type=\"module\">(.*?)</script>',s,re.S).group(1),encoding='utf-8')"
