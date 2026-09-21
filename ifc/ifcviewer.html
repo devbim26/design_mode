@@ -556,10 +556,14 @@ function applyCamHint() {
     setStatus("Камера на фокус сцены (балкон: человек и мебель)");
     return true;
   }
+  // сцены 3D-генерации стоят на земле 0; web-ifc иногда дорисовывает пару
+  // «мусорных» мешей ПОД землёй из чистого IFC (подтверждено ifcopenshell:
+  // в файле геометрии ниже -0.25 нет) — не опускаем за ними глаз камеры
+  const groundY = Math.max(box.min.y, 0);
   const dist = Math.max(hint.dist_m || 35, size.length() * 0.35);
   world.camera.controls.setLookAt(
-    c.x + dist * Math.sin(az), box.min.y + h, c.z + dist * Math.cos(az),
-    c.x, c.y, c.z);
+    c.x + dist * Math.sin(az), groundY + h, c.z + dist * Math.cos(az),
+    c.x, Math.min(c.y, groundY + h + (box.max.y - groundY) * 0.6), c.z);
   world.camera.controls.update();
   setStatus("Камера по подсказке сцены (как на фото)");
   return true;
