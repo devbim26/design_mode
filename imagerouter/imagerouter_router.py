@@ -96,6 +96,7 @@ PROMPT_REFERENCE_ROLES_NOTE = (
     "точно примени их текстуры и цвета к исходнику."
 )
 
+
 TIMEOUT_SHORT = 30
 TIMEOUT_GENERATE = 300
 
@@ -649,6 +650,41 @@ def _avg_price(m: dict) -> Optional[float]:
     return v if isinstance(v, (int, float)) else None
 
 
+def _ir_size_digest(m: dict) -> str:
+    """Дайджест размеров модели из каталога (parameters.size):
+    «до 3K (3136×1344)» + «произвольный размер» при custom. Пустая строка,
+    если данных нет. Решение 19.09: сделать выбор модели информативнее
+    (качество 1–4K, форматы)."""
+    sizes = (m.get("parameters") or {}).get("size") or []
+    max_side = 0
+    max_pair: Optional[tuple[int, int]] = None
+    custom = False
+    for s in sizes:
+        if not isinstance(s, str):
+            continue
+        if s == "custom":
+            custom = True
+            continue
+        parts = s.lower().split("x")
+        if len(parts) != 2:
+            continue
+        try:
+            w, h = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        if max(w, h) > max_side:
+            max_side = max(w, h)
+            max_pair = (w, h)
+    if not max_side and not custom:
+        return ""
+    parts: list[str] = []
+    if max_side and max_pair:
+        parts.append(f"до {max(1, round(max_side / 1024))}K ({max_pair[0]}×{max_pair[1]})")
+    if custom:
+        parts.append("произвольный размер")
+    return " · ".join(parts)
+
+
 def _ir_fake_config(m: dict) -> dict:
     import hashlib
 
@@ -656,10 +692,17 @@ def _ir_fake_config(m: dict) -> dict:
     # Краткое описание без стоимости (решение пользователя 08.09: цену
     # пользователю не показываем). Слово «редактирование» ОБЯЗАТЕЛЬНО:
     # на него опирается гейт Generate-фолбэка (п.22 HANDOFF).
+    # 19.09: описание расширено возможностями модели (форматы файлов,
+    # максимальное разрешение) — показывается под селектором модели
+    # (виджет devbim-model-info.js).
     desc = "Облачная генерация изображений"
     inputs = ((m.get("architecture") or {}).get("input_modalities")) or []
     if "image" in inputs:
         desc += " · ✏️ редактирование"
+    desc += " · форматы PNG, JPEG, WebP"
+    size_part = _ir_size_digest(m)
+    if size_part:
+        desc += " · " + size_part
     return {
         "key": IR_KEY_PREFIX + mid,
         # hash обязателен (zod: min(1)) — стабильный псевдохеш от id

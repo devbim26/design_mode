@@ -15,13 +15,14 @@
   body{
     margin:0; background:var(--bg); color:var(--text);
     font:13px/1.45 "Inter","Segoe UI",system-ui,Arial,sans-serif;
-    display:flex; flex-direction:column; min-height:0;
+    display:flex; flex-direction:column; min-height:0; overflow:hidden;
   }
   header{
-    display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+    display:flex; flex-direction:column; gap:8px;
     padding:10px 14px; border-bottom:1px solid var(--border); background:var(--panel);
   }
-  header h1{font-size:15px; margin:0; font-weight:600}
+  .hrow{display:flex; align-items:center; gap:10px; flex-wrap:wrap; min-width:0}
+  header h1{font-size:15px; margin:0; font-weight:600; white-space:nowrap}
   header h1 .bim{color:var(--accent)}
   .spacer{flex:1}
   .chip{
@@ -31,32 +32,45 @@
   .chip.ok{color:var(--ok); border-color:var(--ok)}
   .chip.err{color:var(--err); border-color:var(--err)}
   .chip.link{color:var(--accent); cursor:pointer; text-decoration:none}
-  main{flex:1; display:flex; flex-direction:column; min-height:0; padding:12px 14px; gap:10px; overflow:auto}
-  section{background:var(--panel); border:1px solid var(--border); border-radius:8px; padding:10px 12px}
+  /* Полноэкранная сетка: каждая секция — колонка со своей прокруткой */
+  main{
+    flex:1; display:grid; min-height:0; gap:10px; padding:10px 14px; overflow:hidden;
+    grid-template-columns:repeat(4, minmax(280px, 1fr));
+  }
+  section{
+    background:var(--panel); border:1px solid var(--border); border-radius:8px;
+    padding:10px 12px; display:flex; flex-direction:column; min-height:0; min-width:0;
+  }
+  #sidecol{display:flex; flex-direction:column; gap:10px; min-height:0; min-width:0;
+    overflow:auto; padding:0; border:none; background:none}
+  #sidecol > section{flex:0 0 auto}
   h2{font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:0 0 8px}
   input[type=text],input[type=password],textarea,select{
     background:var(--bg); color:var(--text); border:1px solid var(--border); border-radius:6px;
-    padding:6px 8px; font:inherit; outline:none;
+    padding:6px 8px; font:inherit; outline:none; min-width:0;
   }
   input:focus,textarea:focus,select:focus{border-color:var(--accent)}
-  textarea{width:100%; resize:vertical; min-height:64px}
+  textarea{width:100%; resize:vertical; min-height:56px}
   button{
     background:var(--accent); color:#04222f; border:none; border-radius:6px; padding:6px 14px;
-    font:inherit; font-weight:600; cursor:pointer;
+    font:inherit; font-weight:600; cursor:pointer; white-space:nowrap;
   }
   button:hover{filter:brightness(1.1)}
   button:disabled{opacity:.45; cursor:default}
   button.ghost{background:transparent; color:var(--muted); border:1px solid var(--border); font-weight:400}
   button.ghost:hover{color:var(--text)}
-  .row{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
-  .keybox{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
-  .keybox input{flex:1; min-width:220px}
-  .models-toolbar{display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-bottom:8px}
-  .models-toolbar input[type=text]{flex:1; min-width:160px}
+  .row{display:flex; gap:8px; align-items:center; flex-wrap:wrap; min-width:0}
+  .keybox{display:flex; gap:8px; align-items:center; flex-wrap:wrap; min-width:0}
+  .keybox input{flex:1; min-width:200px; max-width:420px}
+  .keybox .hint{flex:1; min-width:180px}
+  .models-toolbar{display:flex; gap:6px; align-items:center; flex-wrap:wrap; margin-bottom:8px}
+  .models-toolbar input[type=text]{flex:1; min-width:120px}
   .count{color:var(--muted); font-size:11px; white-space:nowrap}
-  #models{max-height:280px; overflow:auto; display:flex; flex-direction:column; gap:4px}
+  #models,#main-models,#up-models{
+    flex:1; overflow:auto; display:flex; flex-direction:column; gap:4px; min-height:0;
+  }
   .model{
-    display:flex; align-items:center; gap:10px; padding:7px 10px; border:1px solid var(--border);
+    display:flex; align-items:center; gap:8px; padding:6px 10px; border:1px solid var(--border);
     border-radius:6px; cursor:pointer; background:var(--panel2);
   }
   .model:hover{border-color:var(--accent-dim)}
@@ -65,13 +79,14 @@
   .model .prov{color:var(--accent); font-size:11px}
   .model .id b{color:var(--text); font-weight:600}
   .price{color:var(--muted); font-size:11px; white-space:nowrap}
-  .price.free{color:var(--free)}
+  .price.free, .price .free{color:var(--free)}
   .badge-free{font-size:10px; color:var(--free); border:1px solid var(--free); border-radius:4px; padding:0 5px}
   .badge-edit{font-size:10px; color:var(--accent); border:1px solid var(--accent); border-radius:4px; padding:0 5px; white-space:nowrap}
-  #gen-model{color:var(--accent); font-weight:600}
+  .badge-q{font-size:10px; color:#c084fc; border:1px solid #c084fc; border-radius:4px; padding:0 5px; white-space:nowrap}
+  #gen-model{color:var(--accent); font-weight:600; word-break:break-all}
   .gen-grid{display:flex; gap:8px; flex-wrap:wrap; margin-top:10px}
   .gen-grid img{max-width:100%; height:auto; border-radius:6px; border:1px solid var(--border); cursor:pointer}
-  .msg{margin-top:8px; font-size:12px}
+  .msg{margin-top:6px; font-size:12px}
   .msg.err{color:var(--err)}
   .msg.ok{color:var(--ok)}
   .spin{
@@ -82,7 +97,7 @@
   @keyframes sp{to{transform:rotate(360deg)}}
   label.chk{display:flex; align-items:center; gap:5px; color:var(--muted); font-size:12px; white-space:nowrap; cursor:pointer}
   .model.up{cursor:default}
-  .model.up .up-chk{margin:0; cursor:pointer}
+  .model.up .up-chk{margin:0; cursor:pointer; flex:0 0 auto}
   .model.up .ord{
     display:inline-block; min-width:16px; text-align:center; font-size:11px; font-weight:600;
     color:var(--accent); border:1px solid var(--accent-dim); border-radius:4px; padding:0 3px;
@@ -91,32 +106,34 @@
   .model .id .desc{display:block; color:var(--muted); font-size:11px; line-height:1.3; margin-top:1px; white-space:normal}
   .hint{color:var(--muted); font-size:11px}
   .hidden{display:none !important}
-  #keysec .hint a{color:var(--accent)}
+  @media (max-width:1100px){
+    body{overflow:auto}
+    main{grid-template-columns:repeat(2, minmax(280px, 1fr)); overflow:visible}
+    section{max-height:75vh}
+  }
 </style>
 </head>
 <body>
 <header>
-  <h1>Image<span class="bim">Router</span></h1>
-  <span class="chip" id="key-state">ключ не задан</span>
-  <span class="chip" id="balance" title="Баланс аккаунта ImageRouter">—</span>
-  <span class="spacer"></span>
-  <a class="chip link" href="https://imagerouter.io/api-keys" target="_blank" rel="noreferrer">получить API-ключ</a>
-  <a class="chip link" href="https://docs.imagerouter.io/" target="_blank" rel="noreferrer">документация</a>
+  <div class="hrow">
+    <h1>Image<span class="bim">Router</span></h1>
+    <span class="chip" id="key-state">ключ не задан</span>
+    <span class="chip" id="balance" title="Баланс аккаунта ImageRouter">—</span>
+    <span class="spacer"></span>
+    <a class="chip link" href="https://imagerouter.io/api-keys" target="_blank" rel="noreferrer">получить API-ключ</a>
+    <a class="chip link" href="https://docs.imagerouter.io/" target="_blank" rel="noreferrer">документация</a>
+  </div>
+  <div class="hrow keybox">
+    <input type="password" id="key-input" placeholder="API-ключ ImageRouter (sk-...)" autocomplete="off">
+    <button id="key-save">Сохранить</button>
+    <button id="key-remove" class="ghost">Удалить</button>
+    <span class="hint">Ключ хранится на сервере DevBIM (data/imagerouter.json) и не передаётся в браузер.</span>
+    <span class="msg" id="key-msg"></span>
+  </div>
 </header>
 <main>
 
-  <section id="keysec">
-    <h2>Подключение</h2>
-    <div class="keybox">
-      <input type="password" id="key-input" placeholder="API-ключ ImageRouter (sk-...)" autocomplete="off">
-      <button id="key-save">Сохранить</button>
-      <button id="key-remove" class="ghost">Удалить</button>
-    </div>
-    <div class="msg" id="key-msg"></div>
-    <div class="hint">Ключ хранится на сервере DevBIM (data/imagerouter.json) и не передаётся в браузер. Получить ключ: imagerouter.io/api-keys</div>
-  </section>
-
-  <section>
+  <section id="catalogsec">
     <h2>Каталог моделей</h2>
     <div class="models-toolbar">
       <input type="text" id="search" placeholder="Поиск: название или провайдер…">
@@ -129,22 +146,24 @@
       <button id="refresh" class="ghost" title="Обновить список">↻</button>
       <span class="count" id="count"></span>
     </div>
+    <div class="hint" style="margin-bottom:8px">Клик по модели — выбрать её для тестовой генерации (колонка справа).</div>
     <div id="models"><div class="hint">Загрузка…</div></div>
     <div class="msg" id="models-msg"></div>
   </section>
 
   <section id="mainsec">
-    <h2>Генерация и правка — модели для пользователей</h2>
+    <h2>Генерация и правка</h2>
     <div class="hint" style="margin-bottom:8px">
-      Отмеченные модели появятся в выборе модели на вкладках Generate и «Холст»
-      (и в «Постобработке»). <b>Первая модель списка выбирается у пользователей
-      по умолчанию</b> — порядок меняйте стрелками ↑↓. Пока ничего не сохранено,
-      доступны все модели каталога. После сохранения пользователям нужно
-      обновить страницу (F5).
+      Модели для пользователей (Generate, «Холст», «Постобработка»).
+      <b>Первая модель списка выбирается по умолчанию</b> — порядок меняйте
+      стрелками ↑↓. Чекбокс = доступность модели. После сохранения
+      пользователям нужно обновить страницу (F5).
     </div>
     <div class="models-toolbar">
       <input type="text" id="main-search" placeholder="Поиск: генерация или правка…">
-      <button id="main-save">Сохранить выбор</button>
+      <button id="main-all" class="ghost" title="Отметить все модели, видимые при текущем поиске">Все</button>
+      <button id="main-none" class="ghost" title="Снять все видимые модели">Снять</button>
+      <button id="main-save">Сохранить</button>
       <span class="count" id="main-count"></span>
     </div>
     <div id="main-models"><div class="hint">Загрузка…</div></div>
@@ -152,64 +171,68 @@
   </section>
 
   <section id="upsec">
-    <h2>Апскейлинг — модели для пользователей</h2>
+    <h2>Апскейлинг</h2>
     <div class="hint" style="margin-bottom:8px">
-      Отмеченные модели появятся в списке «Upscale Model» на вкладке «Upscaling».
-      <b>Первая модель списка выбирается у пользователей по умолчанию</b> — порядок
-      меняйте стрелками ↑↓. После сохранения пользователям нужно обновить страницу (F5).
+      Модели для списка «Upscale Model» на вкладке «Upscaling» (только модели
+      со входом-image). <b>Первая модель списка — по умолчанию</b>. Чекбокс =
+      доступность. После сохранения — F5 у пользователей.
     </div>
     <div class="models-toolbar">
       <input type="text" id="up-search" placeholder="Поиск (модели со входом-image)…">
-      <button id="up-save">Сохранить выбор</button>
+      <button id="up-all" class="ghost" title="Отметить все модели, видимые при текущем поиске">Все</button>
+      <button id="up-none" class="ghost" title="Снять все видимые модели">Снять</button>
+      <button id="up-save">Сохранить</button>
       <span class="count" id="up-count"></span>
     </div>
     <div id="up-models"><div class="hint">Загрузка…</div></div>
     <div class="msg" id="up-msg"></div>
   </section>
 
-  <section id="threedsec">
-    <h2>3D-генерация — модель аналитики</h2>
-    <p class="hint">VLM, которая анализирует картинку и строит JSON-сцену для 3D
-      (кнопка «3D Design»). Список — только модели с входом «изображение» и
-      текстовым выходом. После смены — F5 не нужен (читается при генерации).</p>
-    <div class="row">
-      <select id="threed-model" style="min-width:280px"></select>
-      <button id="threed-save">Сохранить</button>
-    </div>
-    <div id="threed-status" class="hint"></div>
-  </section>
+  <div id="sidecol">
+    <section id="threedsec">
+      <h2>3D-генерация — модель аналитики</h2>
+      <p class="hint" style="margin:0 0 8px">VLM, которая анализирует картинку
+        и строит JSON-сцену для 3D (кнопка «3D Design»). После смены — F5 не
+        нужен (читается при генерации).</p>
+      <div class="row">
+        <select id="threed-model" style="flex:1; min-width:0"></select>
+        <button id="threed-save">Сохранить</button>
+      </div>
+      <div id="threed-status" class="hint"></div>
+    </section>
 
-  <section>
-    <h2>Генерация</h2>
-    <div class="row" style="margin-bottom:8px">
-      <span>Модель:</span> <span id="gen-model">не выбрана</span>
-    </div>
-    <textarea id="prompt" placeholder="Опишите изображение…"></textarea>
-    <div class="row" style="margin-top:8px">
-      <label>Размер:
-        <select id="size"><option value="auto">auto</option></select>
-      </label>
-      <label>Качество:
-        <select id="quality" disabled title="Поддерживается только моделями с меткой quality">
-          <option value="auto">auto</option>
-          <option value="low">low</option>
-          <option value="medium">medium</option>
-          <option value="high">high</option>
-        </select>
-      </label>
-      <label>Формат:
-        <select id="output-format">
-          <option value="webp">webp</option>
-          <option value="jpeg">jpeg</option>
-          <option value="png">png</option>
-        </select>
-      </label>
-      <span class="spacer"></span>
-      <button id="gen" disabled>Сгенерировать</button>
-    </div>
-    <div class="gen-grid" id="results"></div>
-    <div class="msg" id="gen-msg"></div>
-  </section>
+    <section id="gensec">
+      <h2>Генерация (тест)</h2>
+      <div class="row" style="margin-bottom:8px">
+        <span class="hint">Модель:</span> <span id="gen-model">не выбрана</span>
+      </div>
+      <textarea id="prompt" placeholder="Опишите изображение…"></textarea>
+      <div class="row" style="margin-top:8px">
+        <label>Размер:
+          <select id="size"><option value="auto">auto</option></select>
+        </label>
+        <label>Качество:
+          <select id="quality" disabled title="Поддерживается только моделями с меткой Q">
+            <option value="auto">auto</option>
+            <option value="low">low</option>
+            <option value="medium">medium</option>
+            <option value="high">high</option>
+          </select>
+        </label>
+        <label>Формат:
+          <select id="output-format">
+            <option value="webp">webp</option>
+            <option value="jpeg">jpeg</option>
+            <option value="png">png</option>
+          </select>
+        </label>
+        <span class="spacer"></span>
+        <button id="gen" disabled>Сгенерировать</button>
+      </div>
+      <div class="gen-grid" id="results"></div>
+      <div class="msg" id="gen-msg"></div>
+    </section>
+  </div>
 
 </main>
 <script>
@@ -238,7 +261,7 @@ function refreshStatus(){
     state.hasKey = st.has_key;
     var el = $("key-state");
     el.textContent = st.has_key ? ("ключ: " + st.hint) : "ключ не задан";
-    el.className = "chip " + (st.hasKey ? "ok" : "err");
+    el.className = "chip " + (st.has_key ? "ok" : "err");
     $("key-remove").classList.toggle("hidden", !st.hasKey);
     if (st.has_key) loadBalance(); else $("balance").textContent = "—";
     loadModels();
@@ -304,6 +327,39 @@ function isEditable(m){
 function supportsParam(m, p){
   return ((m && m.supported_parameters) || []).indexOf(p) !== -1;
 }
+function modelSizes(m){
+  return (((m && m.parameters && m.parameters.size) || [])
+    .filter(function(s){ return s !== "auto" && s !== "custom"; }));
+}
+
+// цена для строки списка: «~$0.04/img» или бейдж free
+function priceHtml(m){
+  if (isFree(m)) return '<span class="badge-free">free</span>';
+  var v = avgPrice(m);
+  return v != null ? '<span class="price">~$' + v.toFixed(4).replace(/0+$/,"").replace(/\.$/,"") + '/img</span>' : "";
+}
+// бейджи параметров: правка (вход-image), quality, размеры (в tooltip)
+function badgesHtml(m, withEdit){
+  var out = "";
+  if (withEdit && isEditable(m))
+    out += '<span class="badge-edit" title="Модель принимает изображение на вход (image-to-image / правка)">правка</span>';
+  if (supportsParam(m, "quality"))
+    out += '<span class="badge-q" title="Поддерживает параметр quality (low/medium/high)">Q</span>';
+  return out;
+}
+// полный tooltip строки: параметры модели + цены
+function rowTitle(m){
+  var p = m.pricing || {};
+  var money = isFree(m) ? "бесплатно" :
+    "цена/img: min " + (p.min != null ? "$" + p.min : "—") +
+    ", avg " + (p.average != null ? "$" + p.average : "—") +
+    ", max " + (p.max != null ? "$" + p.max : "—");
+  var sizes = modelSizes(m);
+  return (m.id + "\n" + money +
+    "\nвход: " + ((((m.architecture || {}).input_modalities) || []).join(", ") || "—") +
+    "\nquality: " + (supportsParam(m, "quality") ? "да" : "нет") +
+    (sizes.length ? "\nразмеры: " + sizes.join(", ") : ""));
+}
 
 function renderModels(){
   var q = $("search").value.trim().toLowerCase();
@@ -332,15 +388,12 @@ function renderModels(){
   list.forEach(function(m){
     var el = document.createElement("div");
     el.className = "model" + (state.selected === m.id ? " sel" : "");
+    el.title = rowTitle(m);
     var slash = m.id.indexOf("/");
     var prov = slash > 0 ? m.id.slice(0, slash) : "";
     var name = slash > 0 ? m.id.slice(slash + 1) : m.id;
-    var price = isFree(m)
-      ? '<span class="badge-free">free</span>'
-      : (avgPrice(m) != null ? '<span class="price">~$' + avgPrice(m).toFixed(4).replace(/0+$/,"").replace(/\.$/,"") + '/img</span>' : "");
-    var badges = isEditable(m) ? '<span class="badge-edit" title="Модель принимает изображение на вход (image-to-image / правка)">edit</span>' : "";
     el.innerHTML = '<span class="id">' + (prov ? '<span class="prov">' + prov + '</span>/' : '') +
-      "<b>" + name + "</b></span>" + badges + price;
+      "<b>" + name + "</b></span>" + badgesHtml(m, true) + priceHtml(m);
     el.addEventListener("click", function(){ selectModel(m.id); });
     box.appendChild(el);
   });
@@ -358,8 +411,7 @@ function selectModel(id){
   $("gen").disabled = !state.hasKey;
   var sel = $("size");
   sel.innerHTML = "";
-  var sizes = ((m && m.parameters && m.parameters.size) || [])
-    .filter(function(s){ return s !== "auto" && s !== "custom"; });
+  var sizes = modelSizes(m);
   ["auto"].concat(sizes).forEach(function(s){
     var o = document.createElement("option");
     o.value = s; o.textContent = s;
@@ -414,18 +466,23 @@ function moveUpscale(id, dir){
   renderUpscale();
 }
 
+// модели, видимые в списке апскейлинга при текущем поиске
+function upVisible(){
+  var q = $("up-search").value.trim().toLowerCase();
+  return state.models.filter(function(m){
+    if (!isEditable(m)) return false;          // апскейл = edits-запрос, нужен вход-image
+    if (q && m.id.toLowerCase().indexOf(q) === -1) return false;
+    return true;
+  });
+}
+
 function renderUpscale(){
   var box = $("up-models");
   if (!state.models.length){
     box.innerHTML = '<div class="hint">Каталог ещё не загружен…</div>';
     return;
   }
-  var q = $("up-search").value.trim().toLowerCase();
-  var list = state.models.filter(function(m){
-    if (!isEditable(m)) return false;          // апскейл = edits-запрос, нужен вход-image
-    if (q && m.id.toLowerCase().indexOf(q) === -1) return false;
-    return true;
-  });
+  var list = upVisible();
   list.sort(function(a, b){
     var sa = state.upscale.indexOf(a.id), sb = state.upscale.indexOf(b.id);
     if ((sa === -1) !== (sb === -1)) return sa === -1 ? 1 : -1;   // выбранные выше
@@ -443,12 +500,10 @@ function renderUpscale(){
     var idx = state.upscale.indexOf(m.id);
     var el = document.createElement("div");
     el.className = "model up" + (idx !== -1 ? " sel" : "");
+    el.title = rowTitle(m);
     var slash = m.id.indexOf("/");
     var prov = slash > 0 ? m.id.slice(0, slash) : "";
     var name = slash > 0 ? m.id.slice(slash + 1) : m.id;
-    var price = isFree(m)
-      ? '<span class="badge-free">free</span>'
-      : (avgPrice(m) != null ? '<span class="price">~$' + avgPrice(m).toFixed(4).replace(/0+$/,"").replace(/\.$/,"") + '/img</span>' : "");
     var order = idx !== -1
       ? '<span class="ord">' + (idx + 1) + '</span>' +
         '<button class="ghost up-move" data-id="' + m.id + '" data-dir="-1" title="Выше (ближе к умолчанию)">↑</button>' +
@@ -457,7 +512,7 @@ function renderUpscale(){
     el.innerHTML = '<input type="checkbox" class="up-chk"' + (idx !== -1 ? " checked" : "") +
       ' title="Доступна пользователям для апскейлинга">' + order +
       '<span class="id">' + (prov ? '<span class="prov">' + prov + '</span>/' : '') +
-      "<b>" + name + "</b></span>" + price;
+      "<b>" + name + "</b></span>" + badgesHtml(m, false) + priceHtml(m);
     el.querySelector(".up-chk").addEventListener("change", function(){ toggleUpscale(m.id); });
     el.querySelectorAll(".up-move").forEach(function(b){
       b.addEventListener("click", function(ev){
@@ -470,6 +525,21 @@ function renderUpscale(){
 }
 
 $("up-search").addEventListener("input", renderUpscale);
+
+$("up-all").addEventListener("click", function(){
+  upVisible().forEach(function(m){
+    if (state.upscale.indexOf(m.id) === -1) state.upscale.push(m.id);
+  });
+  renderUpscale();
+});
+
+$("up-none").addEventListener("click", function(){
+  upVisible().forEach(function(m){
+    var i = state.upscale.indexOf(m.id);
+    if (i !== -1) state.upscale.splice(i, 1);
+  });
+  renderUpscale();
+});
 
 $("up-save").addEventListener("click", function(){
   setMsg("up-msg", "Сохранение…");
@@ -522,11 +592,20 @@ function moveMainModel(id, dir){
   renderMainModels();
 }
 
-// краткое описание модели для админ-списка (без стоимости — по решению 08.09)
+// краткое описание модели для админ-списка (цены — в цене/img рядом)
 function mainModelDesc(m){
   return isEditable(m)
     ? "генерация и редактирование изображений"
     : "генерация изображений по описанию";
+}
+
+// модели, видимые в списке генерации при текущем поиске
+function mainVisible(){
+  var q = $("main-search").value.trim().toLowerCase();
+  return state.models.filter(function(m){
+    if (q && m.id.toLowerCase().indexOf(q) === -1) return false;
+    return true;
+  });
 }
 
 function renderMainModels(){
@@ -539,11 +618,7 @@ function renderMainModels(){
     box.innerHTML = '<div class="hint">Загрузка выбора…</div>';
     return;
   }
-  var q = $("main-search").value.trim().toLowerCase();
-  var list = state.models.filter(function(m){
-    if (q && m.id.toLowerCase().indexOf(q) === -1) return false;
-    return true;
-  });
+  var list = mainVisible();
   list.sort(function(a, b){
     var sa = state.main.indexOf(a.id), sb = state.main.indexOf(b.id);
     if ((sa === -1) !== (sb === -1)) return sa === -1 ? 1 : -1;   // выбранные выше
@@ -563,6 +638,7 @@ function renderMainModels(){
     var idx = state.main.indexOf(m.id);
     var el = document.createElement("div");
     el.className = "model up" + (idx !== -1 ? " sel" : "");
+    el.title = rowTitle(m);
     var slash = m.id.indexOf("/");
     var prov = slash > 0 ? m.id.slice(0, slash) : "";
     var name = slash > 0 ? m.id.slice(slash + 1) : m.id;
@@ -571,14 +647,12 @@ function renderMainModels(){
         '<button class="ghost up-move" data-id="' + m.id + '" data-dir="-1" title="Выше (ближе к умолчанию)">↑</button>' +
         '<button class="ghost up-move" data-id="' + m.id + '" data-dir="1" title="Ниже">↓</button>'
       : "";
-    var badge = isEditable(m)
-      ? '<span class="badge-edit" title="Модель принимает изображение на вход (image-to-image / правка)">✏️ правка</span>'
-      : "";
     el.innerHTML = '<input type="checkbox" class="up-chk"' + (idx !== -1 ? " checked" : "") +
       ' title="Доступна пользователям для генерации/правки">' + order +
       '<span class="id">' + (prov ? '<span class="prov">' + prov + '</span>/' : '') +
       "<b>" + name + "</b>" +
-      '<span class="desc">' + mainModelDesc(m) + "</span></span>" + badge;
+      '<span class="desc">' + mainModelDesc(m) + "</span></span>" +
+      badgesHtml(m, true) + priceHtml(m);
     el.querySelector(".up-chk").addEventListener("change", function(){ toggleMainModel(m.id); });
     el.querySelectorAll(".up-move").forEach(function(b){
       b.addEventListener("click", function(ev){
@@ -591,6 +665,24 @@ function renderMainModels(){
 }
 
 $("main-search").addEventListener("input", renderMainModels);
+
+$("main-all").addEventListener("click", function(){
+  // пока ничего не сохранено, «все» = весь каталог; дальше добавляем видимые
+  if (!state.main) state.main = state.models.map(function(m){ return m.id; });
+  mainVisible().forEach(function(m){
+    if (state.main.indexOf(m.id) === -1) state.main.push(m.id);
+  });
+  renderMainModels();
+});
+
+$("main-none").addEventListener("click", function(){
+  if (!state.main) state.main = state.models.map(function(m){ return m.id; });
+  mainVisible().forEach(function(m){
+    var i = state.main.indexOf(m.id);
+    if (i !== -1) state.main.splice(i, 1);
+  });
+  renderMainModels();
+});
 
 $("main-save").addEventListener("click", function(){
   setMsg("main-msg", "Сохранение…");

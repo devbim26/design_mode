@@ -16,7 +16,10 @@
   5. Патчит собранный JS: в левой панели Generate/Canvas скрываются параметры,
      относящиеся только к локальным моделям (Refiner, Advanced/VAE, Compositing,
      Concepts/LoRA, «Advanced Options» с Scheduler/Steps/CFG). Остаётся только
-     то, что использует ImageRouter API: промпт, модель, размер, seed.
+     то, что использует ImageRouter API: промпт, модель, размер.
+     Компоновка (patch_panel_layout): секция «Генерация» (модель) стоит выше
+     секции «Изображение», бейдж базы фейковой модели (sdxl) и строка Seed
+     убраны; описание выбранной модели показывает devbim-model-info.js.
   6. Патчит собранный JS: у кнопки Generate убираются кнопки локальной
      очереди — меню «полоски» (пауза/очистка очереди) и «крестик» (отмена);
      локальная очередь при облачной генерации не используется, полоса
@@ -74,6 +77,9 @@ TEXT_TOOL_NAME = "devbim-text-tool.js"
 TOPRIGHT_SRC = SRC / "devbim_topright_buttons.js"
 TOPRIGHT_NAME = "devbim-topright-buttons.js"
 
+MODEL_INFO_SRC = SRC / "devbim_model_info.js"
+MODEL_INFO_NAME = "devbim-model-info.js"
+
 PE_SRC = SRC / "prompt_enhancer.py"
 PE_DST = SP / "invokeai" / "app" / "invocations" / "devbim_prompt_enhancer.py"
 
@@ -108,6 +114,20 @@ JS_OLD_RE = re.compile(
     r'.*?displayName="InstallModels";',
     re.DOTALL,
 )
+
+# Вкладка «Модели»: родной layout [список моделей | ModelPane] -> iframe
+# ImageRouter на весь экран (левый список моделей не нужен — генерация
+# только через API). Имена минифицированных компонентов не фиксируем.
+JS_MODELS_TAB_RE = re.compile(
+    r'const (\w+)=\(\)=>o\.jsxs\(E,\{layerStyle:"body",w:"full",h:"full",gap:"2",p:2,'
+    r'children:\[o\.jsx\(\w+,\{\}\),o\.jsx\(\w+,\{\}\)\]\}\)'
+)
+JS_MODELS_TAB_NEW = (
+    r'const \1=()=>o.jsx(E,{layerStyle:"body",w:"full",h:"full",p:0,'
+    r'children:[o.jsx("iframe",{src:"/imagerouter.html",title:"ImageRouter",'
+    r'style:{width:"100%",height:"100%",border:"none"}})]})'
+)
+JS_MODELS_TAB_DONE = 'h:"full",p:0,children:[o.jsx("iframe",{src:"/imagerouter.html"'
 
 
 def deploy_files() -> None:
@@ -245,6 +265,38 @@ def deploy_topright_buttons(dist: Path | None = None) -> bool:
     return True
 
 
+def deploy_model_info(dist: Path | None = None) -> bool:
+    """Деплой описания модели под селектором (аккордеон «Генерация»):
+    копия devbim-model-info.js в dist/ + script в index.html. Текст
+    берётся из описания модели на сервере (см. _ir_fake_config)."""
+    dist = dist or DIST
+    dst = dist / MODEL_INFO_NAME
+    index = dist / "index.html"
+    if not MODEL_INFO_SRC.exists():
+        print("ОШИБКА: нет источника", MODEL_INFO_SRC)
+        sys.exit(1)
+    if not index.exists():
+        print("ОШИБКА: нет index.html в", dist)
+        sys.exit(1)
+    shutil.copy2(MODEL_INFO_SRC, dst)
+    s = index.read_text(encoding="utf-8")
+    if MODEL_INFO_NAME in s:
+        print("index.html уже подключает", MODEL_INFO_NAME + ", пропуск")
+        print("Описание модели развернуто:", dst)
+        return False
+    if "</head>" not in s:
+        print("ОШИБКА: в index.html нет </head>")
+        sys.exit(1)
+    bak = index.with_suffix(".html.modelinfo-bak")
+    if not bak.exists():
+        shutil.copy2(index, bak)
+    tag = f'  <script src="/{MODEL_INFO_NAME}" defer></script>\n</head>'
+    index.write_text(s.replace("</head>", tag, 1), encoding="utf-8")
+    print("index.html подключает", MODEL_INFO_NAME + f" (бэкап: {bak.name})")
+    print("Описание модели развернуто:", dst)
+    return True
+
+
 def ensure_env_file() -> None:
     """Создаёт .env в корне проекта по шаблону, если его ещё нет.
     Существующий файл не трогает — это источник ключа и админского пароля."""
@@ -329,6 +381,43 @@ def patch_js() -> bool:
     return True
 
 
+def patch_models_tab_fullscreen() -> bool:
+    """Вкладка «Модели» (Менеджер моделей) на весь экран: iframe
+    imagerouter.html вместо родного [список моделей | ModelPane]."""
+    targets = [
+        f for f in DIST.glob("assets/*.js")
+        if 'displayName="ModelPane"' in f.read_text(encoding="utf-8")
+    ]
+    if len(targets) > 1:
+        print("ОШИБКА: несколько кандидатов:", [t.name for t in targets])
+        sys.exit(1)
+    if not targets:
+        already = [
+            f for f in DIST.glob("assets/*.js")
+            if JS_MODELS_TAB_DONE in f.read_text(encoding="utf-8")
+        ]
+        if already:
+            print("Вкладка «Модели» уже полноэкранная, пропуск")
+            return False
+        print("ОШИБКА: не найден бандл с вкладкой «Модели» (ModelPane)")
+        sys.exit(1)
+    f = targets[0]
+    s = f.read_text(encoding="utf-8")
+    if JS_MODELS_TAB_DONE in s:
+        print("Вкладка «Модели» уже полноэкранная, пропуск")
+        return False
+    s2, n = JS_MODELS_TAB_RE.subn(JS_MODELS_TAB_NEW, s, count=1)
+    if n != 1:
+        print(f"ОШИБКА: фрагмент вкладки «Модели» найден {n} раз (ожидался 1)")
+        sys.exit(1)
+    bak = f.with_suffix(f.suffix + ".imagerouter-bak")
+    if not bak.exists():
+        shutil.copy2(f, bak)
+    f.write_text(s2, encoding="utf-8")
+    print(f"Вкладка «Модели» на весь экран: {f.name} (бэкап: {bak.name})")
+    return True
+
+
 # ----------------------------------------------------------------------------
 # Скрытие параметров локальных моделей в левой панели (генерация только via API)
 #
@@ -371,6 +460,111 @@ JS_LEFT_PANEL_PATCHES = (
     (JS_GENERATE_PANEL_OLD, JS_GENERATE_PANEL_NEW, "панель Generate"),
     (JS_GENERATION_ACC_OLD, JS_GENERATION_ACC_NEW, "аккордеон Generation"),
 )
+
+
+# ----------------------------------------------------------------------------
+# Компоновка левой панели под облачную генерацию (решение пользователя
+# 19.09, скриншот с пометками):
+#   а) секция «Генерация» (выбор модели) ставится ВЫШЕ секции
+#      «Изображение» — описание модели видно сразу, а настройки размера
+#      («Изображение») относятся к выбранной модели и идут под ней;
+#   б) из заголовка «Генерация» убран бейдж базы фейковой модели
+#      («sdxl» — техническое значение от инъекции, пользователь видел
+#      его как лишнюю кнопку «SD»);
+#   в) строка Seed (Seed / Random / Shuffle Seed) убрана из обеих
+#      панелей — облачный ImageRouter seed не использует;
+#   г) из бейджей аккордеона «Изображение» убрана пометка «Manual Seed»
+#      (управления seed после (в) больше нет).
+# Описание выбранной модели под селектором добавляет виджет
+# devbim-model-info.js (deploy_model_info ниже).
+# ----------------------------------------------------------------------------
+
+# Панель Generate: [промпты, Изображение (Aoe), Генерация (sM)] ->
+# [промпты, Генерация, Изображение]
+JS_SWAP_GENERATE_OLD = 'children:[o.jsx(J5,{}),o.jsx(Aoe,{}),o.jsx(sM,{})]'
+JS_SWAP_GENERATE_NEW = 'children:[o.jsx(J5,{}),o.jsx(sM,{}),o.jsx(Aoe,{})]'
+
+# Панель Canvas: аналогично (ise — аккордеон «Изображение» канваса)
+JS_SWAP_CANVAS_OLD = 'children:[o.jsx(J5,{}),o.jsx(ise,{}),o.jsx(sM,{})]'
+JS_SWAP_CANVAS_NEW = 'children:[o.jsx(J5,{}),o.jsx(sM,{}),o.jsx(ise,{})]'
+
+# Бейджи заголовка «Генерация»: имя модели без базы (t.base)
+JS_BASE_BADGE_OLD = (
+    'y=t&&zl.includes(t.base)?[t.name]:t?[t.name,t.base]:Yn'
+)
+JS_BASE_BADGE_NEW = 'y=t?[t.name]:Yn'
+
+# Строка Seed в аккордеоне «Изображение» (aw = ParamSeed):
+# Generate — после тела Eoe; Canvas — перед «Advanced Options» (xC)
+JS_SEED_GENERATE_OLD = 'children:[o.jsx(Eoe,{}),!i&&o.jsx(aw,{py:3})]'
+JS_SEED_GENERATE_NEW = 'children:[o.jsx(Eoe,{})]'
+JS_SEED_CANVAS_OLD = (
+    'children:[o.jsx(ese,{}),!d&&o.jsx(aw,{py:3}),!d&&o.jsx(xC,{'
+)
+JS_SEED_CANVAS_NEW = 'children:[o.jsx(ese,{}),!d&&o.jsx(xC,{'
+
+# Пометка «Manual Seed» в бейджах аккордеона «Изображение»
+# (lWe — Generate, mGe — Canvas)
+JS_BADGE_SEED_GEN_OLD = (
+    's&&a.push("locked"),i||a.push("Manual Seed"),a.length===0?Yn:a'
+)
+JS_BADGE_SEED_GEN_NEW = 's&&a.push("locked"),a.length===0?Yn:a'
+JS_BADGE_SEED_CANVAS_OLD = (
+    'i.isLocked&&s.push("locked"),n||s.push("Manual Seed"),s.length===0?Yn:s'
+)
+JS_BADGE_SEED_CANVAS_NEW = 'i.isLocked&&s.push("locked"),s.length===0?Yn:s'
+
+
+def patch_panel_layout() -> bool:
+    """«Генерация» выше «Изображения», без бейджа базы (sdxl), без строки
+    Seed и пометки «Manual Seed» (см. комментарий к фрагментам)."""
+    targets = [
+        f for f in DIST.glob("assets/*.js")
+        if 'displayName="ParametersPanelGenerate"' in f.read_text(encoding="utf-8")
+    ]
+    if len(targets) != 1:
+        print(f"ОШИБКА: бандл с левой панелью найден {len(targets)} раз (ожидался 1)")
+        sys.exit(1)
+    f = targets[0]
+    s = f.read_text(encoding="utf-8")
+    olds = (
+        JS_SWAP_GENERATE_OLD, JS_SWAP_CANVAS_OLD, JS_BASE_BADGE_OLD,
+        JS_SEED_GENERATE_OLD, JS_SEED_CANVAS_OLD,
+        JS_BADGE_SEED_GEN_OLD, JS_BADGE_SEED_CANVAS_OLD,
+    )
+    news = (
+        JS_SWAP_GENERATE_NEW, JS_SWAP_CANVAS_NEW, JS_BASE_BADGE_NEW,
+        JS_SEED_GENERATE_NEW, JS_SEED_CANVAS_NEW,
+        JS_BADGE_SEED_GEN_NEW, JS_BADGE_SEED_CANVAS_NEW,
+    )
+    if all(old not in s for old in olds):
+        if all(new in s for new in news):
+            print("Компоновка левой панели уже настроена, пропуск")
+            return False
+        print("ОШИБКА: панель в частично неизвестном состоянии (нет старых и новых фрагментов)")
+        sys.exit(1)
+    # Патч обязан идти после patch_left_panel(): на свежем бандле список
+    # детей панелей ещё длинный, фрагменты свопа появляются только после
+    # удаления Refiner/Advanced/Concepts.
+    for old, new, title in zip(olds, news, (
+        "своп секций Generate",
+        "своп секций Canvas",
+        "бейдж базы у «Генерация»",
+        "строка Seed (Generate)",
+        "строка Seed (Canvas)",
+        "бейдж «Manual Seed» (Generate)",
+        "бейдж «Manual Seed» (Canvas)",
+    )):
+        if s.count(old) != 1:
+            print(f"ОШИБКА: фрагмент «{title}» найден {s.count(old)} раз (ожидался 1)")
+            sys.exit(1)
+        s = s.replace(old, new, 1)
+    bak = f.with_suffix(f.suffix + ".imagerouter-bak")
+    if not bak.exists():
+        shutil.copy2(f, bak)
+    f.write_text(s, encoding="utf-8")
+    print(f"Компоновка левой панели настроена (Генерация выше Изображения, без Seed/бейджа базы): {f.name}")
+    return True
 
 
 def patch_left_panel() -> bool:
@@ -1337,7 +1531,8 @@ def patch_index_html() -> bool:
 
 def main() -> None:
     for p in (SRC / "imagerouter_router.py", SRC / "imagerouter.html", SRC / "devbim_admin.js",
-              MASK_TOGGLE_SRC, CUT_TOOL_SRC, TEXT_TOOL_SRC, TOPRIGHT_SRC, PE_SRC, DIST, API_APP.parent):
+              MASK_TOGGLE_SRC, CUT_TOOL_SRC, TEXT_TOOL_SRC, TOPRIGHT_SRC, MODEL_INFO_SRC,
+              PE_SRC, DIST, API_APP.parent):
         if not p.exists():
             print("Не найдено:", p)
             sys.exit(1)
@@ -1347,9 +1542,15 @@ def main() -> None:
     deploy_cut_tool()
     deploy_text_tool()
     deploy_topright_buttons()
+    deploy_model_info()
     patch_api_app()
     patch_js()
+    patch_models_tab_fullscreen()
     patch_left_panel()
+    # Своп секций «Генерация»/«Изображение» обязан идти после
+    # patch_left_panel(): его фрагменты появляются в панелях только после
+    # удаления Refiner/Advanced/Concepts.
+    patch_panel_layout()
     patch_canvas_control_layer()
     patch_queue_buttons()
     patch_upscale_launchpad()
