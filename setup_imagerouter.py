@@ -567,6 +567,175 @@ def patch_panel_layout() -> bool:
     return True
 
 
+# ----------------------------------------------------------------------------
+# Блок референсов под архитектурный пайплайн (решение 21.09, спека
+# docs/superpowers/specs/2026-09-21-reference-types-design.md):
+#   - селектор «Режим» (Style and Composition / Style (Simple) / …) заменён
+#     на «Тип референса»: Основной / Дополнительный / 3D-ракурс / Окружение /
+#     Люди / Атмосфера / Предметы интерьера / Детали фасада / Генплан;
+#     значение пишется в поле method узла ip_adapter (тип и вес путешествуют
+#     в граф штатно), выбор типа выставляет Weight на дефолт типа;
+#   - убраны настройки локального пайплайна: CLIP Vision Model (ViT-H/G/L)
+#     и Begin/End % (в графе остаются дефолты ViT-H и [0, 1]);
+#   - новые референсы создаются типом «Основной» (дефолт конфига в
+#     index-бандле), zod-enum method расширен нашими значениями.
+# Вес референса и тип роутер дописывает в промт (IR_REF_TYPES в
+# imagerouter_router.py — лейблы/мини-промты/дефолтные веса обязаны
+# совпадать с JS_REF_TYPE_WEIGHTS ниже).
+# ----------------------------------------------------------------------------
+
+# App-бандл: IPAdapterMethod (ET) — опции селектора и подпись.
+# Прежние опции Style/Composition — локальный IP-Adapter, облаку не нужны.
+JS_REF_METHOD_OLD = (
+    'const ET=u.memo(({method:e,onChange:t})=>{const{t:n}=M(),s=T(iC),'
+    'i=u.useMemo(()=>[{label:n("controlLayers.ipAdapterMethod.full"),value:"full",'
+    'description:s?n("controlLayers.ipAdapterMethod.fullDesc"):void 0},'
+    '{label:n("controlLayers.ipAdapterMethod.style"),value:"style",'
+    'description:s?n("controlLayers.ipAdapterMethod.styleDesc"):void 0},'
+    '{label:n("controlLayers.ipAdapterMethod.styleStrong"),value:"style_strong",'
+    'description:s?n("controlLayers.ipAdapterMethod.styleStrongDesc"):void 0},'
+    '{label:n("controlLayers.ipAdapterMethod.stylePrecise"),value:"style_precise",'
+    'description:s?n("controlLayers.ipAdapterMethod.stylePreciseDesc"):void 0},'
+    '{label:n("controlLayers.ipAdapterMethod.composition"),value:"composition",'
+    'description:s?n("controlLayers.ipAdapterMethod.compositionDesc"):void 0}],[n,s]),'
+    'a=u.useCallback(l=>{oe(Efe(l?.value)),t(l.value)},[t]),'
+    'r=u.useMemo(()=>i.find(l=>l.value===e),[i,e]);'
+    'return o.jsxs(te,{children:['
+    'o.jsx(He,{feature:"ipAdapterMethod",children:o.jsx(se,{m:0,'
+    'children:n("controlLayers.ipAdapterMethod.ipAdapterMethod")})}),'
+    'o.jsx(lt,{value:r,options:i,onChange:a})]})});ET.displayName="IPAdapterMethod";'
+)
+JS_REF_METHOD_NEW = (
+    'const ET=u.memo(({method:e,onChange:t})=>{'
+    'const i=u.useMemo(()=>['
+    '{label:"Основной",value:"main"},'
+    '{label:"Дополнительный",value:"extra"},'
+    '{label:"3D-ракурс",value:"view3d"},'
+    '{label:"Окружение",value:"environment"},'
+    '{label:"Люди",value:"people"},'
+    '{label:"Атмосфера",value:"atmosphere"},'
+    '{label:"Предметы интерьера",value:"interior"},'
+    '{label:"Детали фасада",value:"facade"},'
+    '{label:"Генплан",value:"masterplan"}],[]),'
+    'a=u.useCallback(l=>{t(l.value)},[t]),'
+    'r=u.useMemo(()=>i.find(l=>l.value===e),[i,e]);'
+    'return o.jsxs(te,{children:['
+    'o.jsx(He,{feature:"ipAdapterMethod",children:o.jsx(se,{m:0,children:"Тип референса"})}),'
+    'o.jsx(lt,{value:r,options:i,onChange:a})]})});ET.displayName="IPAdapterMethod";'
+)
+
+# App-бандл: RefImageSettingsContent — убрать CLIP Vision Model (ViT-H/G/L)
+JS_REF_CLIPVISION_OLD = 'Tc(s)&&o.jsx(IT,{model:s.clipVisionModel,onChange:h}),'
+JS_REF_CLIPVISION_NEW = ''
+
+# App-бандл: RefImageSettingsContent — убрать Begin/End %
+JS_REF_BEGINEND_OLD = ',o.jsx(MS,{beginEndStepPct:s.beginEndStepPct,onChange:a})'
+JS_REF_BEGINEND_NEW = ''
+
+# App-бандл: смена типа выставляет Weight на дефолт типа (Bme — экшен веса
+# того же референса; согласовано с IR_REF_TYPES в imagerouter_router.py)
+JS_REF_TYPE_WEIGHTS_JS = (
+    '{main:1,extra:.2,view3d:2,environment:.5,people:.5,atmosphere:.5,'
+    'interior:.5,facade:.5,masterplan:.5}'
+)
+JS_REF_METHOD_CB_OLD = 'l=u.useCallback(g=>{e(zme({id:t,method:g}))},[e,t])'
+JS_REF_METHOD_CB_NEW = (
+    'l=u.useCallback(g=>{e(zme({id:t,method:g}));'
+    'var W=' + JS_REF_TYPE_WEIGHTS_JS + ';'
+    'W[g]!==undefined&&e(Bme({id:t,weight:W[g]}))},[e,t])'
+)
+
+# index-бандл: дефолт нового референса — тип «Основной» (main)
+JS_REF_DEFAULT_OLD = 'beginEndStepPct:[0,1],method:"full",clipVisionModel:"ViT-H"'
+JS_REF_DEFAULT_NEW = 'beginEndStepPct:[0,1],method:"main",clipVisionModel:"ViT-H"'
+
+# index-бандл: zod-enum method (схема узла + валидатор KJ — 2 вхождения)
+JS_REF_ENUM_OLD = 'ct(["full","style","composition","style_strong","style_precise"])'
+JS_REF_ENUM_NEW = (
+    'ct(["full","style","composition","style_strong","style_precise",'
+    '"main","extra","view3d","environment","people","atmosphere",'
+    '"interior","facade","masterplan"])'
+)
+
+
+def patch_reference_types() -> bool:
+    """Типы референсов вместо Mode + без локальных настроек (CLIP Vision,
+    Begin/End); выбор типа выставляет дефолтный Weight. App-бандл — карточка
+    референса и селектор; index-бандл — дефолт конфига и zod-enum."""
+    changed = False
+    # --- App-бандл: RefImageSettingsContent + IPAdapterMethod ---
+    targets = [
+        f for f in DIST.glob("assets/*.js")
+        if 'displayName="RefImageSettingsContent"' in f.read_text(encoding="utf-8")
+    ]
+    if len(targets) != 1:
+        print(f"ОШИБКА: бандл с карточкой референса найден {len(targets)} раз (ожидался 1)")
+        sys.exit(1)
+    f = targets[0]
+    s = f.read_text(encoding="utf-8")
+    if 'value:"view3d"' not in s:
+        for old, new, title in (
+            (JS_REF_METHOD_OLD, JS_REF_METHOD_NEW, "селектор «Тип референса»"),
+            (JS_REF_CLIPVISION_OLD, JS_REF_CLIPVISION_NEW, "CLIP Vision Model"),
+            (JS_REF_BEGINEND_OLD, JS_REF_BEGINEND_NEW, "Begin/End %"),
+            (JS_REF_METHOD_CB_OLD, JS_REF_METHOD_CB_NEW, "авто-вес при смене типа"),
+        ):
+            if s.count(old) != 1:
+                print(f"ОШИБКА: фрагмент «{title}» найден {s.count(old)} раз (ожидался 1)")
+                sys.exit(1)
+            s = s.replace(old, new, 1)
+        bak = f.with_suffix(f.suffix + ".imagerouter-bak")
+        if not bak.exists():
+            shutil.copy2(f, bak)
+        f.write_text(s, encoding="utf-8")
+        changed = True
+        print(f"Карточка референса: «Тип референса» вместо Mode, без CLIP Vision/Begin-End: {f.name}")
+    else:
+        print("Карточка референса уже с типами, пропуск")
+
+    # --- index-бандл: дефолт типа + zod-enum method ---
+    idx_targets = [
+        f for f in DIST.glob("assets/*.js")
+        if JS_REF_ENUM_OLD in f.read_text(encoding="utf-8")
+        or JS_REF_DEFAULT_OLD in f.read_text(encoding="utf-8")
+    ]
+    if len(idx_targets) > 1:
+        print(f"ОШИБКА: index-бандл найден {len(idx_targets)} раз (ожидался 1)")
+        sys.exit(1)
+    if not idx_targets:
+        check = [
+            f for f in DIST.glob("assets/*.js")
+            if JS_REF_ENUM_NEW in f.read_text(encoding="utf-8")
+        ]
+        if len(check) == 1:
+            print("Дефолт типа и zod-enum уже настроены, пропуск")
+            return changed
+        print("ОШИБКА: не найден index-бандл с enum method (частичная правка?)")
+        sys.exit(1)
+    f = idx_targets[0]
+    s = f.read_text(encoding="utf-8")
+    if JS_REF_DEFAULT_NEW not in s or JS_REF_ENUM_NEW not in s:
+        n_def = s.count(JS_REF_DEFAULT_OLD)
+        n_enum = s.count(JS_REF_ENUM_OLD)
+        if n_def != 1 or n_enum != 2:
+            print(
+                f"ОШИБКА: дефолт найден {n_def} раз (ожидался 1), "
+                f"enum — {n_enum} раз (ожидалось 2)"
+            )
+            sys.exit(1)
+        s = s.replace(JS_REF_DEFAULT_OLD, JS_REF_DEFAULT_NEW, 1)
+        s = s.replace(JS_REF_ENUM_OLD, JS_REF_ENUM_NEW, 2)
+        bak = f.with_suffix(f.suffix + ".imagerouter-bak")
+        if not bak.exists():
+            shutil.copy2(f, bak)
+        f.write_text(s, encoding="utf-8")
+        changed = True
+        print(f"Дефолт референса «Основной» + zod-enum: {f.name} (бэкап: {bak.name})")
+    else:
+        print("Дефолт типа и zod-enum уже настроены, пропуск")
+    return changed
+
+
 def patch_left_panel() -> bool:
     """Убирает из левой панели параметры, относящиеся только к локальным моделям."""
     targets = [
@@ -1551,6 +1720,7 @@ def main() -> None:
     # patch_left_panel(): его фрагменты появляются в панелях только после
     # удаления Refiner/Advanced/Concepts.
     patch_panel_layout()
+    patch_reference_types()
     patch_canvas_control_layer()
     patch_queue_buttons()
     patch_upscale_launchpad()

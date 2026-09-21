@@ -82,20 +82,97 @@ PROMPT_MARKER_NOTE = (
     "Изменяй только эту зону, отметки из финального изображения убери."
 )
 
-# Дописывается к промпту, когда к запросу приложены референсные изображения
-PROMPT_REFERENCE_NOTE = (
-    "\n\nПриложенные дополнительные изображения — референсы: "
-    "учитывай их стиль и содержание."
-)
+# --- Типы референсов для архитектурного пайплайна (решение 21.09, спека
+# docs/superpowers/specs/2026-09-21-reference-types-design.md) ---
+# Тип выбран в селекторе «Тип референса» и хранится в поле method узла
+# ip_adapter, вес — в weight того же узла (патч setup_imagerouter.py).
+# По каждому референсу в промт дописывается его роль (мини-промт) и вес.
+IR_REF_TYPES: dict[str, dict] = {
+    "main": {
+        "label": "основной референс",
+        "weight": 1.0,
+        "note": "основная картинка: определи по ней в первую очередь "
+        "композицию, ракурс, стиль и содержание",
+    },
+    "extra": {
+        "label": "дополнительный референс",
+        "weight": 0.2,
+        "note": "дополнительная картинка: дополняет основной ракурс "
+        "деталями и уточнениями, не перебивая основной референс",
+    },
+    "view3d": {
+        "label": "3D-ракурс",
+        "weight": 2.0,
+        "note": "схема сцены кадра: выстави всё строго как на схеме — "
+        "ракурс, композицию, расположение и пропорции объектов; "
+        "формы и цвета самой схемы не используй, это только схема",
+    },
+    "environment": {
+        "label": "окружение",
+        "weight": 0.5,
+        "note": "окружение: возьми оттуда деревья, дорожки и благоустройство",
+    },
+    "people": {
+        "label": "люди",
+        "weight": 0.5,
+        "note": "люди: добавь людей как на этой картинке — позы, одежда, масштаб",
+    },
+    "atmosphere": {
+        "label": "атмосфера",
+        "weight": 0.5,
+        "note": "атмосфера: передай настроение картинки — освещение, "
+        "время суток, погоду, цветовую гамму",
+    },
+    "interior": {
+        "label": "предметы интерьера",
+        "weight": 0.5,
+        "note": "предметы интерьера: возьми мебель и предметы "
+        "(стол, стул и т.п.) как на картинке",
+    },
+    "facade": {
+        "label": "детали фасада",
+        "weight": 0.5,
+        "note": "детали фасада: оформление балконов, козырьков и фасадов "
+        "целиком — как на этой картинке",
+    },
+    "masterplan": {
+        "label": "генплан",
+        "weight": 0.5,
+        "note": "генплан: возьми только расположение зданий как на схеме",
+    },
+}
 
-# Вариант для JSON-режима (исходник + референсы одним массивом image[]):
-# модель получает несколько картинок и должна понимать роль каждой (06.09)
-PROMPT_REFERENCE_ROLES_NOTE = (
-    "\n\nПервое изображение — исходник для редактирования. "
-    "Остальные изображения — референсы материалов: "
-    "точно примени их текстуры и цвета к исходнику."
-)
+# Тип не задан или неизвестен (старые сессии с method full/style/…,
+# референс добавлен Generate-фолбэком) — универсальная формулировка
+IR_REF_FALLBACK = {
+    "label": "референс (общий)",
+    "note": "учитывай стиль и содержание этой картинки",
+}
 
+
+def _ref_weight(meta: dict) -> Optional[float]:
+    """Вес референса: из узла ip_adapter; отсутствует/кривой — дефолт типа."""
+    t = IR_REF_TYPES.get(meta.get("type"))
+    w = meta.get("weight")
+    if isinstance(w, (int, float)) and not isinstance(w, bool) and 0 <= float(w) <= 2:
+        return round(float(w), 2)
+    return t["weight"] if t else None
+
+
+def _reference_prompt_block(ref_meta: list, has_init: bool) -> str:
+    """Блок референсов, дописываемый к промту: роль и вес каждой картинки
+    по её типу. Нумерация соответствует массиву image[] edits-запроса
+    (исходник — изображение 1, референсы — дальше)."""
+    lines: list[str] = []
+    if has_init:
+        lines.append("Первое изображение — исходник для редактирования.")
+    first = 2 if has_init else 1
+    for k, meta in enumerate(ref_meta):
+        t = IR_REF_TYPES.get(meta.get("type")) or IR_REF_FALLBACK
+        w = _ref_weight(meta)
+        wt = f" (вес {w:g})" if w is not None else ""
+        lines.append(f"Изображение {first + k} — {t['label']}{wt}: {t['note']}.")
+    return "\n\n" + "\n".join(lines)
 
 TIMEOUT_SHORT = 30
 TIMEOUT_GENERATE = 300
@@ -1069,6 +1146,9 @@ def _extract_ir_info(batch: dict) -> dict:
         "init_image": None,
         "mask": None,
         "references": [],
+        # тип (method) и вес (weight) каждого референса из его узла
+        # ip_adapter — параллельно списку references (решение 21.09)
+        "ref_details": [],
         "is_upscale": False,
         "upscale_model_key": None,
         "upscale_scale": None,
@@ -1113,11 +1193,17 @@ def _extract_ir_info(batch: dict) -> dict:
                 info["upscale_structure"] = float(cw)
         if ntype == "ip_adapter":
             # референсные изображения: image — словарь или список словарей;
-            # их НЕ считаем исходником/маской
+            # их НЕ считаем исходником/маской. Тип референса (селектор
+            # «Тип референса») и вес едут в полях method/weight узла
             v = node.get("image")
+            method = node.get("method") if isinstance(node.get("method"), str) else None
+            weight = node.get("weight") if isinstance(node.get("weight"), (int, float)) else None
             for it in (v if isinstance(v, list) else [v]):
                 if isinstance(it, dict) and isinstance(it.get("image_name"), str):
                     info["references"].append(it["image_name"])
+                    info["ref_details"].append(
+                        {"image": it["image_name"], "type": method or None, "weight": weight}
+                    )
             continue
         if ntype == "core_metadata":
             info["positive"] = node.get("positive_prompt") or info["positive"]
@@ -1184,12 +1270,18 @@ def _extract_ir_info(batch: dict) -> dict:
                 info["positive"] = value
     info["width"] = int(info["width"] or 1024)
     info["height"] = int(info["height"] or 1024)
-    # референсы: без дублей и без подложки/маски
-    info["references"] = [
-        n
-        for i, n in enumerate(info["references"])
-        if n not in info["references"][:i] and n not in (info["init_image"], info["mask"])
-    ]
+    # референсы: без дублей и без подложки/маски (имена и метаданные — парой)
+    _seen_refs: set = set()
+    _refs: list[str] = []
+    _details: list[dict] = []
+    for name, det in zip(info["references"], info["ref_details"]):
+        if name in _seen_refs or name in (info["init_image"], info["mask"]):
+            continue
+        _seen_refs.add(name)
+        _refs.append(name)
+        _details.append(det)
+    info["references"] = _refs
+    info["ref_details"] = _details
     return info
 
 
@@ -1313,9 +1405,14 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
     if not model_key:
         raise _IRClientError("ImageRouter: в графе не найдена модель ImageRouter")
     mid = model_key[len(IR_KEY_PREFIX):]
+    _ref_log = " ".join(
+        f"{d['type'] or '?'}:{_ref_weight(d):g}" if _ref_weight(d) is not None else str(d["type"] or "?")
+        for d in info["ref_details"]
+    )
     print(
         f"[imagerouter] enqueue: model={mid} mode={info['mode']} "
-        f"init={info['init_image']} mask={info['mask']} refs={info['references']}",
+        f"init={info['init_image']} mask={info['mask']} refs={info['references']}"
+        + (f" types=[{_ref_log}]" if _ref_log else ""),
         flush=True,
     )
     key = _load_key()
@@ -1473,9 +1570,10 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
 
         base_prompt = (info["positive"] or "").strip()
         if refs_pil:
-            # с исходником референсы уходят одним JSON-массивом — модели нужна
-            # подсказка о ролях картинок; без исходника — прежняя формулировка
-            base_prompt += PROMPT_REFERENCE_ROLES_NOTE if init_pil is not None else PROMPT_REFERENCE_NOTE
+            # блок референсов: роль и вес каждой картинки по её типу
+            # («Основной», «3D-ракурс», …); с исходником он начинает с
+            # пояснения, что первое изображение — исходник для правки
+            base_prompt += _reference_prompt_block(info["ref_details"], init_pil is not None)
 
         use_marker = False  # модель отвергла параметр mask — зона правки подсвечивается в картинке
         marked_pil: Any = None
@@ -1608,8 +1706,10 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
                         "height": info["height"],
                         "source_image": info["init_image"],
                         # список референсов — в БД, чтобы не гадать по дампу,
-                        # дошли ли они до запроса (диагностика 06.09)
+                        # дошли ли они до запроса (диагностика 06.09);
+                        # ref_details — тип и вес каждого (21.09)
                         "ref_images": info["references"],
+                        "ref_details": info["ref_details"],
                     },
                     ensure_ascii=False,
                 )

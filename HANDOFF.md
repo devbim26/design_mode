@@ -2035,6 +2035,62 @@ invokeai==6.2.0` их нужно запускать повторно в поря
       рестарта — браузер может отдать КЭШ старой страницы: открывать
       /ifcviewer.html?<timestamp> (пользователю: Ctrl+F5 достаточно).
 
+47. **Типы референсов для архитекторов + Weight в промте** (21.09, спека
+    `docs/superpowers/specs/2026-09-21-reference-types-design.md`, скриншоты
+    `docs/reference-block-*.png` — пометки пользователя, что убрать).
+    Блок «Reference Image» в левой панели переработан под облачный пайплайн:
+    - **Убраны настройки локальной разработки**: CLIP Vision Model
+      (ViT-H/G/L) и Begin/End % — из карточки референса
+      (RefImageSettingsContent, App-бандл; в ГРАФЕ дефолты остаются:
+      clipVisionModel ViT-H обязателен — билдер ip_adapter для sdxl
+      ассертит «ViT-H или ViT-G», beginEndStepPct [0,1]). Селектор
+      несущей модели «ImageRouter (референс)» оставлен — без модели
+      клиент выбрасывает референс из графа (п.7).
+    - **«Режим» (Mode: Style and Composition / Style (Simple) / …) →
+      «Тип референса»**: Основной / Дополнительный / 3D-ракурс / Окружение
+      / Люди / Атмосфера / Предметы интерьера / Детали фасада / Генплан.
+      Значение пишется в ШТАТНОЕ поле `method` узла ip_adapter — тип и
+      вес путешествуют в граф без кастомных полей. Веса по умолчанию:
+      main 1 / extra 0.2 / view3d 2 / остальные 0.5 (заданы пользователем
+      для первых трёх); ВЫБОР ТИПА выставляет Weight на дефолт типа
+      (патч колбэка в карточке; слайдер 0–2, фактическое значение уходит
+      в граф). Новые референсы создаются типом «Основной» (дефолт
+      конфига rS в index-бандле: method:"full"→"main"); zod-enum method
+      (2 вхождения: схема узла + валидатор KJ) расширен девятью
+      значениями. Региональные настройки (RegionalGuidanceIPAdapter
+      SettingsContent) не тронуты — контроль-слои скрыты с 19.08.
+    - **Промт** (`imagerouter_router.py`): реестр IR_REF_TYPES (лейбл /
+      дефолтный вес / мини-промт — ПО-РУССКИ, как прежние
+      PROMPT_REFERENCE_*_NOTE; они удалены). Промт = [пользовательский +
+      Template — клиент объединяет сам, шаблон вставляет промт в
+      {prompt} либо дописывает после] + блок референсов
+      `_reference_prompt_block`: с исходником начинается «Первое
+      изображение — исходник для редактирования», далее по каждому
+      референсу «Изображение N — <тип> (вес W): <мини-промт>.» —
+      нумерация = массив image[] edits-запроса; вес из ip_adapter.weight
+      (0..2), отсутствует → дефолт типа; НЕИЗВЕСТНЫЙ тип (старые сессии
+      full/style, референс от Generate-фолбэка) → «референс (общий):
+      учитывай стиль и содержание этой картинки» (вес всё равно из узла).
+      3D-ракурс несёт «…выстави всё строго как на схеме… формы и цвета
+      самой схемы не используй, это только схема» — под сцены из
+      IFC-вьювера (рамка кадра → «Use as Reference Image»).
+    - **Диагностика**: `_extract_ir_info` собирает `ref_details`
+      [{image,type,weight}] параллельно `references` (дедупликация —
+      парами); лог enqueue `types=[main:1 view3d:2]`; метаданные
+      результата `ref_details`.
+    - **Деплой**: `patch_reference_types()` в setup_imagerouter.py (4
+      замены App-бандл + 2 index-бандл, идемпотентно, маркер
+      value:"view3d"). Тест: `tests/test_reference_types.py` (якоря в
+      живых бандлах, патч на синтетике, ref_details, блок промта,
+      согласованность весов JS↔Python). Живая проверка 21.09 (Playwright):
+      карточка без CLIP Vision/Begin-End, 9 типов в селекторе, смена типа
+      двигает Weight (3D-ракурс→2, Дополнительный→0.2); генерация
+      nano-banana-2 с референсом: в графе ip_adapter {method:view3d,
+      weight:2}, лог types=[view3d:2], HTTP 200, в метаданных картинки
+      ref_details. Скриншот `docs/reference-types-card.png`. Ошибки
+      консоли «Problem rehydrating/persisting state» — redux-persist,
+      существовали ДО патча (логи .playwright-mcp от 18-20.09).
+
 
 ```powershell
 cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
@@ -2054,6 +2110,7 @@ cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
 .\venv\Scripts\python.exe .\tests\test_upscale_cloud.py # облачный апскейлинг
 .\venv\Scripts\python.exe .\tests\test_panel_layout.py  # Генерация выше Изображения, без Seed, описание модели
 .\venv\Scripts\python.exe .\tests\test_main_models.py   # выбор основных моделей
+.\venv\Scripts\python.exe .\tests\test_reference_types.py # типы референсов + Weight в промте
 # синтаксис module-скрипта вьювера после правок ifcviewer.html:
 #   venv\Scripts\python.exe -c "import re,pathlib;s=pathlib.Path('ifc/ifcviewer.html').read_text(encoding='utf-8');pathlib.Path('ifc/_chk.mjs').write_text(re.search(r'<script type=\"module\">(.*?)</script>',s,re.S).group(1),encoding='utf-8')"
 #   node --check ifc/_chk.mjs && del ifc\_chk.mjs
