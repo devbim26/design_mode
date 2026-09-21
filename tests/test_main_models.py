@@ -51,18 +51,18 @@ def main():
         assert "imagerouter/" + m["id"] in keys, m["id"]
     print("OK дефолт: весь каталог")
 
-    # --- 2. описание: без цены, с «редактирование» у edit-моделей ---
+    # --- 2. описание: без цены, с "editing" у edit-моделей (гейт фолбэка) ---
 
     cfg_edit = next(m for m in data["models"] if m["key"] == "imagerouter/google/nano-banana-2")
     assert "$" not in cfg_edit["description"], cfg_edit["description"]
-    assert "редактирование" in cfg_edit["description"], cfg_edit["description"]  # гейт Generate-фолбэка
+    assert "editing" in cfg_edit["description"], cfg_edit["description"]  # гейт Generate-фолбэка
     assert "✏️" in cfg_edit["description"], cfg_edit["description"]
     cfg_txt = next(m for m in data["models"] if m["key"] == "imagerouter/HiDream-ai/HiDream-I1")
-    assert "редактирование" not in cfg_txt["description"], cfg_txt["description"]
+    assert "editing" not in cfg_txt["description"], cfg_txt["description"]
     # апскейл-фейк тоже без цены
     up = ir._ir_upscale_fake_config(CATALOG[0])
     assert "$" not in up["description"], up["description"]
-    print("OK описания без цены, «редактирование» сохранено")
+    print("OK описания без цены, editing сохранено")
 
     # --- 3. сохранённый выбор: только выбранные, в порядке админа ---
 

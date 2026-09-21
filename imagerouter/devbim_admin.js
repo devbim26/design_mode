@@ -75,9 +75,9 @@
     }).then(function (r) {
       if (r.ok) { onOk(); }
       else { r.json().catch(function () { return {}; }).then(function (d) {
-        onFail((d && d.detail) || 'Неверный пароль');
+        onFail((d && d.detail) || 'Wrong password');
       }); }
-    }).catch(function () { onFail('Сервер недоступен'); });
+    }).catch(function () { onFail('Server unavailable'); });
   }
 
   // --- модальное окно ввода пароля ---
@@ -93,16 +93,16 @@
 
     var title = document.createElement('h3');
     title.className = 'devbim-admin-title';
-    title.textContent = 'Вход администратора';
+    title.textContent = 'Administrator sign-in';
 
     var sub = document.createElement('p');
     sub.className = 'devbim-admin-sub';
-    sub.textContent = 'Введите админский пароль, чтобы открыть закрытые разделы (Менеджер моделей).';
+    sub.textContent = 'Enter the administrator password to open protected sections (Model Manager).';
 
     var input = document.createElement('input');
     input.type = 'password';
     input.className = 'devbim-admin-input';
-    input.placeholder = 'Пароль';
+    input.placeholder = 'Password';
     input.autocomplete = 'current-password';
 
     var err = document.createElement('div');
@@ -114,12 +114,12 @@
     var btnCancel = document.createElement('button');
     btnCancel.type = 'button';
     btnCancel.className = 'devbim-admin-btn devbim-admin-cancel';
-    btnCancel.textContent = 'Отмена';
+    btnCancel.textContent = 'Cancel';
 
     var btnOk = document.createElement('button');
     btnOk.type = 'button';
     btnOk.className = 'devbim-admin-btn devbim-admin-ok';
-    btnOk.textContent = 'Войти';
+    btnOk.textContent = 'Sign in';
 
     row.appendChild(btnCancel);
     row.appendChild(btnOk);
@@ -137,7 +137,7 @@
       var val = input.value;
       if (!val) { input.focus(); return; }
       btnOk.disabled = true;
-      btnOk.textContent = 'Проверка…';
+      btnOk.textContent = 'Checking…';
       err.textContent = '';
       verifyPassword(val, function () {
         unlocked = true;
@@ -146,7 +146,7 @@
         onSuccess();
       }, function (msg) {
         btnOk.disabled = false;
-        btnOk.textContent = 'Войти';
+        btnOk.textContent = 'Sign in';
         err.textContent = msg;
         input.select();
       });

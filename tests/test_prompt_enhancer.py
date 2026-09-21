@@ -241,7 +241,8 @@ def test_gen_fallback_helper_syntax():
     # ключевые строки поведения
     src = sir.JS_GEN_FALLBACK
     assert "st.params.model.key" in src  # модель из params
-    assert "редактирование" in src  # гейт: модель принимает картинки
+    assert 'indexOf("editing")' in src  # гейт: модель принимает картинки (EN, 21.09)
+    assert "редактирование" not in src  # русский гейт ушёл вместе с EN-описаниями
     assert "gallery.selection" in src  # картинка из вьювера
     assert "images_by_names" in src and 'method:"POST"' in src  # DTO правильным эндпоинтом
     assert "E1(g.getState())" in src and "H0({overrides:{config:r}})" in src  # штатный add-reference

@@ -364,7 +364,7 @@ def _enhancer_model() -> str:
 def _auth_headers() -> dict[str, str]:
     key = _load_key()
     if not key:
-        raise HTTPException(status_code=401, detail="API-ключ ImageRouter не задан")
+        raise HTTPException(status_code=401, detail="API key is not configured")
     return {"Authorization": f"Bearer {key}"}
 
 
@@ -383,7 +383,7 @@ def _upstream_json(resp: requests.Response) -> Any:
             elif isinstance(err, str):
                 msg = err
             msg = msg or data.get("detail")
-        raise HTTPException(status_code=resp.status_code, detail=msg or f"ImageRouter: HTTP {resp.status_code}")
+        raise HTTPException(status_code=resp.status_code, detail=msg or f"Generation service: HTTP {resp.status_code}")
     return data
 
 
@@ -458,7 +458,7 @@ def admin_auth(body: AdminAuthBody) -> dict:
     if hmac.compare_digest(body.password.encode("utf-8"), pw.encode("utf-8")):
         return {"ok": True, "protected": True}
     time.sleep(0.3)  # замедлить перебор
-    raise HTTPException(status_code=401, detail="Неверный пароль")
+    raise HTTPException(status_code=401, detail="Wrong password")
 
 
 @imagerouter_router.get("/admin-auth")
@@ -729,9 +729,10 @@ def _avg_price(m: dict) -> Optional[float]:
 
 def _ir_size_digest(m: dict) -> str:
     """Дайджест размеров модели из каталога (parameters.size):
-    «до 3K (3136×1344)» + «произвольный размер» при custom. Пустая строка,
+    "up to 3K (3136×1344)" + "custom size" при custom. Пустая строка,
     если данных нет. Решение 19.09: сделать выбор модели информативнее
-    (качество 1–4K, форматы)."""
+    (качество 1–4K, форматы). 21.09: текст английский — интерфейс
+    пользователя на английском, провайдер не называем."""
     sizes = (m.get("parameters") or {}).get("size") or []
     max_side = 0
     max_pair: Optional[tuple[int, int]] = None
@@ -756,9 +757,9 @@ def _ir_size_digest(m: dict) -> str:
         return ""
     parts: list[str] = []
     if max_side and max_pair:
-        parts.append(f"до {max(1, round(max_side / 1024))}K ({max_pair[0]}×{max_pair[1]})")
+        parts.append(f"up to {max(1, round(max_side / 1024))}K ({max_pair[0]}×{max_pair[1]})")
     if custom:
-        parts.append("произвольный размер")
+        parts.append("custom size")
     return " · ".join(parts)
 
 
@@ -766,17 +767,16 @@ def _ir_fake_config(m: dict) -> dict:
     import hashlib
 
     mid = m.get("id", "")
-    # Краткое описание без стоимости (решение пользователя 08.09: цену
-    # пользователю не показываем). Слово «редактирование» ОБЯЗАТЕЛЬНО:
-    # на него опирается гейт Generate-фолбэка (п.22 HANDOFF).
-    # 19.09: описание расширено возможностями модели (форматы файлов,
-    # максимальное разрешение) — показывается под селектором модели
-    # (виджет devbim-model-info.js).
-    desc = "Облачная генерация изображений"
+    # Описание пользовательское (селектор модели + виджет описания):
+    # английский, без названия провайдера (решение 21.09 — куда уходит
+    # генерация, пользователю не показываем). Слово "editing" ОБЯЗАТЕЛЬНО:
+    # на него опирается гейт Generate-фолбэка (п.22 HANDOFF, ищет
+    # cfg.description.indexOf("editing")).
+    desc = "Cloud image generation"
     inputs = ((m.get("architecture") or {}).get("input_modalities")) or []
     if "image" in inputs:
-        desc += " · ✏️ редактирование"
-    desc += " · форматы PNG, JPEG, WebP"
+        desc += " · ✏️ editing"
+    desc += " · formats PNG, JPEG, WebP"
     size_part = _ir_size_digest(m)
     if size_part:
         desc += " · " + size_part
@@ -813,13 +813,13 @@ def _ir_ipadapter_fake() -> dict:
         "hash": hashlib.md5(IPADAPTER_FAKE_ID.encode("utf-8")).hexdigest(),
         "path": f"imagerouter://{IPADAPTER_FAKE_ID}",
         "file_size": 0,
-        "name": "ImageRouter (референс)",
+        "name": "Reference",
         "type": "ip_adapter",
         "format": "checkpoint",
         "base": FAKE_BASE,
         "source": "https://imagerouter.io",
         "source_type": "url",
-        "description": "Референсные изображения передаются в ImageRouter (image[])",
+        "description": "Reference images for cloud generation",
         "variant": "normal",
         "cover_image": None,
     }
@@ -841,13 +841,13 @@ def _ir_tile_fake() -> dict:
         "hash": hashlib.md5(("upscale:" + TILE_CONTROLNET_FAKE_ID).encode("utf-8")).hexdigest(),
         "path": f"imagerouter://{TILE_CONTROLNET_FAKE_ID}",
         "file_size": 0,
-        "name": "Tile ControlNet (ImageRouter)",
+        "name": "Tile ControlNet",
         "type": "controlnet",
         "format": "checkpoint",
         "base": FAKE_BASE,
         "source": "https://imagerouter.io",
         "source_type": "url",
-        "description": "Апскейлинг исполняется облаком ImageRouter (декоративная модель)",
+        "description": "Decorative model; upscaling runs in the cloud",
         "variant": "normal",
         "cover_image": None,
     }
@@ -856,7 +856,8 @@ def _ir_tile_fake() -> dict:
 def _ir_upscale_fake_config(m: dict) -> dict:
     """Выбранная админом модель как spandrel-конфиг (дропдаун «Upscale Model»
     вкладки Upscaling показывает все модели type=spandrel_image_to_image).
-    Описание без стоимости — цену пользователю не показываем (08.09)."""
+    Описание пользовательское: английский, без провайдера; цену не
+    показываем (08.09)."""
     import hashlib
 
     mid = m.get("id", "")
@@ -872,7 +873,7 @@ def _ir_upscale_fake_config(m: dict) -> dict:
         "base": "any",
         "source": "https://imagerouter.io",
         "source_type": "url",
-        "description": "Облачный апскейл изображений",
+        "description": "Cloud image upscaling",
         "variant": "normal",
         "cover_image": None,
     }
@@ -1403,7 +1404,7 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
     info = _extract_ir_info(batch)
     model_key = info["model_key"]
     if not model_key:
-        raise _IRClientError("ImageRouter: в графе не найдена модель ImageRouter")
+        raise _IRClientError("No generation model selected")
     mid = model_key[len(IR_KEY_PREFIX):]
     _ref_log = " ".join(
         f"{d['type'] or '?'}:{_ref_weight(d):g}" if _ref_weight(d) is not None else str(d["type"] or "?")
@@ -1418,8 +1419,8 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
     key = _load_key()
     if not key:
         raise _IRClientError(
-            "API-ключ ImageRouter не задан. Откройте Model Manager → «Добавить модели» → "
-            "ImageRouter и введите ключ (imagerouter.io/api-keys).",
+            "Generation service is not configured: no API key. "
+            "Please contact your administrator.",
             401,
         )
 
@@ -1461,7 +1462,7 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
         while not ticker_stop.wait(PROGRESS_TICK):
             try:
                 events.dispatch(
-                    _progress_event(f"ImageRouter · {mid} · {run_state['run']}/{runs} · {int(time.time() - t0)} с")
+                    _progress_event(f"Generating · {mid} · {run_state['run']}/{runs} · {int(time.time() - t0)}s")
                 )
             except Exception:  # noqa: BLE001
                 break
@@ -1476,7 +1477,7 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
             try:
                 refs_pil = [services.images.get_pil_image(n) for n in info["references"]]
             except Exception as e:  # noqa: BLE001
-                raise _IRClientError(f"ImageRouter: не удалось загрузить референсное изображение ({e})", 500) from e
+                raise _IRClientError(f"Failed to load reference image ({e})", 500) from e
 
         is_edit = info["mode"] in ("inpaint", "outpaint", "img2img") and info["init_image"]
         # референсы тоже уходят через edits-эндпоинт (multipart image[])
@@ -1490,10 +1491,8 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
         if use_edits:
             if not _supports_image_input(mid):
                 raise _IRClientError(
-                    f"Модель «{mid}» не поддерживает редактирование (не принимает изображение на вход). "
-                    "Выберите в списке моделей модель с пометкой «редактирование» — например "
-                    "google/nano-banana:free, qwen-image:free, openai/gpt-image-2, "
-                    "black-forest-labs/flux-kontext-dev.",
+                    f"The model '{mid}' does not support editing (it does not accept an image as input). "
+                    "Please select a model with the 'editing' mark.",
                     400,
                 )
             if info["init_image"]:
@@ -1501,7 +1500,7 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
                     init_full = services.images.get_pil_image(info["init_image"])
                     mask_full = services.images.get_pil_image(info["mask"]) if info["mask"] else None
                 except Exception as e:  # noqa: BLE001
-                    raise _IRClientError(f"ImageRouter: не удалось загрузить исходное изображение ({e})", 500) from e
+                    raise _IRClientError(f"Failed to load source image ({e})", 500) from e
                 # зона правки в семантике канваса: 255 = менять
                 zone_full = _mask_edit_alpha(mask_full).point(lambda v: 255 - v) if mask_full is not None else None
                 # Кадрируем по содержимому и маске (+8px запас): без прозрачных полей
@@ -1610,10 +1609,10 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
                 try:
                     data_out = _upstream_json(resp)
                 except HTTPException as e:
-                    raise _IRClientError(f"ImageRouter: {e.detail}", e.status_code) from e
+                    raise _IRClientError(f"Generation failed: {e.detail}", e.status_code) from e
                 err = _api_error_message(data_out)
                 if err:
-                    raise _IRClientError(f"ImageRouter: {err}", 502)
+                    raise _IRClientError(f"Generation failed: {err}", 502)
             elif use_edits:
                 while True:
                     if use_marker:
@@ -1655,7 +1654,7 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
                     try:
                         data_out = _upstream_json(resp)
                     except HTTPException as e:
-                        raise _IRClientError(f"ImageRouter: {e.detail}", e.status_code) from e
+                        raise _IRClientError(f"Generation failed: {e.detail}", e.status_code) from e
                     err = _api_error_message(data_out)
                     if not err:
                         break
@@ -1664,7 +1663,7 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
                     if mask_pil is not None and not use_marker and "mask" in err.lower():
                         use_marker = True
                         continue
-                    raise _IRClientError(f"ImageRouter: {err}", 502)
+                    raise _IRClientError(f"Generation failed: {err}", 502)
             else:
                 body: dict[str, Any] = {"model": mid, "prompt": info["positive"]}
                 if size:
@@ -1675,21 +1674,19 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
                 try:
                     data_out = _upstream_json(resp)
                 except HTTPException as e:
-                    raise _IRClientError(f"ImageRouter: {e.detail}", e.status_code) from e
+                    raise _IRClientError(f"Generation failed: {e.detail}", e.status_code) from e
                 err = _api_error_message(data_out)
                 if err:
-                    raise _IRClientError(f"ImageRouter: {err}", 502)
+                    raise _IRClientError(f"Generation failed: {err}", 502)
             for item in data_out.get("data", []) if isinstance(data_out, dict) else []:
                 pil = _item_to_pil(item)
                 if pil is None:
                     continue
                 if use_edits and init_pil is not None and _is_echo(init_pil, pil):
                     raise _IRClientError(
-                        f"Модель «{mid}» вернула исходное изображение без правки — "
-                        "она числится с входом-картинкой, но редактирование не выполняет. "
-                        "Выберите модель правки: google/nano-banana:free, "
-                        "openai/gpt-image-2:free, qwen/qwen-image, "
-                        "black-forest-labs/flux-kontext-dev.",
+                        f"The model '{mid}' returned the source image unedited — it is listed with an "
+                        "image input but does not perform editing. "
+                        "Please select an editing model.",
                         400,
                     )
                 if is_edit and zone_full is not None:
@@ -1738,7 +1735,7 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
                     )
                 )
         if not saved:
-            raise _IRClientError("ImageRouter: ответ не содержит изображений", 502)
+            raise _IRClientError("The generation service returned no images", 502)
     except Exception:
         ticker_stop.set()
         _inflight_dec(queue_id)
@@ -1787,13 +1784,13 @@ def _handle_upscale_generation(queue_id: str, payload: dict) -> dict:
     model_key = info.get("upscale_model_key")
     if not model_key:
         raise _IRClientError(
-            "ImageRouter: модель апскейла не выбрана или недоступна. "
-            "Администратор задаёт список моделей в Менеджере моделей → ImageRouter.",
+            "The upscaling model is not selected or unavailable. "
+            "Please contact your administrator.",
             400,
         )
     mid = model_key[len(IR_UPSCALE_KEY_PREFIX):]
     if not info.get("init_image"):
-        raise _IRClientError("ImageRouter: нет исходного изображения для апскейлинга", 400)
+        raise _IRClientError("No source image to upscale", 400)
     scale = float(info.get("upscale_scale") or 2)
     print(
         f"[imagerouter] upscale enqueue: model={mid} scale={scale} "
@@ -1805,14 +1802,14 @@ def _handle_upscale_generation(queue_id: str, payload: dict) -> dict:
     key = _load_key()
     if not key:
         raise _IRClientError(
-            "API-ключ ImageRouter не задан. Откройте Model Manager → «Добавить модели» → "
-            "ImageRouter и введите ключ (imagerouter.io/api-keys).",
+            "Generation service is not configured: no API key. "
+            "Please contact your administrator.",
             401,
         )
     if not _supports_image_input(mid):
         raise _IRClientError(
-            f"Модель «{mid}» не принимает изображение на вход и не годится для апскейлинга. "
-            "Администратору: снимите её с списка моделей апскейлинга.",
+            f"The model '{mid}' does not accept an image as input and cannot upscale. "
+            "Administrator: remove it from the upscaling model list.",
             400,
         )
 
@@ -1851,7 +1848,7 @@ def _handle_upscale_generation(queue_id: str, payload: dict) -> dict:
         while not ticker_stop.wait(PROGRESS_TICK):
             try:
                 events.dispatch(
-                    _progress_event(f"ImageRouter апскейл · {mid} · {run_state['run']}/{runs} · {int(time.time() - t0)} с")
+                    _progress_event(f"Upscaling · {mid} · {run_state['run']}/{runs} · {int(time.time() - t0)}s")
                 )
             except Exception:  # noqa: BLE001
                 break
@@ -1863,7 +1860,7 @@ def _handle_upscale_generation(queue_id: str, payload: dict) -> dict:
         try:
             init_pil = services.images.get_pil_image(info["init_image"])
         except Exception as e:  # noqa: BLE001
-            raise _IRClientError(f"ImageRouter: не удалось загрузить исходное изображение ({e})", 500) from e
+            raise _IRClientError(f"Failed to load source image ({e})", 500) from e
         # Режим из селектора вкладки первичнее слайдерного scale: у моделей
         # с явными размерами берём точный размер режима, у факторных — их
         # честный множитель (-2x игнорирует больший scale).
@@ -1894,10 +1891,10 @@ def _handle_upscale_generation(queue_id: str, payload: dict) -> dict:
             try:
                 data_out = _upstream_json(resp)
             except HTTPException as e:
-                raise _IRClientError(f"ImageRouter: {e.detail}", e.status_code) from e
+                raise _IRClientError(f"Generation failed: {e.detail}", e.status_code) from e
             err = _api_error_message(data_out)
             if err:
-                raise _IRClientError(f"ImageRouter: {err}", 502)
+                raise _IRClientError(f"Generation failed: {err}", 502)
             for item in data_out.get("data", []) if isinstance(data_out, dict) else []:
                 pil = _item_to_pil(item)
                 if pil is None:
@@ -1937,7 +1934,7 @@ def _handle_upscale_generation(queue_id: str, payload: dict) -> dict:
                     )
                 )
         if not saved:
-            raise _IRClientError("ImageRouter: ответ не содержит изображений", 502)
+            raise _IRClientError("The generation service returned no images", 502)
     except Exception:
         ticker_stop.set()
         _inflight_dec(queue_id)
@@ -2044,7 +2041,7 @@ class ImageRouterCanvasMiddleware:
                 else:  # DELETE
                     await self._send_json(
                         send,
-                        {"detail": "Модели ImageRouter предоставляются через API и не удаляются локально."},
+                        {"detail": "Cloud models are provided via API and cannot be deleted locally."},
                         status=400,
                     )
                     return
@@ -2063,7 +2060,7 @@ class ImageRouterCanvasMiddleware:
                 else:  # DELETE
                     await self._send_json(
                         send,
-                        {"detail": "Модели ImageRouter предоставляются через API и не удаляются локально."},
+                        {"detail": "Cloud models are provided via API and cannot be deleted locally."},
                         status=400,
                     )
                     return

@@ -605,7 +605,7 @@ JS_REF_METHOD_OLD = (
     'children:n("controlLayers.ipAdapterMethod.ipAdapterMethod")})}),'
     'o.jsx(lt,{value:r,options:i,onChange:a})]})});ET.displayName="IPAdapterMethod";'
 )
-JS_REF_METHOD_NEW = (
+JS_REF_METHOD_NEW_RU = (
     'const ET=u.memo(({method:e,onChange:t})=>{'
     'const i=u.useMemo(()=>['
     '{label:"Основной",value:"main"},'
@@ -622,6 +622,20 @@ JS_REF_METHOD_NEW = (
     'return o.jsxs(te,{children:['
     'o.jsx(He,{feature:"ipAdapterMethod",children:o.jsx(se,{m:0,children:"Тип референса"})}),'
     'o.jsx(lt,{value:r,options:i,onChange:a})]})});ET.displayName="IPAdapterMethod";'
+)
+# 21.09 (вечер): интерфейс на английском, подписи типов — тоже
+JS_REF_METHOD_NEW = (
+    JS_REF_METHOD_NEW_RU
+    .replace('label:"Основной"', 'label:"Main"')
+    .replace('label:"Дополнительный"', 'label:"Additional"')
+    .replace('label:"3D-ракурс"', 'label:"3D View"')
+    .replace('label:"Окружение"', 'label:"Environment"')
+    .replace('label:"Люди"', 'label:"People"')
+    .replace('label:"Атмосфера"', 'label:"Atmosphere"')
+    .replace('label:"Предметы интерьера"', 'label:"Interior Items"')
+    .replace('label:"Детали фасада"', 'label:"Facade Details"')
+    .replace('label:"Генплан"', 'label:"Master Plan"')
+    .replace('children:"Тип референса"', 'children:"Reference Type"')
 )
 
 # App-бандл: RefImageSettingsContent — убрать CLIP Vision Model (ViT-H/G/L)
@@ -673,7 +687,17 @@ def patch_reference_types() -> bool:
         sys.exit(1)
     f = targets[0]
     s = f.read_text(encoding="utf-8")
-    if 'value:"view3d"' not in s:
+    if JS_REF_METHOD_NEW in s:
+        pass  # селектор уже английский
+    elif JS_REF_METHOD_NEW_RU in s:  # миграция русской версии (21.09 день)
+        s = s.replace(JS_REF_METHOD_NEW_RU, JS_REF_METHOD_NEW, 1)
+        bak = f.with_suffix(f.suffix + ".imagerouter-bak")
+        if not bak.exists():
+            shutil.copy2(f, bak)
+        f.write_text(s, encoding="utf-8")
+        changed = True
+        print(f"Селектор «Тип референса» переведён на английский: {f.name}")
+    elif 'value:"view3d"' not in s:
         for old, new, title in (
             (JS_REF_METHOD_OLD, JS_REF_METHOD_NEW, "селектор «Тип референса»"),
             (JS_REF_CLIPVISION_OLD, JS_REF_CLIPVISION_NEW, "CLIP Vision Model"),
@@ -691,7 +715,8 @@ def patch_reference_types() -> bool:
         changed = True
         print(f"Карточка референса: «Тип референса» вместо Mode, без CLIP Vision/Begin-End: {f.name}")
     else:
-        print("Карточка референса уже с типами, пропуск")
+        print("ОШИБКА: селектор типов в неизвестном состоянии (частичная правка?)")
+        sys.exit(1)
 
     # --- index-бандл: дефолт типа + zod-enum method ---
     idx_targets = [
@@ -989,7 +1014,9 @@ JS_UP_SLIDER_NEW_V1 = (
 # v2 (09.09, «модели как в менеджере»): + поля Ширина/Высота/Качество по
 # текущему изображению вкладки; качество — размер файла оригинала (HEAD по
 # image_url, ImageRecord не несёт file_size), формат «1 234 К» (ru-RU).
-JS_UP_SLIDER_NEW = (
+# 21.09 (вечер): подписи переведены на английский (v3) — интерфейс
+# пользователя на английском; v2-RU оставлена как источник миграции.
+JS_UP_SLIDER_V2_RU = (
     'Yae=u.memo(()=>{const e=K(),n=T(Pve),img=T(qE),mdl=T(S$),'
     '[opts,setOpts]=u.useState(null),'
     '[fmt,setFmt]=u.useState(()=>{try{return localStorage.getItem("devbimUpscaleFormat")||"png"}'
@@ -1045,6 +1072,16 @@ JS_UP_SLIDER_NEW = (
     'children:formats.map(f=>o.jsx("option",{value:f,children:String(f).toUpperCase()},f))})]})'
     ']})});Yae.displayName="UpscaleScaleSlider";'
 )
+# v3: английские подписи селекторов и полей
+JS_UP_SLIDER_NEW = (
+    JS_UP_SLIDER_V2_RU
+    .replace('children:"Ширина"', 'children:"Width"')
+    .replace('children:"Высота"', 'children:"Height"')
+    .replace('children:"Качество"', 'children:"Quality"')
+    .replace('children:"Режим увеличения"', 'children:"Upscale Mode"')
+    .replace('children:"Формат изображения"', 'children:"Output Format"')
+    .replace('toLocaleString("ru-RU")+" К"', 'toLocaleString("en-US")+" KB"')
+)
 
 # Билдер графа вкладки: spandrel-узел несёт выбор селекторов
 JS_UP_GRAPH_OLD = (
@@ -1067,10 +1104,10 @@ JS_UPSCALE_PANEL_PATCHES = (
 
 def patch_upscale_cloud_panel() -> bool:
     """Панель вкладки Upscaling под облачные модели: без локальных пунктов,
-    селекторы режима и формата из /upscale-options + поля Ширина/Высота/
-    Качество текущего изображения (v2). Идемпотентно: бандл с v1
-    (маркер __devbimUpscaleMode без __devbimUpscaleImgInfo) перепатчивается
-    только в части селекторов, свежий — всеми четырьмя заменами."""
+    селекторы режима и формата из /upscale-options + поля Width/Height/
+    Quality текущего изображения (v2; v3 — английские подписи, 21.09).
+    Идемпотентно: бандл с v1 или v2-RU перепатчивается в v3, свежий —
+    всеми четырьмя заменами."""
     targets = [
         f for f in DIST.glob("assets/*.js")
         if 'displayName="ParametersPanelUpscale"' in f.read_text(encoding="utf-8")
@@ -1080,9 +1117,17 @@ def patch_upscale_cloud_panel() -> bool:
         sys.exit(1)
     f = targets[0]
     s = f.read_text(encoding="utf-8")
-    if "__devbimUpscaleImgInfo" in s:
-        print("Панель Upscaling уже с полями изображения (v2), пропуск")
+    if JS_UP_SLIDER_NEW in s:
+        print("Панель Upscaling уже адаптирована (v3, английские подписи), пропуск")
         return False
+    bak = f.with_suffix(f.suffix + ".imagerouter-bak")
+    if JS_UP_SLIDER_V2_RU in s:  # миграция v2 (русские подписи) -> v3 (EN)
+        s = s.replace(JS_UP_SLIDER_V2_RU, JS_UP_SLIDER_NEW, 1)
+        if not bak.exists():
+            shutil.copy2(f, bak)
+        f.write_text(s, encoding="utf-8")
+        print(f"Подписи панели Upscaling переведены на английский (v3): {f.name} (бэкап: {bak.name})")
+        return True
     if "window.__devbimUpscaleMode" in s:
         # v1 применён: остальные три замены уже в бандле, допатчиваем селекторы
         cnt = s.count(JS_UP_SLIDER_NEW_V1)
@@ -1222,6 +1267,8 @@ def patch_prompt_enhance_button(bundle: Path | None = None) -> bool:
 # (E1 + id + H0). Гейты: модель ImageRouter с пометкой «редактирование»
 # (иначе не ломаем txt2img), иначе — штатное поведение без изменений.
 # ----------------------------------------------------------------------------
+# 21.09 (вечер): описание моделей на сервере стало английским — гейт ищет
+# слово "editing" (совместно с _ir_fake_config в imagerouter_router.py).
 JS_GEN_FALLBACK = (
     'const __devbimGenFallback=async function(g){try{'
     'var st=g.getState();'
@@ -1239,7 +1286,7 @@ JS_GEN_FALLBACK = (
     'if(!mk||mk.indexOf("imagerouter/")!==0)return;'
     'var cfg=await fetch("/api/v2/models/i/"+encodeURIComponent(mk))'
     '.then(function(r){return r.json()}).catch(function(){return null});'
-    'if(!cfg||!cfg.description||cfg.description.indexOf("редактирование")<0)return;'
+    'if(!cfg||!cfg.description||cfg.description.indexOf("editing")<0)return;'
     'var dtos=await fetch("/api/v1/images/images_by_names",{method:"POST",'
     'headers:{"Content-Type":"application/json"},'
     'body:JSON.stringify({image_names:[name]})})'
@@ -1248,6 +1295,10 @@ JS_GEN_FALLBACK = (
     'if(!dto||!dto.image_name)return;'
     'var r=E1(g.getState());r.image=id(dto);g.dispatch(H0({overrides:{config:r}}))'
     '}catch(err){}};'
+)
+# V2 с русским гейтом «редактирование» (21.09 день) — источник для миграции
+JS_GEN_FALLBACK_V2_RU = (
+    JS_GEN_FALLBACK.replace('cfg.description.indexOf("editing")<0', 'cfg.description.indexOf("редактирование")<0')
 )
 # V1 — сломанная версия (GET /api/v1/images/{name} в 6.2 отдаёт 404); для миграции
 JS_GEN_FALLBACK_V1 = (
@@ -1299,6 +1350,13 @@ def patch_generate_viewer_fallback(bundle: Path | None = None) -> bool:
         print("Generate-фолбэк на вьювер уже установлен, пропуск")
         return False
     bak = bundle.with_suffix(bundle.suffix + ".imagerouter-bak")
+    if JS_GEN_FALLBACK_V2_RU in s:  # миграция русского гейта -> "editing"
+        s = s.replace(JS_GEN_FALLBACK_V2_RU, JS_GEN_FALLBACK, 1)
+        if not bak.exists():
+            shutil.copy2(bundle, bak)
+        bundle.write_text(s, encoding="utf-8")
+        print(f"Generate-фолбэк мигрирован на английский гейт editing: {bundle.name} (бэкап: {bak.name})")
+        return True
     if JS_GEN_FALLBACK_V1 in s:  # миграция сломанной V1 (DTO по 404-пути)
         s = s.replace(JS_GEN_FALLBACK_V1, JS_GEN_FALLBACK, 1)
         if not bak.exists():
@@ -1579,7 +1637,8 @@ JS_RAIL_MODELS_OLD = (
 )
 JS_RAIL_MODELS_NEW = ''
 
-# Меню (шестерёнка): после пункта «Настройки» — пункт «Менеджер моделей»
+# Меню (шестерёнка): после пункта «Настройки» — пункт «Model Manager»
+# (английский интерфейс, 21.09; ранее «Менеджер моделей»)
 JS_MENU_SETTINGS_OLD = (
     'o.jsx(YTe,{children:o.jsx(ve,{as:"button",icon:o.jsx(nje,{}),'
     'children:e("common.settingsLabel")})})]})'
@@ -1589,13 +1648,13 @@ JS_MENU_SETTINGS_NEW = (
     'children:e("common.settingsLabel")})}),'
     'o.jsx(ve,{as:"button",icon:o.jsx(RA,{}),'
     'onClick:()=>window.__devbimOpenModels&&window.__devbimOpenModels(),'
-    'children:"Менеджер моделей"})]})'
+    'children:"Model Manager"})]})'
 )
 
 
 def patch_admin_gate() -> bool:
     """Прячет вкладку «Модели» из рейки и добавляет пункт
-    «Менеджер моделей» в меню (группа «Настройки»)."""
+    «Model Manager» в меню (группа «Настройки»)."""
     targets = [
         f for f in DIST.glob("assets/*.js")
         if 'displayName="VerticalNavBar"' in f.read_text(encoding="utf-8")
@@ -1605,8 +1664,17 @@ def patch_admin_gate() -> bool:
         sys.exit(1)
     f = targets[0]
     s = f.read_text(encoding="utf-8")
-    if "Менеджер моделей" in s and JS_RAIL_MODELS_OLD not in s:
-        print("Админский перенос уже настроен (пункт «Менеджер моделей» на месте), пропуск")
+    # миграция русской подписи пункта меню (21.09 день) -> английская
+    if 'children:"Менеджер моделей"' in s:
+        s = s.replace('children:"Менеджер моделей"', 'children:"Model Manager"', 1)
+        bak = f.with_suffix(f.suffix + ".imagerouter-bak")
+        if not bak.exists():
+            shutil.copy2(f, bak)
+        f.write_text(s, encoding="utf-8")
+        print(f"Пункт меню переведён на английский (Model Manager): {f.name}")
+        return True
+    if "Model Manager" in s and JS_RAIL_MODELS_OLD not in s:
+        print("Админский перенос уже настроен (пункт «Model Manager» на месте), пропуск")
         return False
     for old, new, title in (
         (JS_RAIL_MODELS_OLD, JS_RAIL_MODELS_NEW, "вкладка Модели в рейке"),

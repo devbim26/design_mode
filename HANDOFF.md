@@ -2091,6 +2091,55 @@ invokeai==6.2.0` их нужно запускать повторно в поря
       консоли «Problem rehydrating/persisting state» — redux-persist,
       существовали ДО патча (логи .playwright-mcp от 18-20.09).
 
+48. **Английский интерфейс + сокрытие провайдера** (21.09, вечер; запрос
+    пользователя: «в интерфейсе не пиши ImageRouter — это секрет, куда я
+    отправляю; можно нейтрально "отправить на генерацию"; интерфейс на
+    английском, локализация — отдельным этапом»). Изменения:
+    - **Роутер** (`imagerouter_router.py`): описания фейк-моделей на
+      английском без провайдера — main: "Cloud image generation · ✏️
+      editing · formats PNG, JPEG, WebP · up to 3K (…) · custom size",
+      ip-adapter-фейк переименован «ImageRouter (референс)» → «Reference»,
+      tile-ControlNet → «Tile ControlNet», апскейл → "Cloud image
+      upscaling". ГРАБЛЯ: слово-гейт Generate-фолбэка теперь "editing"
+      (было «редактирование») — меняется ОДНОВРЕМЕННО в описании (сервер) и
+      в JS-гейте (миграция ниже); рассинхрон ломает фолбэк молча.
+      Тикер прогресса: "Generating · модель · i/N · Xs" / "Upscaling · …"
+      (было «ImageRouter · …»). ВСЕ пользовательские _IRClientError —
+      английские нейтральные ("Generation failed: …", "No generation
+      model selected", "Failed to load reference image", ключ не задан →
+      "Generation service is not configured… contact your administrator");
+      DELETE моделей: "Cloud models are provided via API…". Промт-примечания
+      (маркер маски, блок референсов IR_REF_TYPES) — ОСТАЛИСЬ русскими:
+      это инструкции МОДЕЛИ, не интерфейс (язык промтов на русском
+      проверен живыми генерациями).
+    - **Бандлы** (setup_imagerouter.py, миграции задеплоенного состояния
+      идемпотентны повторным setup): селектор типов → "Reference Type" с
+      Main/Additional/3D View/Environment/People/Atmosphere/Interior
+      Items/Facade Details/Master Plan (JS_REF_METHOD_NEW_RU — источник
+      миграции); гейт фолбэка → "editing" (JS_GEN_FALLBACK_V2_RU);
+      пункт меню → "Model Manager" (children:"Менеджер моделей" → EN);
+      панель Upscaling v3 — Width/Height/Quality/Upscale Mode/Output
+      Format (JS_UP_SLIDER_V2_RU → v3, КБ-формат en-US "KB").
+    - **Виджеты**: devbim-admin.js — диалог пароля по-английски
+      (Administrator sign-in / Password / Cancel / Sign in / Checking…;
+      ответ сервера admin-auth 401 → "Wrong password");
+      prompt_enhancer.py — ошибки нейтральные английские (пустой промт →
+      "Enter a prompt or attach a reference image").
+    - **НЕ тронуто (сознательно)**: админская страница Менеджера моделей
+      imagerouter.html — русский + брендинг ImageRouter (пароль админа,
+      это инструмент владельца); 3D/IFC/PDF-вьюверы (там свои тексты,
+      отдельная задача); метаданные картинок (ключ imagerouter_model —
+      техническая диагностика); лог сервера [imagerouter].
+    - Тесты: test_panel_layout/test_main_models — EN-ассерты (editing,
+      без ImageRouter в описании); test_upscale_cloud — имя Tile
+      ControlNet; test_prompt_enhancer — гейт editing; test_reference_types
+      — следует константам. Живая проверка в браузере: карточка
+      Reference Type/Main/Weight, меню Settings → Model Manager, вкладка
+      Upscaling (Upscale Mode/Output Format/Width/Height/Quality,
+      описания "Cloud image upscaling"), описание модели в аккордеоне
+      Generation — всё английское, упоминаний провайдера в UI нет.
+      Скриншот docs/reference-type-en-card.png. После деплоя — F5.
+
 
 ```powershell
 cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"

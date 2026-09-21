@@ -75,14 +75,14 @@ def upscale_batch(scale=4, creativity=0.0, structure=0.0, board="b1", init="init
                     },
                     "controlnet_1": {
                         "type": "controlnet",
-                        "control_model": {"key": "imagerouter/tile-controlnet", "name": "Tile ControlNet (ImageRouter)"},
+                        "control_model": {"key": "imagerouter/tile-controlnet", "name": "Tile ControlNet"},
                         "control_weight": control_weight,
                     },
                     # второй controlnet-узел (двухстадийный контроль) — вес
                     # слабее, Structure берём из ПЕРВОГО
                     "controlnet_2": {
                         "type": "controlnet",
-                        "control_model": {"key": "imagerouter/tile-controlnet", "name": "Tile ControlNet (ImageRouter)"},
+                        "control_model": {"key": "imagerouter/tile-controlnet", "name": "Tile ControlNet"},
                         "control_weight": 0.21375,
                     },
                     "sdxl_model_loader": {

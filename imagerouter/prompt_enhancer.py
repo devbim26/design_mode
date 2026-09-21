@@ -122,7 +122,7 @@ def call_vlm(
         key = key or _load_key()
         model = model or _enhancer_model()
     if not key:
-        raise ValueError("API-ключ ImageRouter не задан (.env: IMAGEROUTER_API_KEY)")
+        raise ValueError("Generation service is not configured: no API key. Please contact your administrator.")
     resp = requests.post(
         chat_url,
         headers={"Authorization": f"Bearer {key}"},
@@ -141,20 +141,18 @@ def call_vlm(
                 msg = err.get("message")
             elif isinstance(err, str):
                 msg = err
-        raise ValueError(f"ImageRouter: {msg or f'HTTP {resp.status_code}'}")
+        raise ValueError(f"Generation service error: {msg or f'HTTP {resp.status_code}'}")
     if isinstance(data, dict):
         err = data.get("error")
         if isinstance(err, dict) and err.get("message"):
-            raise ValueError(f"ImageRouter: {err['message']}")
+            raise ValueError(f"Generation service error: {err['message']}")
     choices = data.get("choices") if isinstance(data, dict) else None
     content = ""
     if choices:
         content = ((choices[0].get("message") or {}).get("content")) or ""
     text = sanitize(content)
     if not text:
-        raise ValueError(
-            "VLM вернула пустой ответ (попробуйте другую модель в PROMPT_ENHANCER_MODEL)"
-        )
+        raise ValueError("The assistant model returned an empty response. Please try again.")
     return text
 
 
@@ -182,7 +180,7 @@ class EnhancePromptInvocation(BaseInvocation):
             for f in (self.images or [])[:MAX_IMAGES]
         ]
         if not (self.prompt or "").strip() and not urls:
-            raise ValueError("Введите промт или приложите референсное изображение")
+            raise ValueError("Enter a prompt or attach a reference image")
         return StringOutput(value=call_vlm(SYSTEM_ENHANCE, self.prompt, urls))
 
 

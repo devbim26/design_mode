@@ -112,8 +112,8 @@ def test_panel_layout_on_fake_fresh_bundle():
 
 
 def test_description_enrichment():
-    """Описание фейковой модели: слово «редактирование» (гейт фолбэка),
-    форматы, дайджест размеров; без цены."""
+    """Описание фейковой модели: слово "editing" (гейт фолбэка, 21.09),
+    форматы, дайджест размеров; английский текст, без цены и провайдера."""
     sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "imagerouter"))
     import imagerouter_router as ir  # noqa: E402
 
@@ -126,32 +126,33 @@ def test_description_enrichment():
     }
     cfg = ir._ir_fake_config(m)
     d = cfg["description"]
-    assert "Облачная генерация изображений" in d, d
-    assert "редактирование" in d, "гейт Generate-фолбэка опирается на слово «редактирование»"
-    assert "PNG, JPEG, WebP" in d, d
-    assert "до 3K (3136×1344)" in d, d
-    assert "произвольный размер" in d, d
-    assert "$" not in d and "цена" not in d, "цену пользователю не показываем (решение 08.09)"
+    assert "Cloud image generation" in d, d
+    assert "editing" in d, "гейт Generate-фолбэка опирается на слово editing"
+    assert "formats PNG, JPEG, WebP" in d, d
+    assert "up to 3K (3136×1344)" in d, d
+    assert "custom size" in d, d
+    assert "ImageRouter" not in d and "imagerouter" not in d, "провайдера не называем (21.09)"
+    assert "$" not in d, "цену пользователю не показываем (решение 08.09)"
 
-    # без image-входа — без «редактирования»; sizes только fixed
+    # без image-входа — без editing; sizes только fixed
     m2 = {
         "id": "test/pure-txt",
         "architecture": {"input_modalities": ["text"], "output_modalities": ["image"]},
         "parameters": {"size": ["512x512"]},
     }
     d2 = ir._ir_fake_config(m2)["description"]
-    assert "редактирование" not in d2, d2
-    assert "до 1K (512×512)" in d2, d2
-    assert "произвольный" not in d2, d2
+    assert "editing" not in d2, d2
+    assert "up to 1K (512×512)" in d2, d2
+    assert "custom size" not in d2, d2
 
     # sizes пустые/кривые — дайджест пустой, описание не падает
     m3 = {"id": "test/none", "architecture": {}, "parameters": {"size": ["auto", "weird"]}}
     d3 = ir._ir_fake_config(m3)["description"]
-    assert "до" not in d3 and "произвольный" not in d3, d3
+    assert "up to" not in d3 and "custom size" not in d3, d3
     # 5K+ округляется честно (nano-banana-pro 5056 -> 5K)
     m4 = {"id": "test/big", "architecture": {}, "parameters": {"size": ["5056x3392"]}}
-    assert "до 5K (5056×3392)" in ir._ir_fake_config(m4)["description"]
-    print("OK: описание модели (возможности/форматы/размер, «редактирование» сохранено)")
+    assert "up to 5K (5056×3392)" in ir._ir_fake_config(m4)["description"]
+    print("OK: описание модели (EN, editing-гейт, форматы/размер, без провайдера)")
 
 
 if __name__ == "__main__":
