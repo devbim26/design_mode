@@ -340,3 +340,141 @@ class EditImageInvocation(BaseInvocation):
         if not fields:
             raise ValueError("Generation failed: the generation service returned no images")
         return ImageCollectionOutput(collection=fields)
+
+
+@invocation(
+    "devbim_vlm",
+    title="Ask AI",
+    tags=["cloud", "vlm", "devbim"],
+    category="cloud",
+    version="1.0.0",
+    use_cache=False,
+)
+class AskAIInvocation(BaseInvocation):
+    """Asks a vision-language model about up to 4 images."""
+
+    images: list[ImageField] = InputField(default=[], description="Images to analyze (up to 4)")
+    question: str = InputField(default="", description="Question about the images")
+
+    def invoke(self, context: InvocationContext) -> StringOutput:
+        key, ir = _api()
+        # переиспользуем подготовку картинок Prompt Enhancer (JPEG 1024/q85)
+        from invokeai.app.invocations.devbim_prompt_enhancer import prepare_image
+        picked = (self.images or [])[:MAX_VLM_IMAGES]
+        q = (self.question or "").strip()
+        if not q and not picked:
+            raise ValueError("Attach an image or enter a question")
+        urls = [prepare_image(context.images.get_pil(f.image_name)) for f in picked]
+        parts: list[dict] = [{"type": "text", "text": q or "Describe these images in detail."}]
+        parts += [{"type": "image_url", "image_url": {"url": u}} for u in urls]
+        body = {
+            "model": ir._enhancer_model(),
+            "messages": [
+                {"role": "system", "content": SYSTEM_ASK},
+                {"role": "user", "content": parts},
+            ],
+            "max_tokens": MAX_TOKENS,
+            "temperature": TEMPERATURE,
+        }
+        print(f"[cloud-node] vlm: model={body['model']} images={len(urls)}", flush=True)
+        resp = requests.post(
+            ir.CHAT_COMPLETIONS_URL,
+            headers={"Authorization": f"Bearer {key}"},
+            json=body,
+            timeout=API_TIMEOUT_S,
+        )
+        try:
+            data = resp.json()
+        except ValueError:
+            data = None
+        err = data.get("error") if isinstance(data, dict) else None
+        if resp.status_code >= 400 or (isinstance(err, dict) and err.get("message")):
+            msg = err.get("message") if isinstance(err, dict) else (
+                err if isinstance(err, str) else None)
+            raise ValueError(f"Generation failed: {msg or f'HTTP {resp.status_code}'}")
+        choices = data.get("choices") if isinstance(data, dict) else None
+        content = ""
+        if choices:
+            content = ((choices[0].get("message") or {}).get("content")) or ""
+        # ответ произвольный — без санитайзинга промта, только пробелы
+        text = (content or "").strip()
+        if not text:
+            raise ValueError("The assistant model returned an empty response. Please try again.")
+        return StringOutput(value=text)
+
+
+_UPSCALE_FACTOR_RE = re.compile(r"^(\d+(?:\.\d+)?)x$", re.IGNORECASE)
+_UPSCALE_SIZE_RE = re.compile(r"^(\d{2,4})x(\d{2,4})$", re.IGNORECASE)
+
+
+def _upscale_request(mid: str, mode: str, src_pil: Any, ir: Any) -> dict:
+    """Тело edits-запроса апскейла. Режим «2x»/«4x» — множитель, размер через
+    _pick_upscale_size роутера (явные размеры модели, сетка 64, кап 2048);
+    «1536x1024» — явный размер (сетка 64, 128..2048). Промпт серверный
+    (_upscale_prompt) — у ноды поля промпта нет. Проверка эха не применяется
+    (п.27: честный апскейл после нормализации размера почти совпадает со входом)."""
+    mode = (mode or "").strip()
+    m = _UPSCALE_FACTOR_RE.match(mode)
+    scale = None
+    size = None
+    size_label = None
+    if m:
+        scale = float(m.group(1))
+        size = ir._pick_upscale_size(mid, src_pil.width, src_pil.height, scale)
+    else:
+        s = _UPSCALE_SIZE_RE.match(mode)
+        if not s:
+            raise ValueError(
+                f"Invalid upscale mode '{mode}'. Use a multiplier like '2x' or '4x', "
+                "or an explicit size like '1536x1024'."
+            )
+        w, h = _snap_side(int(s.group(1))), _snap_side(int(s.group(2)))
+        size, size_label = f"{w}x{h}", f"{w}×{h}"
+    prompt = ir._upscale_prompt(None if size_label else scale, None, None, size_label)
+    body: dict = {
+        "model": mid,
+        "prompt": prompt,
+        "image": [ir._pil_to_durl(src_pil)],
+        "output_format": "png",
+    }
+    if size:
+        body["size"] = size
+    return body
+
+
+@invocation(
+    "devbim_upscale",
+    title="Upscale Image",
+    tags=["cloud", "upscale", "devbim"],
+    category="cloud",
+    version="1.0.0",
+    use_cache=False,
+)
+class UpscaleImageInvocation(BaseInvocation):
+    """Upscales an image with a cloud model: '2x', '4x' or an explicit size like '1536x1024'."""
+
+    image: ImageField = InputField(description="Image to upscale")
+    model: UpscaleModel = InputField(default=UPSCALE_MODELS[0], description="Cloud upscaling model")
+    mode: str = InputField(
+        default="2x",
+        description="Upscale mode: a multiplier ('2x', '4x') or a size ('1536x1024')",
+    )
+
+    def invoke(self, context: InvocationContext) -> ImageOutput:
+        key, ir = _api()
+        src = context.images.get_pil(self.image.image_name)
+        body = _upscale_request(self.model, self.mode, src, ir)
+        print(f"[cloud-node] upscale: model={self.model} mode={self.mode}", flush=True)
+        item = _post_images(ir.EDITS_URL, body, key)[0]
+        pil = ir._item_to_pil(item)
+        if pil is None:
+            raise ValueError("Generation failed: the generation service returned no images")
+        dto = _save(context, pil, {
+            "generation_mode": "cloud-upscale",
+            "cloud_model": self.model,
+            "upscale_mode": self.mode,
+            "source_image": self.image.image_name,
+        })
+        return ImageOutput(
+            image=ImageField(image_name=dto.image_name), width=dto.width, height=dto.height
+        )

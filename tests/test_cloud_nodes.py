@@ -333,6 +333,98 @@ def test_generate_node_fail_en():
     print("OK: ошибка апстрима — ValueError EN (тост очереди)")
 
 
+def test_vlm_node():
+    mod = nodes()
+    fake_ir = _fake_ir()
+    saved = []
+    resp = SimpleNamespace(status_code=200, json=lambda: {
+        "choices": [{"message": {"content": "  It is a brick school.  "}}]})
+    mod_requests, saved_api = mod.requests, mod._api
+    mod.requests, mod._api = _Capture([resp]), (lambda: ("KEY", fake_ir))
+    try:
+        node = mod.AskAIInvocation(
+            images=[{"image_name": f"i{k}.png"} for k in range(6)],
+            question="what is it?")
+        out = node.invoke(_fake_context(saved))
+        assert out.value == "It is a brick school."          # только strip, без санитайзинга
+        body = mod.requests.calls[-1]["json"]
+        assert body["model"] == "zai/glm-5.3-flash"
+        assert body["max_tokens"] == 1500
+        parts = body["messages"][1]["content"]
+        assert parts[0] == {"type": "text", "text": "what is it?"}
+        assert len([p for p in parts if p["type"] == "image_url"]) == 4  # кап 4, срезаны молча
+    finally:
+        mod.requests, mod._api = mod_requests, saved_api
+    print("OK: devbim_vlm — chat/completions, кап 4, ответ без санитайзинга")
+
+
+def test_vlm_node_empty():
+    mod = nodes()
+    node = mod.AskAIInvocation(images=[], question="  ")
+    try:
+        node.invoke(_fake_context([]))
+        raise AssertionError("должен упасть")
+    except ValueError as e:
+        assert str(e) == "Attach an image or enter a question", str(e)
+    print("OK: devbim_vlm — пустые входы")
+
+
+def test_vlm_node_default_question():
+    mod = nodes()
+    fake_ir = _fake_ir()
+    resp = SimpleNamespace(status_code=200, json=lambda: {
+        "choices": [{"message": {"content": "desc"}}]})
+    mod_requests, saved_api = mod.requests, mod._api
+    mod.requests, mod._api = _Capture([resp]), (lambda: ("KEY", fake_ir))
+    try:
+        node = mod.AskAIInvocation(images=[{"image_name": "i.png"}], question="")
+        node.invoke(_fake_context([]))
+        parts = mod.requests.calls[-1]["json"]["messages"][1]["content"]
+        assert parts[0]["text"] == "Describe these images in detail."
+    finally:
+        mod.requests, mod._api = mod_requests, saved_api
+    print("OK: devbim_vlm — дефолтный вопрос без текста")
+
+
+def test_upscale_node_modes():
+    mod = nodes()
+    fake_ir = _fake_ir()
+    saved = []
+    saved_requests, saved_api = mod.requests, mod._api
+
+    def run(mode):
+        resp = SimpleNamespace(status_code=200, json=lambda: {"data": [{"ok": True}]})
+        cap = _Capture([resp])
+        mod.requests = cap
+        node = mod.UpscaleImageInvocation(
+            image={"image_name": "src.png"}, model=mod.UPSCALE_MODELS[0], mode=mode)
+        out = node.invoke(_fake_context(saved))
+        return out, cap.calls[-1]["json"]
+
+    mod._api = lambda: ("KEY", fake_ir)
+    try:
+        out, body = run("2x")                     # исходник 500x333 -> 2x -> 1000x666 -> snap64
+        assert body["size"] == "1024x640", body["size"]
+        assert "2x higher resolution" in body["prompt"]
+        assert body["image"][0].startswith("data:image/png")
+        assert body["output_format"] == "png"
+        assert out.image.image_name == saved[-1][0].image_name
+        assert (out.width, out.height) == (8, 8)
+
+        _, body = run("1536x1024")                # явный размер
+        assert body["size"] == "1536x1024"
+        assert "1536×1024 resolution" in body["prompt"]
+
+        try:
+            run("x3")
+            raise AssertionError("должен упасть")
+        except ValueError as e:
+            assert str(e).startswith("Invalid upscale mode 'x3'"), str(e)
+    finally:
+        mod.requests, mod._api = saved_requests, saved_api
+    print("OK: devbim_upscale — режимы 2x/WxH, серверный промпт, EN-ошибка режима")
+
+
 if __name__ == "__main__":
     test_model_choices_from_admin_file()
     test_model_choices_fallbacks()
@@ -345,3 +437,7 @@ if __name__ == "__main__":
     test_edit_node()
     test_edit_node_explicit_size_no_refs()
     test_generate_node_fail_en()
+    test_vlm_node()
+    test_vlm_node_empty()
+    test_vlm_node_default_question()
+    test_upscale_node_modes()
