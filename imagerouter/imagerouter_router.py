@@ -206,6 +206,16 @@ DEFAULT_UPSCALE_MODELS = [
     "csslc/ccsr-2x",
 ]
 
+# Дефолт основных моделей для облачных нод Workflows
+# (devbim_cloud_nodes.py): файла выбора админа нет — дропдауны нод получают
+# этот список (для Canvas/Upscaling действует СВОЯ логика: нет файла —
+# весь каталог). Проверенные генерация+правка модели.
+DEFAULT_MAIN_MODELS = [
+    "google/nano-banana-2",
+    "openai/gpt-image-2",
+    "qwen/qwen-image",
+]
+
 
 def _upscale_store_path() -> Path:
     return Path(get_config().root_path) / "data" / "imagerouter_upscale.json"

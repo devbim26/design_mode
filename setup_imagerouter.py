@@ -83,6 +83,9 @@ MODEL_INFO_NAME = "devbim-model-info.js"
 PE_SRC = SRC / "prompt_enhancer.py"
 PE_DST = SP / "invokeai" / "app" / "invocations" / "devbim_prompt_enhancer.py"
 
+CN_SRC = SRC / "devbim_cloud_nodes.py"
+CN_DST = SP / "invokeai" / "app" / "invocations" / "devbim_cloud_nodes.py"
+
 # Якорь тот же, что у setup_ifcviewer.py (JS_APPCONTENT_ANCHOR): вставка
 # префиксом, якорь сохраняется для IFC-патча при любом порядке запуска.
 JS_CANVAS_BRIDGE_ANCHOR = "const cue=u.memo("
@@ -1179,6 +1182,21 @@ def deploy_prompt_enhancer() -> bool:
     return True
 
 
+def deploy_cloud_nodes() -> bool:
+    """Копирует модуль облачных нод Workflows в пакет invokeai (паттерн
+    Prompt Enhancer: пакет подхватывает новые *.py сам)."""
+    if not CN_SRC.exists():
+        print("ОШИБКА: нет источника", CN_SRC)
+        sys.exit(1)
+    if CN_DST.exists() and CN_DST.read_text(encoding="utf-8") == CN_SRC.read_text(encoding="utf-8"):
+        print("Модуль облачных нод уже развернут, пропуск")
+        return False
+    CN_DST.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(CN_SRC, CN_DST)
+    print("Модуль облачных нод развернут:", CN_DST)
+    return True
+
+
 # Кнопка Prompt Enhance V1 (06.09): голубая кнопка ✨ 56×40px в слоте 60px
 # справа от жёлтой Generate. Оставлена для миграции уже пропатченных бандлов.
 # Je — стор-хук (как у штатной кнопки расширения), ie(ci.$state) — стор
@@ -1769,7 +1787,7 @@ def patch_index_html() -> bool:
 def main() -> None:
     for p in (SRC / "imagerouter_router.py", SRC / "imagerouter.html", SRC / "devbim_admin.js",
               MASK_TOGGLE_SRC, CUT_TOOL_SRC, TEXT_TOOL_SRC, TOPRIGHT_SRC, MODEL_INFO_SRC,
-              PE_SRC, DIST, API_APP.parent):
+              PE_SRC, CN_SRC, DIST, API_APP.parent):
         if not p.exists():
             print("Не найдено:", p)
             sys.exit(1)
@@ -1798,6 +1816,7 @@ def main() -> None:
     # patch_prompt_enhance_button(): её якорь — 'const m7="Generate",pne=u.memo('.
     patch_generate_button()
     deploy_prompt_enhancer()
+    deploy_cloud_nodes()
     patch_prompt_enhance_button()
     patch_generate_viewer_fallback()
     patch_expand_graph_refs()

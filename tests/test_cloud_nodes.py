@@ -425,6 +425,50 @@ def test_upscale_node_modes():
     print("OK: devbim_upscale — режимы 2x/WxH, серверный промпт, EN-ошибка режима")
 
 
+# --- роутер DEFAULT_MAIN_MODELS + деплой модуля (задача 4) ---
+
+
+def _load_setup():
+    spec = importlib.util.spec_from_file_location("setup_imagerouter", ROOT / "setup_imagerouter.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_router_defaults_sync():
+    """Фолбэки модуля нод = дефолты задеплоенного роутера (DRY-контроль)."""
+    mod = nodes()
+    from invokeai.app.api.routers import imagerouter as ir
+    assert list(ir.DEFAULT_UPSCALE_MODELS) == mod.DEFAULT_UPSCALE_FALLBACK
+    assert list(ir.DEFAULT_MAIN_MODELS) == mod.DEFAULT_MAIN_FALLBACK
+    print("OK: дефолты роутера и фолбэки нод синхронны")
+
+
+def test_deploy_cloud_nodes():
+    setup = _load_setup()
+    import shutil as _sh
+    import tempfile as _tf
+    with _tf.TemporaryDirectory() as td:
+        dst = Path(td) / "devbim_cloud_nodes.py"
+        saved = setup.CN_DST
+        setup.CN_DST = dst
+        try:
+            assert setup.deploy_cloud_nodes() is True    # первый запуск — копия
+            assert dst.read_text(encoding="utf-8") == setup.CN_SRC.read_text(encoding="utf-8")
+            assert setup.deploy_cloud_nodes() is False   # повтор — идемпотентно
+        finally:
+            setup.CN_DST = saved
+    print("OK: deploy_cloud_nodes идемпотентен")
+
+
+def test_setup_main_calls_deploy():
+    import inspect
+    setup = _load_setup()
+    src = inspect.getsource(setup.main)
+    assert "deploy_cloud_nodes()" in src
+    print("OK: main() вызывает deploy_cloud_nodes")
+
+
 if __name__ == "__main__":
     test_model_choices_from_admin_file()
     test_model_choices_fallbacks()
@@ -441,3 +485,6 @@ if __name__ == "__main__":
     test_vlm_node_empty()
     test_vlm_node_default_question()
     test_upscale_node_modes()
+    test_router_defaults_sync()
+    test_deploy_cloud_nodes()
+    test_setup_main_calls_deploy()
