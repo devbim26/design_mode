@@ -217,3 +217,126 @@ def _save(context: InvocationContext, pil: Any, metadata: dict) -> Any:
     dto = context.images.save(image=pil, metadata=MetadataField(root=metadata))
     print(f"[cloud-node] saved {dto.image_name}", flush=True)
     return dto
+
+
+# --- инвокции ---
+
+@invocation(
+    "devbim_generate",
+    title="Generate Image",
+    tags=["cloud", "image", "devbim"],
+    category="cloud",
+    version="1.0.0",
+    use_cache=False,
+)
+class GenerateImageInvocation(BaseInvocation):
+    """Generates images from text prompts using a cloud model (batch up to 10)."""
+
+    prompt: str = InputField(
+        default="", description="Prompt (type here or connect a String / Ask AI output)"
+    )
+    prompts: list[str] = InputField(
+        default=[], description="Batch prompts (connect Dynamic Prompt or String Collection)"
+    )
+    model: GenerateModel = InputField(default=GENERATE_MODELS[0], description="Cloud model")
+    width: int = InputField(default=1024, ge=64, le=4096, description="Width (snapped to a 64 grid, 128-2048)")
+    height: int = InputField(default=1024, ge=64, le=4096, description="Height (snapped to a 64 grid, 128-2048)")
+    output_format: OutputFormat = InputField(default="png", description="Output file format")
+
+    def invoke(self, context: InvocationContext) -> ImageCollectionOutput:
+        key, ir = _api()
+        batch = _prompt_batch(self.prompt, self.prompts)
+        w, h = _snap_side(self.width), _snap_side(self.height)
+        print(f"[cloud-node] generate: model={self.model} prompts={len(batch)} size={w}x{h}", flush=True)
+        fields: list[ImageField] = []
+        for p in batch:
+            body = {
+                "model": self.model,
+                "prompt": p,
+                "size": f"{w}x{h}",
+                "output_format": self.output_format,
+            }
+            for item in _post_images(ir.GENERATIONS_URL, body, key):
+                pil = ir._item_to_pil(item)
+                if pil is None:
+                    continue
+                dto = _save(context, pil, {
+                    "generation_mode": "cloud-generate",
+                    "cloud_model": self.model,
+                    "positive_prompt": p,
+                    "width": w,
+                    "height": h,
+                })
+                fields.append(ImageField(image_name=dto.image_name))
+        if not fields:
+            raise ValueError("Generation failed: the generation service returned no images")
+        return ImageCollectionOutput(collection=fields)
+
+
+@invocation(
+    "devbim_edit",
+    title="Edit Image",
+    tags=["cloud", "image", "editing", "devbim"],
+    category="cloud",
+    version="1.0.0",
+    use_cache=False,
+)
+class EditImageInvocation(BaseInvocation):
+    """Edits an image with optional references using a cloud model (batch up to 10)."""
+
+    image: ImageField = InputField(description="Source image to edit")
+    references: list[ImageField] = InputField(default=[], description="Reference images (up to 4)")
+    prompt: str = InputField(default="", description="Prompt (type here or connect a String / Ask AI output)")
+    prompts: list[str] = InputField(default=[], description="Batch prompts")
+    model: EditModel = InputField(default=EDIT_MODELS[0], description="Cloud editing model")
+    width: int = InputField(default=0, ge=0, le=4096, description="Output width; 0 = size of the source")
+    height: int = InputField(default=0, ge=0, le=4096, description="Output height; 0 = size of the source")
+    output_format: OutputFormat = InputField(default="png", description="Output file format")
+
+    def invoke(self, context: InvocationContext) -> ImageCollectionOutput:
+        key, ir = _api()
+        batch = _prompt_batch(self.prompt, self.prompts)
+        src = context.images.get_pil(self.image.image_name)
+        refs_pil = [context.images.get_pil(f.image_name)
+                    for f in (self.references or [])[:MAX_REFERENCES]]
+        if self.width > 0 and self.height > 0:
+            w, h = _snap_side(self.width), _snap_side(self.height)
+        else:
+            w, h = _snap_side(src.width), _snap_side(src.height)
+        # JSON-массив image[]: исходник первым (PNG, паттерн п.26),
+        # референсы дальше (JPEG 1024/q85, паттерн п.26/47)
+        images = [ir._pil_to_durl(src)] + [
+            ir._pil_to_durl(r, "JPEG", 1024, JPEG_QUALITY) for r in refs_pil
+        ]
+        note = REFERENCE_NOTE if refs_pil else ""
+        print(
+            f"[cloud-node] edit: model={self.model} prompts={len(batch)} "
+            f"refs={len(refs_pil)} size={w}x{h}",
+            flush=True,
+        )
+        fields: list[ImageField] = []
+        for p in batch:
+            body = {
+                "model": self.model,
+                "prompt": p + note,
+                "image": images,
+                "size": f"{w}x{h}",
+                "output_format": self.output_format,
+            }
+            for item in _post_images(ir.EDITS_URL, body, key):
+                pil = ir._item_to_pil(item)
+                if pil is None:
+                    continue
+                dto = _save(context, pil, {
+                    "generation_mode": "cloud-edit",
+                    "cloud_model": self.model,
+                    "positive_prompt": p,
+                    "width": w,
+                    "height": h,
+                    "source_image": self.image.image_name,
+                    "ref_images": [f.image_name for f in (self.references or [])[:MAX_REFERENCES]],
+                })
+                fields.append(ImageField(image_name=dto.image_name))
+        if not fields:
+            raise ValueError("Generation failed: the generation service returned no images")
+        return ImageCollectionOutput(collection=fields)

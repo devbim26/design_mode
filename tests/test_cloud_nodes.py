@@ -165,6 +165,174 @@ def test_api_no_key():
     print("OK: нет ключа — EN-ошибка про администратора")
 
 
+# --- фикстурыinvoke: фейковый роутер/requests/context (задачи 2-3) ---
+
+import io
+
+from PIL import Image
+
+
+def _fake_ir():
+    def durl(img, fmt="PNG", max_side=0, quality=92):
+        # JPEG -> RGB + даунскейл, как у настоящего _pil_to_durl роутера
+        # (RGBA-референсы иначе не сохраняются в JPEG; паттерн п.26/47)
+        if fmt == "JPEG":
+            img = img.convert("RGB")
+            if max_side and max(img.size) > max_side:
+                img.thumbnail((max_side, max_side))
+        buf = io.BytesIO()
+        img.save(buf, format=fmt)
+        import base64
+        mime = "png" if fmt == "PNG" else "jpeg"
+        return f"data:image/{mime};base64," + base64.b64encode(buf.getvalue()).decode()
+    def item_to_pil(item):
+        return Image.new("RGB", (8, 8)) if item.get("ok") else None
+    return SimpleNamespace(
+        GENERATIONS_URL="http://x/generations",
+        EDITS_URL="http://x/edits",
+        CHAT_COMPLETIONS_URL="http://x/chat",
+        _item_to_pil=item_to_pil,
+        _pil_to_durl=durl,
+        _pick_upscale_size=lambda mid, w, h, s: (
+            f"{max(64, (int(w * s) + 31) // 64 * 64)}x{max(64, (int(h * s) + 31) // 64 * 64)}"),
+        _upscale_prompt=lambda scale=None, creativity=None, structure=None, size_label=None: (
+            f"Upscale to {size_label} resolution." if size_label
+            else f"Upscale to approximately {int(round(scale or 2))}x higher resolution."),
+        _enhancer_model=lambda: "zai/glm-5.3-flash",
+    )
+
+
+class _Capture:
+    def __init__(self, responses):
+        self.calls = []
+        self.responses = responses
+    def post(self, url, headers=None, json=None, timeout=None, **kw):
+        self.calls.append({"url": url, "headers": headers, "json": json})
+        return self.responses.pop(0)
+
+
+def _fake_context(saved):
+    def get_pil(name, mode=None):
+        return Image.new("RGBA", (500, 333), (200, 30, 30, 255))
+    def save(image=None, board_id=None, image_category=None, metadata=None):
+        dto = SimpleNamespace(image_name=f"img_{len(saved)}.png", width=image.width, height=image.height)
+        saved.append((dto, image))
+        return dto
+    return SimpleNamespace(images=SimpleNamespace(get_pil=get_pil, save=save))
+
+
+def test_generate_node():
+    mod = nodes()
+    fake_ir = _fake_ir()
+    saved = []
+    resp = SimpleNamespace(status_code=200, json=lambda: {"data": [{"ok": True}]})
+    mod_requests, saved_api = mod.requests, mod._api
+    mod.requests, mod._api = _Capture([resp]), (lambda: ("KEY", fake_ir))
+    try:
+        node = mod.GenerateImageInvocation(
+            prompt="red house", model=mod.GENERATE_MODELS[0], width=1000, height=1000)
+        out = node.invoke(_fake_context(saved))
+        assert [f.image_name for f in out.collection] == ["img_0.png"]
+        body = mod.requests.calls[-1]["json"]
+        assert body == {"model": mod.GENERATE_MODELS[0], "prompt": "red house",
+                        "size": "1024x1024", "output_format": "png"}, body
+        assert mod.requests.calls[-1]["url"] == "http://x/generations"
+        assert mod.requests.calls[-1]["headers"] == {"Authorization": "Bearer KEY"}
+        # метаданные сохранения
+        assert saved[0][1].size == (8, 8)
+    finally:
+        mod.requests, mod._api = mod_requests, saved_api
+    print("OK: devbim_generate — тело generations, size snap64, сохранение в галерею")
+
+
+def test_generate_node_batch():
+    mod = nodes()
+    fake_ir = _fake_ir()
+    saved = []
+    resps = [SimpleNamespace(status_code=200, json=lambda: {"data": [{"ok": True}]}) for _ in range(2)]
+    mod_requests, saved_api = mod.requests, mod._api
+    mod.requests, mod._api = _Capture(resps), (lambda: ("KEY", fake_ir))
+    try:
+        node = mod.GenerateImageInvocation(
+            prompts=["a", "b"], model=mod.GENERATE_MODELS[0])
+        out = node.invoke(_fake_context(saved))
+        assert len(out.collection) == 2
+        prompts = [c["json"]["prompt"] for c in mod.requests.calls]
+        assert prompts == ["a", "b"], prompts
+    finally:
+        mod.requests, mod._api = mod_requests, saved_api
+    print("OK: devbim_generate — батч промтов последовательными вызовами")
+
+
+def test_edit_node():
+    mod = nodes()
+    fake_ir = _fake_ir()
+    saved = []
+    resp = SimpleNamespace(status_code=200, json=lambda: {"data": [{"ok": True}]})
+    mod_requests, saved_api = mod.requests, mod._api
+    mod.requests, mod._api = _Capture([resp]), (lambda: ("KEY", fake_ir))
+    try:
+        node = mod.EditImageInvocation(
+            image={"image_name": "src.png"},
+            references=[{"image_name": "r1.png"}, {"image_name": "r2.png"}],
+            prompt="repaint", model=mod.EDIT_MODELS[0])
+        out = node.invoke(_fake_context(saved))
+        assert len(out.collection) == 1
+        body = mod.requests.calls[-1]["json"]
+        assert mod.requests.calls[-1]["url"] == "http://x/edits"
+        assert body["prompt"].startswith("repaint")
+        assert mod.REFERENCE_NOTE in body["prompt"]        # блок референсов дописан
+        assert body["size"] == "512x320", body["size"]     # исходник 500x333 -> snap64
+        assert len(body["image"]) == 3                     # исходник + 2 референса
+        assert body["image"][0].startswith("data:image/png")   # исходник PNG
+        assert body["image"][1].startswith("data:image/jpeg")  # референсы JPEG
+        assert body["model"] == mod.EDIT_MODELS[0]
+        assert body["output_format"] == "png"
+    finally:
+        mod.requests, mod._api = mod_requests, saved_api
+    print("OK: devbim_edit — JSON-edits, референсы, размер от исходника")
+
+
+def test_edit_node_explicit_size_no_refs():
+    mod = nodes()
+    fake_ir = _fake_ir()
+    saved = []
+    resp = SimpleNamespace(status_code=200, json=lambda: {"data": [{"ok": True}]})
+    mod_requests, saved_api = mod.requests, mod._api
+    mod.requests, mod._api = _Capture([resp]), (lambda: ("KEY", fake_ir))
+    try:
+        node = mod.EditImageInvocation(
+            image={"image_name": "src.png"}, prompt="p",
+            model=mod.EDIT_MODELS[0], width=1536, height=1024)
+        node.invoke(_fake_context(saved))
+        body = mod.requests.calls[-1]["json"]
+        assert body["size"] == "1536x1024"
+        assert len(body["image"]) == 1                     # только исходник
+        assert mod.REFERENCE_NOTE not in body["prompt"]    # без блока референсов
+    finally:
+        mod.requests, mod._api = mod_requests, saved_api
+    print("OK: devbim_edit — явный размер, без референсов")
+
+
+def test_generate_node_fail_en():
+    mod = nodes()
+    fake_ir = _fake_ir()
+    saved = []
+    resp = SimpleNamespace(status_code=200, json=lambda: {"error": {"message": "quota"}})
+    mod_requests, saved_api = mod.requests, mod._api
+    mod.requests, mod._api = _Capture([resp]), (lambda: ("KEY", fake_ir))
+    try:
+        node = mod.GenerateImageInvocation(prompt="x", model=mod.GENERATE_MODELS[0])
+        try:
+            node.invoke(_fake_context(saved))
+            raise AssertionError("должен упасть")
+        except ValueError as e:
+            assert str(e) == "Generation failed: quota", str(e)
+    finally:
+        mod.requests, mod._api = mod_requests, saved_api
+    print("OK: ошибка апстрима — ValueError EN (тост очереди)")
+
+
 if __name__ == "__main__":
     test_model_choices_from_admin_file()
     test_model_choices_fallbacks()
@@ -172,3 +340,8 @@ if __name__ == "__main__":
     test_snap_side()
     test_post_images_errors()
     test_api_no_key()
+    test_generate_node()
+    test_generate_node_batch()
+    test_edit_node()
+    test_edit_node_explicit_size_no_refs()
+    test_generate_node_fail_en()
