@@ -465,6 +465,9 @@ def test_setup_main_calls_all_workflow_steps():
     import inspect
     setup = _load_setup()
     src = inspect.getsource(setup.main)
+    # комментарии выкидываем: пояснение в main() содержит те же строки
+    # (иначе ассерты проходят даже без реальных вызовов)
+    src = "\n".join(l for l in src.splitlines() if not l.lstrip().startswith("#"))
     assert "deploy_cloud_nodes()" in src
     assert "deploy_cloud_workflows()" in src
     assert "patch_nodes_allowlist()" in src
