@@ -2290,7 +2290,11 @@ git commit -m "test(workflows): E2E облачных нод — openapi, allowli
 1. Восстановить `venv/.../dist/assets/index-*.js.imagerouter-bak` → `index-*.js`.
 2. В `default_workflows/`: удалить наши 5 JSON, переименовать `*.json.orig` → `*.json`.
 3. Удалить `invokeai/app/invocations/devbim_cloud_nodes.py`.
-4. `PYTHONUTF8=1 venv/Scripts/python.exe setup_imagerouter.py` (патчи идемпотентны) + `_restart_server.ps1`.
+4. Перезапустить сервер: `_restart_server.ps1` (setup после отката НЕ
+   запускать: он заново применит все найденные патчи, т.е. вернёт откаченное;
+   повторный запуск нужен только для возврата фичи целиком и требует её
+   исходников в дереве — без них setup применит остальные патчи и завершится
+   с понятной ошибкой на deploy_cloud_nodes/deploy_cloud_workflows).
 5. F5 в браузере.
 
 ## Самопроверка плана (выполнена при составлении)

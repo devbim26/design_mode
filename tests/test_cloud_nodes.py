@@ -461,12 +461,14 @@ def test_deploy_cloud_nodes():
     print("OK: deploy_cloud_nodes идемпотентен")
 
 
-def test_setup_main_calls_deploy():
+def test_setup_main_calls_all_workflow_steps():
     import inspect
     setup = _load_setup()
     src = inspect.getsource(setup.main)
     assert "deploy_cloud_nodes()" in src
-    print("OK: main() вызывает deploy_cloud_nodes")
+    assert "deploy_cloud_workflows()" in src
+    assert "patch_nodes_allowlist()" in src
+    print("OK: main() вызывает deploy_cloud_nodes, deploy_cloud_workflows, patch_nodes_allowlist")
 
 
 # --- белый список нод Workflows (задача 5) ---
@@ -577,7 +579,7 @@ if __name__ == "__main__":
     test_upscale_node_modes()
     test_router_defaults_sync()
     test_deploy_cloud_nodes()
-    test_setup_main_calls_deploy()
+    test_setup_main_calls_all_workflow_steps()
     test_allowlist_types()
     test_allowlist_patch_synthetic()
     test_allowlist_anchor_in_live_bundle()

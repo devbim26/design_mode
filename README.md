@@ -608,8 +608,13 @@ workflow с локальными нодами открываются с «missin
 `setup_imagerouter.py`, узлы `devbim_*`), allowlist — `patch_nodes_allowlist`
 (index-бандл), шаблоны — `imagerouter/cloud_workflows/` →
 `default_workflows/` в пакете. Тесты: `tests/test_cloud_nodes.py`.
-Откат: `index-*.js.imagerouter-bak`, `default_workflows/*.orig`, удалить
-`invokeai/app/invocations/devbim_cloud_nodes.py`, перезапустить setup и сервер.
+Откат: восстановить `index-*.js.imagerouter-bak` и `default_workflows/*.orig`,
+удалить `invokeai/app/invocations/devbim_cloud_nodes.py`, перезапустить сервер.
+Setup после отката НЕ запускать: он заново применит все патчи, которые найдёт
+(вернёт только что откаченное); повторный запуск осмыслен только для возврата
+фичи целиком — и требует её исходников в дереве (без них setup применит
+остальные патчи и завершится с понятной ошибкой на deploy_cloud_nodes /
+deploy_cloud_workflows).
 
 ## IFC-вьювер (BIM)
 

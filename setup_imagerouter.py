@@ -1971,9 +1971,13 @@ def patch_index_html() -> bool:
 
 
 def main() -> None:
+    # CN_SRC/WF_SRC сознательно НЕ в фатальных проверках: без их источников
+    # deploy_cloud_nodes()/deploy_cloud_workflows() сами завершаются с
+    # понятной ошибкой (sys.exit(1)) — на частично откаченном дереве setup
+    # деградирует мягко (патчи до них применяются), а не умирает в начале.
     for p in (SRC / "imagerouter_router.py", SRC / "imagerouter.html", SRC / "devbim_admin.js",
               MASK_TOGGLE_SRC, CUT_TOOL_SRC, TEXT_TOOL_SRC, TOPRIGHT_SRC, MODEL_INFO_SRC,
-              PE_SRC, CN_SRC, WF_SRC, DIST, API_APP.parent):
+              PE_SRC, DIST, API_APP.parent):
         if not p.exists():
             print("Не найдено:", p)
             sys.exit(1)
