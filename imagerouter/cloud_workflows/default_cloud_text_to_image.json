@@ -1,0 +1,69 @@
+{
+  "id": "default_cloud_text_to_image",
+  "name": "Cloud — Text to Image",
+  "author": "DevBIM",
+  "description": "Generate an image from a text prompt using a cloud model.",
+  "version": "1.0.0",
+  "contact": "support@devbim.com",
+  "tags": "cloud, text to image",
+  "notes": "Type a prompt in the Prompt node and press Invoke. The result is saved to the gallery automatically - no Save Image node needed. Batch: connect a Dynamic Prompt node to the Prompts input (up to 10 per run).",
+  "exposedFields": [
+    {"nodeId": "c1000000-0000-4000-8000-000000000001", "fieldName": "value"}
+  ],
+  "meta": {"version": "3.0.0", "category": "default"},
+  "nodes": [
+    {
+      "id": "c1000000-0000-4000-8000-000000000001",
+      "type": "invocation",
+      "position": {"x": 0, "y": 200},
+      "data": {
+        "id": "c1000000-0000-4000-8000-000000000001",
+        "version": "1.0.1",
+        "nodePack": "invokeai",
+        "label": "Prompt",
+        "notes": "",
+        "type": "string",
+        "inputs": {
+          "value": {"name": "value", "label": "", "value": "Modern minimalist house, concrete and glass, warm evening light, photorealistic architectural render"}
+        },
+        "isOpen": true,
+        "isIntermediate": false,
+        "useCache": true
+      }
+    },
+    {
+      "id": "c1000000-0000-4000-8000-000000000002",
+      "type": "invocation",
+      "position": {"x": 600, "y": 175},
+      "data": {
+        "id": "c1000000-0000-4000-8000-000000000002",
+        "version": "1.0.0",
+        "nodePack": "invokeai",
+        "label": "",
+        "notes": "",
+        "type": "devbim_generate",
+        "inputs": {
+          "prompt": {"name": "prompt", "label": ""},
+          "prompts": {"name": "prompts", "label": ""},
+          "model": {"name": "model", "label": ""},
+          "width": {"name": "width", "label": "", "value": 1024},
+          "height": {"name": "height", "label": "", "value": 1024},
+          "output_format": {"name": "output_format", "label": ""}
+        },
+        "isOpen": true,
+        "isIntermediate": false,
+        "useCache": false
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "reactflow__edge-c1000000-0000-4000-8000-000000000001value-c1000000-0000-4000-8000-000000000002prompt",
+      "type": "default",
+      "source": "c1000000-0000-4000-8000-000000000001",
+      "target": "c1000000-0000-4000-8000-000000000002",
+      "sourceHandle": "value",
+      "targetHandle": "prompt"
+    }
+  ]
+}

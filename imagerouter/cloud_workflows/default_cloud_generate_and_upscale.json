@@ -1,0 +1,125 @@
+{
+  "id": "default_cloud_generate_and_upscale",
+  "name": "Cloud — Generate and Upscale",
+  "author": "DevBIM",
+  "description": "Generate an image and upscale every result 2x with cloud models.",
+  "version": "1.0.0",
+  "contact": "support@devbim.com",
+  "tags": "cloud, upscale",
+  "notes": "Iterate runs Upscale Image once per generated image. Mode accepts a multiplier ('2x', '4x') or an explicit size ('1536x1024'); factual size depends on the upscaling model. Results are saved to the gallery automatically.",
+  "exposedFields": [
+    {"nodeId": "c5000000-0000-4000-8000-000000000001", "fieldName": "value"}
+  ],
+  "meta": {"version": "3.0.0", "category": "default"},
+  "nodes": [
+    {
+      "id": "c5000000-0000-4000-8000-000000000001",
+      "type": "invocation",
+      "position": {"x": 0, "y": 200},
+      "data": {
+        "id": "c5000000-0000-4000-8000-000000000001",
+        "version": "1.0.1",
+        "nodePack": "invokeai",
+        "label": "Prompt",
+        "notes": "",
+        "type": "string",
+        "inputs": {
+          "value": {"name": "value", "label": "", "value": "Elegant brick townhouse, detailed facade, soft daylight, photorealistic architectural render"}
+        },
+        "isOpen": true,
+        "isIntermediate": false,
+        "useCache": true
+      }
+    },
+    {
+      "id": "c5000000-0000-4000-8000-000000000002",
+      "type": "invocation",
+      "position": {"x": 450, "y": 175},
+      "data": {
+        "id": "c5000000-0000-4000-8000-000000000002",
+        "version": "1.0.0",
+        "nodePack": "invokeai",
+        "label": "",
+        "notes": "",
+        "type": "devbim_generate",
+        "inputs": {
+          "prompt": {"name": "prompt", "label": ""},
+          "prompts": {"name": "prompts", "label": ""},
+          "model": {"name": "model", "label": ""},
+          "width": {"name": "width", "label": "", "value": 1024},
+          "height": {"name": "height", "label": "", "value": 1024},
+          "output_format": {"name": "output_format", "label": ""}
+        },
+        "isOpen": true,
+        "isIntermediate": false,
+        "useCache": false
+      }
+    },
+    {
+      "id": "c5000000-0000-4000-8000-000000000003",
+      "type": "invocation",
+      "position": {"x": 900, "y": 175},
+      "data": {
+        "id": "c5000000-0000-4000-8000-000000000003",
+        "version": "1.1.0",
+        "nodePack": "invokeai",
+        "label": "Each result",
+        "notes": "",
+        "type": "iterate",
+        "inputs": {
+          "collection": {"name": "collection", "label": ""}
+        },
+        "isOpen": false,
+        "isIntermediate": true,
+        "useCache": false
+      }
+    },
+    {
+      "id": "c5000000-0000-4000-8000-000000000004",
+      "type": "invocation",
+      "position": {"x": 1300, "y": 175},
+      "data": {
+        "id": "c5000000-0000-4000-8000-000000000004",
+        "version": "1.0.0",
+        "nodePack": "invokeai",
+        "label": "",
+        "notes": "",
+        "type": "devbim_upscale",
+        "inputs": {
+          "image": {"name": "image", "label": ""},
+          "model": {"name": "model", "label": ""},
+          "mode": {"name": "mode", "label": "", "value": "2x"}
+        },
+        "isOpen": true,
+        "isIntermediate": false,
+        "useCache": false
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "reactflow__edge-c5000000-0000-4000-8000-000000000001value-c5000000-0000-4000-8000-000000000002prompt",
+      "type": "default",
+      "source": "c5000000-0000-4000-8000-000000000001",
+      "target": "c5000000-0000-4000-8000-000000000002",
+      "sourceHandle": "value",
+      "targetHandle": "prompt"
+    },
+    {
+      "id": "reactflow__edge-c5000000-0000-4000-8000-000000000002collection-c5000000-0000-4000-8000-000000000003collection",
+      "type": "default",
+      "source": "c5000000-0000-4000-8000-000000000002",
+      "target": "c5000000-0000-4000-8000-000000000003",
+      "sourceHandle": "collection",
+      "targetHandle": "collection"
+    },
+    {
+      "id": "reactflow__edge-c5000000-0000-4000-8000-000000000003item-c5000000-0000-4000-8000-000000000004image",
+      "type": "default",
+      "source": "c5000000-0000-4000-8000-000000000003",
+      "target": "c5000000-0000-4000-8000-000000000004",
+      "sourceHandle": "item",
+      "targetHandle": "image"
+    }
+  ]
+}

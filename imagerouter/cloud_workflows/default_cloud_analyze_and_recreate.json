@@ -1,0 +1,97 @@
+{
+  "id": "default_cloud_analyze_and_recreate",
+  "name": "Cloud — Analyze and Recreate",
+  "author": "DevBIM",
+  "description": "Ask AI describes a photo as a prompt, then a cloud model recreates it.",
+  "version": "1.0.0",
+  "contact": "support@devbim.com",
+  "tags": "cloud, vlm, analyze",
+  "notes": "Add the building photo to the Building photo collection, adjust the question if needed, then press Invoke. Ask AI writes a detailed English prompt from the photo; Generate Image uses it directly. Results are saved to the gallery automatically.",
+  "exposedFields": [
+    {"nodeId": "c4000000-0000-4000-8000-000000000002", "fieldName": "question"}
+  ],
+  "meta": {"version": "3.0.0", "category": "default"},
+  "nodes": [
+    {
+      "id": "c4000000-0000-4000-8000-000000000001",
+      "type": "invocation",
+      "position": {"x": 0, "y": 200},
+      "data": {
+        "id": "c4000000-0000-4000-8000-000000000001",
+        "version": "1.0.1",
+        "nodePack": "invokeai",
+        "label": "Building photo",
+        "notes": "",
+        "type": "image_collection",
+        "inputs": {
+          "collection": {"name": "collection", "label": ""}
+        },
+        "isOpen": true,
+        "isIntermediate": false,
+        "useCache": true
+      }
+    },
+    {
+      "id": "c4000000-0000-4000-8000-000000000002",
+      "type": "invocation",
+      "position": {"x": 500, "y": 175},
+      "data": {
+        "id": "c4000000-0000-4000-8000-000000000002",
+        "version": "1.0.0",
+        "nodePack": "invokeai",
+        "label": "",
+        "notes": "",
+        "type": "devbim_vlm",
+        "inputs": {
+          "images": {"name": "images", "label": ""},
+          "question": {"name": "question", "label": "", "value": "Describe this building as a detailed prompt for an image generator"}
+        },
+        "isOpen": true,
+        "isIntermediate": false,
+        "useCache": false
+      }
+    },
+    {
+      "id": "c4000000-0000-4000-8000-000000000003",
+      "type": "invocation",
+      "position": {"x": 1000, "y": 175},
+      "data": {
+        "id": "c4000000-0000-4000-8000-000000000003",
+        "version": "1.0.0",
+        "nodePack": "invokeai",
+        "label": "",
+        "notes": "",
+        "type": "devbim_generate",
+        "inputs": {
+          "prompt": {"name": "prompt", "label": ""},
+          "prompts": {"name": "prompts", "label": ""},
+          "model": {"name": "model", "label": ""},
+          "width": {"name": "width", "label": "", "value": 1024},
+          "height": {"name": "height", "label": "", "value": 1024},
+          "output_format": {"name": "output_format", "label": ""}
+        },
+        "isOpen": true,
+        "isIntermediate": false,
+        "useCache": false
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "reactflow__edge-c4000000-0000-4000-8000-000000000001collection-c4000000-0000-4000-8000-000000000002images",
+      "type": "default",
+      "source": "c4000000-0000-4000-8000-000000000001",
+      "target": "c4000000-0000-4000-8000-000000000002",
+      "sourceHandle": "collection",
+      "targetHandle": "images"
+    },
+    {
+      "id": "reactflow__edge-c4000000-0000-4000-8000-000000000002value-c4000000-0000-4000-8000-000000000003prompt",
+      "type": "default",
+      "source": "c4000000-0000-4000-8000-000000000002",
+      "target": "c4000000-0000-4000-8000-000000000003",
+      "sourceHandle": "value",
+      "targetHandle": "prompt"
+    }
+  ]
+}

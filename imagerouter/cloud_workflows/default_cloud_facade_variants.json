@@ -1,0 +1,72 @@
+{
+  "id": "default_cloud_facade_variants",
+  "name": "Cloud — Facade Variants",
+  "author": "DevBIM",
+  "description": "Explore facade variants with Dynamic Prompt and a cloud model.",
+  "version": "1.0.0",
+  "contact": "support@devbim.com",
+  "tags": "cloud, dynamic prompt, facade",
+  "notes": "Dynamic Prompt expands {a|b} alternatives into a batch of prompts (max 10 per run): each variant is generated separately. Edit the prompt text and Max Prompts, then press Invoke. Results are saved to the gallery automatically.",
+  "exposedFields": [
+    {"nodeId": "c2000000-0000-4000-8000-000000000001", "fieldName": "prompt"},
+    {"nodeId": "c2000000-0000-4000-8000-000000000001", "fieldName": "max_prompts"}
+  ],
+  "meta": {"version": "3.0.0", "category": "default"},
+  "nodes": [
+    {
+      "id": "c2000000-0000-4000-8000-000000000001",
+      "type": "invocation",
+      "position": {"x": 0, "y": 200},
+      "data": {
+        "id": "c2000000-0000-4000-8000-000000000001",
+        "version": "1.0.1",
+        "nodePack": "invokeai",
+        "label": "Facade options",
+        "notes": "",
+        "type": "dynamic_prompt",
+        "inputs": {
+          "prompt": {"name": "prompt", "label": "", "value": "{modern|classical} apartment facade, {brick|plaster} walls, golden hour, photorealistic architectural render"},
+          "max_prompts": {"name": "max_prompts", "label": "", "value": 4},
+          "combinatorial": {"name": "combinatorial", "label": "", "value": false}
+        },
+        "isOpen": true,
+        "isIntermediate": false,
+        "useCache": true
+      }
+    },
+    {
+      "id": "c2000000-0000-4000-8000-000000000002",
+      "type": "invocation",
+      "position": {"x": 600, "y": 175},
+      "data": {
+        "id": "c2000000-0000-4000-8000-000000000002",
+        "version": "1.0.0",
+        "nodePack": "invokeai",
+        "label": "",
+        "notes": "",
+        "type": "devbim_generate",
+        "inputs": {
+          "prompt": {"name": "prompt", "label": ""},
+          "prompts": {"name": "prompts", "label": ""},
+          "model": {"name": "model", "label": ""},
+          "width": {"name": "width", "label": "", "value": 1024},
+          "height": {"name": "height", "label": "", "value": 1024},
+          "output_format": {"name": "output_format", "label": ""}
+        },
+        "isOpen": true,
+        "isIntermediate": false,
+        "useCache": false
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "reactflow__edge-c2000000-0000-4000-8000-000000000001collection-c2000000-0000-4000-8000-000000000002prompts",
+      "type": "default",
+      "source": "c2000000-0000-4000-8000-000000000001",
+      "target": "c2000000-0000-4000-8000-000000000002",
+      "sourceHandle": "collection",
+      "targetHandle": "prompts"
+    }
+  ]
+}

@@ -511,6 +511,54 @@ def test_allowlist_anchor_in_live_bundle():
     print("OK: якорь/маркер allowlist в живом бандле — ровно один файл")
 
 
+# --- облачные шаблоны default_workflows + деплой (задача 6) ---
+
+ALLOWED_EXTRA = {"note"}  # Note-нод в v1 нет, но валидатор допускает любые типы
+
+def test_templates_valid():
+    setup = _load_setup()
+    from invokeai.app.services.workflow_records.workflow_records_common import WorkflowValidator
+    files = sorted((ROOT / "imagerouter" / "cloud_workflows").glob("*.json"))
+    assert len(files) == 5, files
+    allowed = set(setup.JS_ALLOWLIST_TYPES) | ALLOWED_EXTRA
+    for f in files:
+        wf = WorkflowValidator.validate_json(f.read_bytes())  # формат сервера
+        assert wf.id.startswith("default_"), f.name
+        assert wf.meta.category.value == "default"
+        ids = {n["id"] for n in wf.nodes}
+        types = set()
+        for n in wf.nodes:
+            assert n["id"] == n["data"]["id"], f.name
+            types.add(n["data"]["type"])
+            assert n["data"]["type"] in allowed, (f.name, n["data"]["type"])
+        for e in wf.edges:
+            assert e["source"] in ids and e["target"] in ids, (f.name, e["id"])
+            # хендл назначения — вход ноды (или item у collect)
+            tgt = next(n for n in wf.nodes if n["id"] == e["target"])
+            assert e["targetHandle"] in set(tgt["data"]["inputs"]), (f.name, e)
+        assert "devbim_" in " ".join(types) or "dynamic_prompt" in types, f.name
+    print("OK: 5 шаблонов валидны (WorkflowValidator), ноды из белого списка")
+
+
+def test_deploy_cloud_workflows():
+    setup = _load_setup()
+    with tempfile.TemporaryDirectory() as td:
+        dst = Path(td) / "default_workflows"
+        dst.mkdir()
+        stock = dst / "Text to Image - SD1.5.json"
+        stock.write_text('{"id": "default_x", "name": "s"}', encoding="utf-8")
+        assert setup.deploy_cloud_workflows(dst=dst) is True
+        names = {p.name for p in dst.glob("*.json")}
+        assert len(names) == 5 and "Text to Image - SD1.5.json" not in names
+        assert (dst / "Text to Image - SD1.5.json.orig").exists()   # сток в бэкапе
+        assert setup.deploy_cloud_workflows(dst=dst) is False      # идемпотентно
+        # «переустановка пакета» вернула стоковый файл — деплой снова убирает
+        stock.write_text('{"id": "default_x", "name": "s"}', encoding="utf-8")
+        assert setup.deploy_cloud_workflows(dst=dst) is False      # наши не менялись
+        assert not stock.exists()
+    print("OK: deploy_cloud_workflows — сток в .orig, идемпотентность")
+
+
 if __name__ == "__main__":
     test_model_choices_from_admin_file()
     test_model_choices_fallbacks()
@@ -533,3 +581,5 @@ if __name__ == "__main__":
     test_allowlist_types()
     test_allowlist_patch_synthetic()
     test_allowlist_anchor_in_live_bundle()
+    test_templates_valid()
+    test_deploy_cloud_workflows()

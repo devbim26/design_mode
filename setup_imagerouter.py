@@ -116,6 +116,11 @@ JS_ALLOW_NEW = (
 )
 JS_ALLOW_MARKER = 'nodesAllowlist:["devbim_generate"'
 
+# Облачные шаблоны вкладки Workflows: заменяют стоковые default_workflows
+# пакета (deploy_cloud_workflows), сервер синхронизирует их в БД при старте.
+WF_SRC = SRC / "cloud_workflows"
+WF_DST = SP / "invokeai" / "app" / "services" / "workflow_records" / "default_workflows"
+
 # Якорь тот же, что у setup_ifcviewer.py (JS_APPCONTENT_ANCHOR): вставка
 # префиксом, якорь сохраняется для IFC-патча при любом порядке запуска.
 JS_CANVAS_BRIDGE_ANCHOR = "const cue=u.memo("
@@ -1348,6 +1353,36 @@ def patch_nodes_allowlist(bundle: Path | None = None) -> bool:
     return True
 
 
+def deploy_cloud_workflows(dst: Path | None = None) -> bool:
+    """Заменяет стоковые default_workflows облачными шаблонами (Workflows).
+    Стоковые JSON сохраняются как <имя>.json.orig (один раз) и удаляются;
+    устаревшие default-воркфлои из БД удаляет серверный _sync_default_workflows
+    при старте («Deleting obsolete default workflow»), новые — добавляет/обновляет."""
+    dst = dst or WF_DST
+    ours = {p.name for p in WF_SRC.glob("*.json")}
+    if not ours:
+        print("ОШИБКА: нет шаблонов в", WF_SRC)
+        sys.exit(1)
+    dst.mkdir(parents=True, exist_ok=True)
+    for f in sorted(dst.glob("*.json")):
+        if f.name in ours:
+            continue
+        orig = f.with_suffix(f.suffix + ".orig")
+        if not orig.exists():
+            shutil.copy2(f, orig)
+        f.unlink()
+        print(f"Стоковый шаблон убран (бэкап {orig.name}):", f.name)
+    changed = False
+    for src in sorted(WF_SRC.glob("*.json")):
+        d = dst / src.name
+        if d.exists() and d.read_text(encoding="utf-8") == src.read_text(encoding="utf-8"):
+            continue
+        shutil.copy2(src, d)
+        print("Шаблон развернут:", src.name)
+        changed = True
+    return changed
+
+
 # Кнопка Prompt Enhance V1 (06.09): голубая кнопка ✨ 56×40px в слоте 60px
 # справа от жёлтой Generate. Оставлена для миграции уже пропатченных бандлов.
 # Je — стор-хук (как у штатной кнопки расширения), ie(ci.$state) — стор
@@ -1938,7 +1973,7 @@ def patch_index_html() -> bool:
 def main() -> None:
     for p in (SRC / "imagerouter_router.py", SRC / "imagerouter.html", SRC / "devbim_admin.js",
               MASK_TOGGLE_SRC, CUT_TOOL_SRC, TEXT_TOOL_SRC, TOPRIGHT_SRC, MODEL_INFO_SRC,
-              PE_SRC, CN_SRC, DIST, API_APP.parent):
+              PE_SRC, CN_SRC, WF_SRC, DIST, API_APP.parent):
         if not p.exists():
             print("Не найдено:", p)
             sys.exit(1)
@@ -1969,6 +2004,7 @@ def main() -> None:
     patch_generate_button()
     deploy_prompt_enhancer()
     deploy_cloud_nodes()
+    deploy_cloud_workflows()
     patch_prompt_enhance_button()
     patch_generate_viewer_fallback()
     patch_expand_graph_refs()

@@ -1,0 +1,96 @@
+{
+  "id": "default_cloud_edit_with_references",
+  "name": "Cloud — Edit with References",
+  "author": "DevBIM",
+  "description": "Edit an image following the style and materials of reference images.",
+  "version": "1.0.0",
+  "contact": "support@devbim.com",
+  "tags": "cloud, editing, references",
+  "notes": "Pick the source image in the Source node, add up to 4 references to the References collection, edit the prompt, then press Invoke. The first image sent to the model is the source; the rest are references (weight 0.5). Results are saved to the gallery automatically. Width/Height 0 = keep the source size.",
+  "exposedFields": [],
+  "meta": {"version": "3.0.0", "category": "default"},
+  "nodes": [
+    {
+      "id": "c3000000-0000-4000-8000-000000000001",
+      "type": "invocation",
+      "position": {"x": 0, "y": 100},
+      "data": {
+        "id": "c3000000-0000-4000-8000-000000000001",
+        "version": "1.0.2",
+        "nodePack": "invokeai",
+        "label": "Source",
+        "notes": "",
+        "type": "image",
+        "inputs": {
+          "image": {"name": "image", "label": ""}
+        },
+        "isOpen": true,
+        "isIntermediate": false,
+        "useCache": true
+      }
+    },
+    {
+      "id": "c3000000-0000-4000-8000-000000000002",
+      "type": "invocation",
+      "position": {"x": 0, "y": 350},
+      "data": {
+        "id": "c3000000-0000-4000-8000-000000000002",
+        "version": "1.0.1",
+        "nodePack": "invokeai",
+        "label": "References",
+        "notes": "",
+        "type": "image_collection",
+        "inputs": {
+          "collection": {"name": "collection", "label": ""}
+        },
+        "isOpen": true,
+        "isIntermediate": false,
+        "useCache": true
+      }
+    },
+    {
+      "id": "c3000000-0000-4000-8000-000000000003",
+      "type": "invocation",
+      "position": {"x": 600, "y": 200},
+      "data": {
+        "id": "c3000000-0000-4000-8000-000000000003",
+        "version": "1.0.0",
+        "nodePack": "invokeai",
+        "label": "",
+        "notes": "",
+        "type": "devbim_edit",
+        "inputs": {
+          "image": {"name": "image", "label": ""},
+          "references": {"name": "references", "label": ""},
+          "prompt": {"name": "prompt", "label": "", "value": "Repaint the facade using the materials and style of the reference images"},
+          "prompts": {"name": "prompts", "label": ""},
+          "model": {"name": "model", "label": ""},
+          "width": {"name": "width", "label": "", "value": 0},
+          "height": {"name": "height", "label": "", "value": 0},
+          "output_format": {"name": "output_format", "label": ""}
+        },
+        "isOpen": true,
+        "isIntermediate": false,
+        "useCache": false
+      }
+    }
+  ],
+  "edges": [
+    {
+      "id": "reactflow__edge-c3000000-0000-4000-8000-000000000001image-c3000000-0000-4000-8000-000000000003image",
+      "type": "default",
+      "source": "c3000000-0000-4000-8000-000000000001",
+      "target": "c3000000-0000-4000-8000-000000000003",
+      "sourceHandle": "image",
+      "targetHandle": "image"
+    },
+    {
+      "id": "reactflow__edge-c3000000-0000-4000-8000-000000000002collection-c3000000-0000-4000-8000-000000000003references",
+      "type": "default",
+      "source": "c3000000-0000-4000-8000-000000000002",
+      "target": "c3000000-0000-4000-8000-000000000003",
+      "sourceHandle": "collection",
+      "targetHandle": "references"
+    }
+  ]
+}
