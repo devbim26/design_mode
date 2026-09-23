@@ -18,8 +18,11 @@
 только в ветке feature/ifc-viewer). Скрипты правят пакет в
 `venv/Lib/site-packages/invokeai/` — после `pip install --force-reinstall
 invokeai==6.2.0` их нужно запускать повторно в порядке: ребрендинг →
-имагерос → ifcviewer. Запуск сервера: `start_devbim.bat`, перезапуск из
-агентской сессии — `_restart_server.ps1` (WMI, отсоединённо).
+имагерос → ifcviewer. **Все скрипты запуска системы — в `launch/`** (с
+23.09.2026; главный — `launch/start-system-design.bat`, краткий гайд —
+`launch/START-HERE.txt`). Запуск сервера в консоли: `launch/start_devbim.bat`,
+перезапуск из агентской сессии — `launch/_restart_server.ps1` (WMI,
+отсоединённо).
 
 ## Что реализовано (сессия от 19.08.2026)
 
@@ -418,9 +421,9 @@ invokeai==6.2.0` их нужно запускать повторно в поря
 ## Текущее состояние
 
 - Сервер запущен на `http://127.0.0.1:9090` отсоединённым процессом через
-  WMI (`_ir_server_hidden.bat`, лог — `ir_server.log`). Запущенные из
+  WMI (`launch/_ir_server_hidden.bat`, лог — `ir_server.log`). Запущенные из
   агентских сессий фоновые процессы убиваются вместе с сессией —
-  используйте WMI/`start_devbim.bat`.
+  используйте WMI/`launch/start_devbim.bat`.
 - **`.env` в корне проекта** — источник ключа и админского пароля
   (в git не входит, см. `.gitignore`). Ключ ImageRouter подтягивается при
   старте сервера (`key_source: env`), админский пароль — `ADMIN_PASSWORD`
@@ -2165,7 +2168,7 @@ cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
 #   node --check ifc/_chk.mjs && del ifc\_chk.mjs
 # проверить, что index-бандл парсится (после патчей навигации!):
 node -e "import('file:///C:/Users/Lenovo/Desktop/проект SOFT_2/Дизайн/InvokeAI/InvokeAI/venv/Lib/site-packages/invokeai/frontend/web/dist/assets/index-BFW2ubNY.js').catch(e=>console.log(e.message))"
-# перезапустить сервер (_restart_server.ps1), затем:
+# перезапустить сервер (launch/_restart_server.ps1), затем:
 # 1) GET http://127.0.0.1:9090/api/v2/models/ — модели imagerouter/ в списке
 # 2) GET /api/v1/imagerouter/status — key_source:env; POST admin-auth — пароль
 # 3) UI: Меню → Настройки → пароль → «Менеджер моделей» → вкладка ImageRouter

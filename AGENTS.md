@@ -17,6 +17,9 @@ ImageRouter, IFC-вьювером, PDF-вьювером, вьювером сай
 
 ## Где что
 
+- `launch/` — ВСЕ скрипты запуска системы (главный —
+  `start-system-design.bat`: бэкенд+туннель; старт-гайд для человека —
+  `launch/START-HERE.txt`). В корне скриптов запуска нет.
 - `siteauth/site_auth.py` — мидлварь входа (SITE_PASSWORD из .env,
   SITE_VALID_UNTIL — срок лицензии). Деплой: `setup_site_auth.py`.
 - `imagerouter/` — посредник облачной генерации (перехват enqueue_batch).
@@ -44,7 +47,7 @@ ImageRouter, IFC-вьювером, PDF-вьювером, вьювером сай
 - После патчей JS-бандлов обязательно проверить парсинг:
   `node -e "import('file:///...index-*.js').catch(e=>console.log(e.message))"`
   — допустима только рантайм-ошибка, не SyntaxError.
-- Сервер перезапускать `_restart_server.ps1` (WMI, отсоединённо);
+- Сервер перезапускать `launch\_restart_server.ps1` (WMI, отсоединённо);
   процессы из агентских сессий умирают вместе с сессией.
 - `PYTHONUTF8=1` обязателен в любом bat (кириллица в yaml).
 - Тесты: `venv\Scripts\python.exe tests\<имя>.py` (plain asserts, печать OK).

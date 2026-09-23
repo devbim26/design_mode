@@ -7,6 +7,7 @@ rem сервер на Windows падает на чтении конфига (cp1
 setlocal
 set PYTHONUTF8=1
 set PYTHONIOENCODING=utf-8
-cd /d "%~dp0"
-set "INVOKEAI_ROOT=%~dp0data"
+rem Скрипт лежит в launch\ — корень проекта на уровень выше.
+cd /d "%~dp0.."
+set "INVOKEAI_ROOT=%CD%\data"
 .\venv\Scripts\python.exe -u -c "from invokeai.app.run_app import run_app; run_app()" >> ir_server.log 2>&1

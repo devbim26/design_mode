@@ -74,7 +74,7 @@ def main() -> None:
         sys.exit(1)
     deploy_files(venv)
     patch_api_app(api_app)
-    print("Готово. Перезапустите сервер (_restart_server.ps1).")
+    print("Готово. Перезапустите сервер (launch\\_restart_server.ps1).")
 
 
 if __name__ == "__main__":

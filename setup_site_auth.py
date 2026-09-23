@@ -6,7 +6,7 @@
    GZip — внешняя мидлварь, срабатывает раньше всего остального.
 3. Добавляет SITE_PASSWORD в .env (по умолчанию devbim), если ключа нет.
 
-После запуска перезапустить сервер (start_devbim.bat).
+После запуска перезапустить сервер (launch\start_server.bat).
 Идемпотентно: повторный запуск ничего не ломает.
 """
 
@@ -69,4 +69,4 @@ if __name__ == "__main__":
     deploy_module()
     patch_api_app()
     ensure_env_password()
-    print("Готово. Перезапустите сервер (start_devbim.bat).")
+    print("Готово. Перезапустите сервер (launch\\start_server.bat).")
