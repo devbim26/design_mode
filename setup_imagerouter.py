@@ -37,6 +37,12 @@
      «Prompt Assistant» идёт через глобал __devbimPromptEnhance (патч
      App-бандла, хост DevbimPEWatch в ряду Generate). Высота кнопок 36px —
      как у Generate.
+  9. Убирает элементы локальной разработки из UI (21.09, по пометкам
+     пользователя): вертикальную группу иконок в поле промта (триггеры
+     {x}, SDXL-concat, динамические промты, добавление отрицательного
+     промта — во всех полях промта) и строку Denoising Strength в панели
+     слоёв холста (облачный edits-запрос силу денойза не использует;
+     в граф по-прежнему уходит дефолт 0.75, роутер его игнорирует).
 
 Секреты (ключ ImageRouter, админский пароль) читаются сервером из .env
 в корне проекта; скрипт создаёт .env по шаблону, если его ещё нет.
@@ -762,6 +768,95 @@ def patch_reference_types() -> bool:
     else:
         print("Дефолт типа и zod-enum уже настроены, пропуск")
     return changed
+
+
+# ----------------------------------------------------------------------------
+# Уборка элементов локальной разработки из UI (решение 21.09, вечер; пометки
+# пользователя на скриншотах):
+#   - вертикальная группа иконок у правого края поля промта: «добавить
+#     триггер» {x} (триггеры LoRA/embeddings — локальные модели скрыты),
+#     SDXL-concat «ссылка» (бейдж sdxl — техническая база фейков), ⚡ пред-
+#     просмотр динамических промтов и +/− добавления отрицательного промта
+#     (облако отрицательный промт не использует). Группа убрана из ВСЕХ
+#     полей промта: positive (Generate/Canvas — один компонент), negative
+#     и SDXL-стили (появляются из старых сессий/настроек);
+#   - строка Denoising Strength в панели слоёв холста (правая панель под
+#     галереей, рядом с Opacity): облачный edits-запрос силу денойза не
+#     принимает, в граф уходит дефолт 0.75 и роутер его игнорирует (как
+#     steps/cfg, п.9).
+# ----------------------------------------------------------------------------
+
+# App-бандл: ParamPositivePrompt — оверлей-группа кнопок
+# (PromptOverlayButtonWrapper _v): AddPromptTriggerButton (Fu), SDXLConcat
+# (Dne, только при базе sdxl), ShowDynamicPromptsPreview (Mne),
+# NegativePromptToggle (Pne) + жёлтое меню расширения промта (U$e — не
+# рендерится: allowPromptExpansion выключен, п.22).
+JS_PROMPT_ICONS_GROUP_OLD = (
+    'o.jsxs(_v,{children:['
+    'o.jsxs(E,{flexDir:"column",gap:2,justifyContent:"flex-start",'
+    'alignItems:"center",children:['
+    'o.jsx(Fu,{isOpen:f,onOpen:v}),'
+    'n==="sdxl"&&o.jsx(Dne,{}),o.jsx(Mne,{}),a&&o.jsx(Pne,{})]}),'
+    'l&&o.jsx(U$e,{})]}),'
+)
+
+# App-бандл: ParamNegativePrompt — единственная кнопка {x}
+JS_PROMPT_ICONS_NEG_OLD = (
+    'o.jsx(_v,{children:o.jsx(Fu,{isOpen:d,onOpen:p})}),'
+    'o.jsx(kv,{label:r("parameters.negativePromptPlaceholder")})'
+)
+JS_PROMPT_ICONS_NEG_NEW = (
+    'o.jsx(kv,{label:r("parameters.negativePromptPlaceholder")})'
+)
+
+# App-бандл: ParamSDXLPositive/NegativeStylePrompt — кнопка {x}, фрагмент
+# одинаковый в обоих компонентах (2 вхождения)
+JS_PROMPT_ICONS_SDXL_OLD = (
+    'o.jsx(_v,{children:o.jsx(Fu,{isOpen:r,onOpen:c})}),'
+    'o.jsx(kv,{label:s("sdxl.'
+)
+JS_PROMPT_ICONS_SDXL_NEW = 'o.jsx(kv,{label:s("sdxl.'
+
+# App-бандл: CanvasLayersPanel — строка Denoising Strength (SY) с
+# разделителем (pt); Opacity (CY) и списки сущностей (mq/JX) не трогаем
+JS_CANVAS_DENOISE_OLD = 'o.jsx(SY,{}),o.jsx(pt,{py:0}),!e&&o.jsx(mq,{})'
+JS_CANVAS_DENOISE_NEW = '!e&&o.jsx(mq,{})'
+
+
+def patch_remove_local_ui() -> bool:
+    """Убирает элементы локальной разработки: группу иконок в поле промта
+    (все поля) и строку Denoising Strength в панели слоёв холста.
+    App-бандл, идемпотентно (после патча OLD-фрагменты исчезают)."""
+    targets = [
+        f for f in DIST.glob("assets/*.js")
+        if 'displayName="ParamPositivePrompt"' in f.read_text(encoding="utf-8")
+    ]
+    if len(targets) != 1:
+        print(f"ОШИБКА: бандл с полем промта найден {len(targets)} раз (ожидался 1)")
+        sys.exit(1)
+    f = targets[0]
+    s = f.read_text(encoding="utf-8")
+    olds = (
+        (JS_PROMPT_ICONS_GROUP_OLD, "", 1, "иконки в поле промта (positive)"),
+        (JS_PROMPT_ICONS_NEG_OLD, JS_PROMPT_ICONS_NEG_NEW, 1, "иконка {x} (negative)"),
+        (JS_PROMPT_ICONS_SDXL_OLD, JS_PROMPT_ICONS_SDXL_NEW, 2, "иконки {x} (SDXL-стили)"),
+        (JS_CANVAS_DENOISE_OLD, JS_CANVAS_DENOISE_NEW, 1, "Denoising Strength (панель слоёв)"),
+    )
+    if all(old not in s for old, _, _, _ in olds):
+        print("Локальные элементы UI уже убраны (иконки промта, Denoising Strength), пропуск")
+        return False
+    for old, new, n, title in olds:
+        c = s.count(old)
+        if c != n:
+            print(f"ОШИБКА: фрагмент «{title}» найден {c} раз (ожидалось {n})")
+            sys.exit(1)
+        s = s.replace(old, new)
+    bak = f.with_suffix(f.suffix + ".imagerouter-bak")
+    if not bak.exists():
+        shutil.copy2(f, bak)
+    f.write_text(s, encoding="utf-8")
+    print(f"Убраны локальные элементы UI (иконки промта + Denoising Strength): {f.name}")
+    return True
 
 
 def patch_left_panel() -> bool:
@@ -1807,6 +1902,7 @@ def main() -> None:
     # удаления Refiner/Advanced/Concepts.
     patch_panel_layout()
     patch_reference_types()
+    patch_remove_local_ui()
     patch_canvas_control_layer()
     patch_queue_buttons()
     patch_upscale_launchpad()

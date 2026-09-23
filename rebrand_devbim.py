@@ -227,6 +227,28 @@ def deploy_banner() -> bool:
     f.write_text(s.replace("</head>", tag, 1), encoding="utf-8")
     return True
 
+def deploy_canvas_tabs() -> bool:
+    """Полоска вкладок холста (devbim_canvas_tabs.js): кнопка «Launchpad»
+    скрыта, «Canvas» — градиентная кнопка DevBIM, вьюверы (Image/IFC/PDF)
+    прижаты к правому краю полоски. Классы на вкладки навешивает сам скрипт
+    (dockview не даёт вкладкам идентификаторов)."""
+    src = BASE / "devbim_canvas_tabs.js"
+    if not src.exists():
+        print(f"ОШИБКА: не найден {src}")
+        sys.exit(1)
+    shutil.copy2(src, DIST / "devbim-canvas-tabs.js")
+    f = DIST / "index.html"
+    s = f.read_text(encoding="utf-8")
+    if "devbim-canvas-tabs.js" in s:
+        return False
+    if "</head>" not in s:
+        print("ОШИБКА: в index.html нет </head>")
+        sys.exit(1)
+    tag = '  <script src="/devbim-canvas-tabs.js" defer></script>\n</head>'
+    f.write_text(s.replace("</head>", tag, 1), encoding="utf-8")
+    return True
+
+
 def main() -> None:
     if not DIST.exists():
         print(f"dist не найден: {DIST}")
@@ -240,6 +262,7 @@ def main() -> None:
     print("Логотипов заменено:", patch_images())
     print("Файлов бэкенда изменено:", patch_backend())
     print("Баннер DevBIM подключён:", deploy_banner())
+    print("Стили вкладок холста подключены:", deploy_canvas_tabs())
     # Контроль: что осталось из брендовых упоминаний (ожидаются только технические)
     leftover = []
     for f in list(DIST.glob("assets/*.js")) + list(DIST.glob("locales/*.json")):
