@@ -469,6 +469,48 @@ def test_setup_main_calls_deploy():
     print("OK: main() вызывает deploy_cloud_nodes")
 
 
+# --- белый список нод Workflows (задача 5) ---
+
+
+def test_allowlist_types():
+    setup = _load_setup()
+    assert len(setup.JS_ALLOWLIST_TYPES) == 24
+    for t in ("devbim_generate", "devbim_edit", "devbim_vlm", "devbim_upscale",
+              "claude_expand_prompt", "claude_analyze_image",
+              "iterate", "collect", "save_image", "dynamic_prompt"):
+        assert t in setup.JS_ALLOWLIST_TYPES, t
+    for gone in ("denoise_latents", "compel", "sdxl_model_loader", "l2i", "esrgan"):
+        assert gone not in setup.JS_ALLOWLIST_TYPES, gone
+    print("OK: белый список — 24 типа, локальной диффузии нет")
+
+
+def test_allowlist_patch_synthetic():
+    setup = _load_setup()
+    with tempfile.TemporaryDirectory() as td:
+        f = Path(td) / "index-test.js"
+        f.write_text('x={nodesAllowlist:void 0,nodesDenylist:void 0,y:1}', encoding="utf-8")
+        assert setup.patch_nodes_allowlist(bundle=f) is True
+        s = f.read_text(encoding="utf-8")
+        assert 'nodesAllowlist:["devbim_generate"' in s
+        assert ',"iterate",' in s and ',"save_image"],nodesDenylist:void 0' in s
+        assert s.startswith("x={") and s.endswith("y:1}")   # точечная замена
+        assert setup.patch_nodes_allowlist(bundle=f) is False  # идемпотентно
+    print("OK: allowlist-патч на синтетике, идемпотентность")
+
+
+def test_allowlist_anchor_in_live_bundle():
+    setup = _load_setup()
+    found = 0
+    for f in (setup.DIST / "assets").glob("index-*.js"):
+        s = f.read_text(encoding="utf-8")
+        if setup.JS_ALLOW_MARKER in s:
+            found += 1          # уже пропатчено (деплой прошёл)
+        else:
+            found += 1 if s.count(setup.JS_ALLOW_OLD) == 1 else 0
+    assert found == 1, f"index-бандл с config-slice: {found}"
+    print("OK: якорь/маркер allowlist в живом бандле — ровно один файл")
+
+
 if __name__ == "__main__":
     test_model_choices_from_admin_file()
     test_model_choices_fallbacks()
@@ -488,3 +530,6 @@ if __name__ == "__main__":
     test_router_defaults_sync()
     test_deploy_cloud_nodes()
     test_setup_main_calls_deploy()
+    test_allowlist_types()
+    test_allowlist_patch_synthetic()
+    test_allowlist_anchor_in_live_bundle()

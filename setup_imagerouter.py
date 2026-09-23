@@ -56,6 +56,7 @@
 Требование: rebrand_devbim.py уже применён (не обязательно, но
 регулярное выражение рассчитано на текущее состояние бандла).
 """
+import json
 import re
 import shutil
 import sys
@@ -91,6 +92,29 @@ PE_DST = SP / "invokeai" / "app" / "invocations" / "devbim_prompt_enhancer.py"
 
 CN_SRC = SRC / "devbim_cloud_nodes.py"
 CN_DST = SP / "invokeai" / "app" / "invocations" / "devbim_cloud_nodes.py"
+
+# --- Белый список нод вкладки Workflows (штатный nodesAllowlist config-slice,
+# index-бандл). Механизм allow/denylist — родной для InvokeAI, в OSS ничем не
+# наполняется; фильтрация действует на меню Add Node, поиск и cmdk редактора.
+# Билдеры графов Generate/Canvas/Upscaling шаблонов не читают — их не трогает.
+# iterate/collect в 6.2 ЕСТЬ (зарегистрированы в app/services/shared/graph.py,
+# вопреки разведке спеки) — iterate нужен шаблону «Generate and Upscale».
+JS_ALLOWLIST_TYPES = [
+    "devbim_generate", "devbim_edit", "devbim_vlm", "devbim_upscale",
+    "claude_expand_prompt", "claude_analyze_image",
+    "string", "string_collection", "dynamic_prompt",
+    "string_join", "string_join_three", "string_replace",
+    "image", "image_collection", "collect", "iterate",
+    "img_crop", "img_resize", "img_scale",
+    "integer", "float", "rand_int", "range",
+    "save_image",
+]
+JS_ALLOW_OLD = "nodesAllowlist:void 0,nodesDenylist:void 0"
+JS_ALLOW_NEW = (
+    "nodesAllowlist:" + json.dumps(JS_ALLOWLIST_TYPES, separators=(",", ":"))
+    + ",nodesDenylist:void 0"
+)
+JS_ALLOW_MARKER = 'nodesAllowlist:["devbim_generate"'
 
 # Якорь тот же, что у setup_ifcviewer.py (JS_APPCONTENT_ANCHOR): вставка
 # префиксом, якорь сохраняется для IFC-патча при любом порядке запуска.
@@ -1292,6 +1316,38 @@ def deploy_cloud_nodes() -> bool:
     return True
 
 
+def patch_nodes_allowlist(bundle: Path | None = None) -> bool:
+    """Белый список нод Workflows в config-slice index-бандла: меню Add Node,
+    поиск и cmdk показывают только облачные и вспомогательные ноды. Списки
+    моделей внутри нод НЕ зависят от этого патча (это openapi-схема)."""
+    if bundle is None:
+        targets = []
+        for f in DIST.glob("assets/index-*.js"):
+            s = f.read_text(encoding="utf-8")
+            if JS_ALLOW_OLD in s or JS_ALLOW_MARKER in s:
+                targets.append(f)
+        if len(targets) != 1:
+            print(f"ОШИБКА: index-бандл с config-slice найден {len(targets)} раз (ожидался 1)")
+            sys.exit(1)
+        bundle = targets[0]
+    s = bundle.read_text(encoding="utf-8")
+    if JS_ALLOW_MARKER in s:
+        print("Белый список нод уже установлен, пропуск")
+        return False
+    n = s.count(JS_ALLOW_OLD)
+    if n != 1:
+        print(f"ОШИБКА: якорь nodesAllowlist найден {n} раз — структура изменилась")
+        sys.exit(1)
+    s = s.replace(JS_ALLOW_OLD, JS_ALLOW_NEW, 1)
+    bak = bundle.with_suffix(bundle.suffix + ".imagerouter-bak")
+    if not bak.exists():
+        shutil.copy2(bundle, bak)
+    bundle.write_text(s, encoding="utf-8")
+    print(f"Белый список нод Workflows установлен ({len(JS_ALLOWLIST_TYPES)} типов): "
+          f"{bundle.name} (бэкап: {bak.name})")
+    return True
+
+
 # Кнопка Prompt Enhance V1 (06.09): голубая кнопка ✨ 56×40px в слоте 60px
 # справа от жёлтой Generate. Оставлена для миграции уже пропатченных бандлов.
 # Je — стор-хук (как у штатной кнопки расширения), ie(ci.$state) — стор
@@ -1920,6 +1976,7 @@ def main() -> None:
     patch_left_rail()
     patch_admin_gate()
     patch_tab_guard()
+    patch_nodes_allowlist()
     patch_index_html()
     print("Готово. Перезапустите сервер: ключ и пароль подтянутся из .env.")
     print("Далее: Меню → «Настройки» → пароль → «Менеджер моделей» → вкладка ImageRouter.")
