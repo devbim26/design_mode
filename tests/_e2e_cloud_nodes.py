@@ -15,7 +15,11 @@
    элемент, на очереди с историей это ложный «completed» без ожидания.
 3. Галерея: фиксируем имя последней картинки ДО генерации и требуем
    новую после — привязка метаданных cloud-generate к этому запуску.
-4. enqueue_batch в 6.2.0 отдаёт 200 (не 202; посредник тоже шлёт 200).
+4. enqueue_batch в 6.2.0 отдаёт 200 (не 202; посредник тоже шлёт 200) —
+   статуса недостаточно, чтобы отличить перехват от провала в локальную
+   очередь, поэтому перехват подтверждаем СИГНАТУРОЙ посредника:
+   item_ids из одних нулей (routers/imagerouter.py:1967 синтезирует
+   [0]*len(saved); реальная очередь отдаёт возрастающие позитивные id).
 5. Список картинок: ключ "items", не "images"; метаданные — отдельный
    эндпоинт GET /api/v1/images/i/{name}/metadata (у images_by_names
    метаданных нет).
@@ -26,10 +30,13 @@
    «Choose Workflow from Library», после выбора шаблона — диалог
    «Load workflow?» → кнопка Load, и ПОВТОРНЫЙ клик «Workflow Editor»
    (после загрузки шаблона центр сбрасывается на «Image Viewer»).
+7. Меню Add Node ждём по [cmdk-root] (wait_for_selector), а не sleep:
+   до клика элемента в DOM нет, после — контейнер меню с cmdk-item
+   (подтверждено UI-зондом .superpowers/sdd/probe-addnode.py); allowlist
+   и запрещённые ноды проверяем по тексту МЕНЮ ([cmdk-root]), а не body.
 """
 import json
 import re
-import sys
 import time
 from pathlib import Path
 
@@ -125,7 +132,13 @@ if dump.exists():
     if isinstance(batch, dict) and "batch" in batch:
         r = s.post(f"{BASE}/api/v1/queue/default/enqueue_batch", json=batch, timeout=300)
         assert r.status_code in (200, 202), (r.status_code, r.text[:300])  # посредник шлёт 200
-        print("OK: канвас-граф принят перехватом (регрессия посредника)")
+        # Сигнатура перехвата: посредник синтезирует item_ids из нулей
+        # (imagerouter.py:1967: [0] * len(saved)); реальная очередь отдаёт
+        # возрастающие позитивные id. Одного статуса мало — оба пути 200.
+        ir_ids = r.json().get("item_ids") or []
+        assert ir_ids and all(i == 0 for i in ir_ids), \
+            f"канвас-граф НЕ перехвачен (ушёл в локальную очередь): item_ids={ir_ids[:5]}"
+        print("OK: канвас-граф принят перехватом (item_ids все 0 — сигнатура посредника)")
     else:
         print("SKIP: дампа-графа нет (структура)")
 else:
@@ -159,18 +172,20 @@ with sync_playwright() as p:
     page.get_by_text("Workflow Editor", exact=True).first.click(timeout=15000)
     time.sleep(2)
 
-    # меню Add Node: только разрешённые ноды
+    # меню Add Node: только разрешённые ноды. Ждём само меню (контейнер
+    # cmdk — до клика его в DOM нет, зонд probe-addnode.py), читаем текст
+    # МЕНЮ, а не body — иначе чек проходит впустую по тексту страницы
     add = page.locator("button[aria-label='Add Node']")
     assert add.count(), "кнопка Add Node не найдена на холсте (см. workflows-cloud-tab.png)"
     add.first.click(timeout=15000)
-    time.sleep(1)
-    body = page.locator("body").inner_text()
-    assert "Generate Image" in body or "Devbim" in body or "devbim" in body.lower(), \
+    page.wait_for_selector("[cmdk-root]", timeout=15000)  # меню реально открыто
+    menu_text = page.locator("[cmdk-root]").inner_text()
+    assert "Generate Image" in menu_text or "Devbim" in menu_text or "devbim" in menu_text.lower(), \
         "меню Add Node не показывает облачные ноды (см. workflows-cloud-addnode.png)"
     for gone in ("Denoise Latents", "Compel Prompt", "Model Loader"):
-        assert gone not in body, f"запрещённая нода в меню: {gone}"
+        assert gone not in menu_text, f"запрещённая нода в меню: {gone}"
+    page.screenshot(path=str(OUT / "workflows-cloud-addnode.png"))  # ДО Escape — как улика при фейле
     page.keyboard.press("Escape")
-    page.screenshot(path=str(OUT / "workflows-cloud-addnode.png"))
     print("OK: Add Node — облачные ноды есть, локальной диффузии нет")
 
     # библиотека: открыть шаблон Facade Variants
