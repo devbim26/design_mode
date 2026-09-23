@@ -585,6 +585,32 @@ Structure — запрос уходит в `/v1/openai/images/edits` с серв
 - Диагностика: строки `[imagerouter] upscale ...` в `ir_server.log`;
   тесты `tests/test_upscale_cloud.py`.
 
+## Workflows — облачные ноды
+
+Вкладка Workflows работает на облачных нодах: **Generate Image** (промт/батч
+до 10 → галерея), **Edit Image** (исходник + до 4 референсов), **Ask AI**
+(вопрос по картинкам VLM), **Upscale Image** («2x»/«4x»/«1536x1024»).
+Результаты сохраняются в галерею автоматически. Ноды выполняются реальной
+очередью: отмена работает между нодами (текущий API-вызов завершается,
+результат отбрасывается).
+
+Белый список нод (меню Add Node / поиск / cmdk) — 24 типа: облачные ноды,
+Enhance/Analyze, примитивы, iterate/collect, кадрирование/ресайз, числа,
+Save Image. Списки моделей в дропдаунах нод = выбор администратора
+(«Менеджер моделей»); смена списка требует перезапуска сервера.
+
+Библиотека шаблонов: 5 облачных (Text to Image, Facade Variants,
+Edit with References, Analyze and Recreate, Generate and Upscale).
+Стоковые локальные шаблоны заменены; ранее сохранённые пользовательские
+workflow с локальными нодами открываются с «missing template» (ожидаемо).
+
+Реализация: `imagerouter/devbim_cloud_nodes.py` (деплой
+`setup_imagerouter.py`, узлы `devbim_*`), allowlist — `patch_nodes_allowlist`
+(index-бандл), шаблоны — `imagerouter/cloud_workflows/` →
+`default_workflows/` в пакете. Тесты: `tests/test_cloud_nodes.py`.
+Откат: `index-*.js.imagerouter-bak`, `default_workflows/*.orig`, удалить
+`invokeai/app/invocations/devbim_cloud_nodes.py`, перезапустить setup и сервер.
+
 ## IFC-вьювер (BIM)
 
 Отдельная вкладка **«IFC»** в левой рейке (после «Рабочие процессы») —

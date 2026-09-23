@@ -2184,6 +2184,34 @@ invokeai==6.2.0` их нужно запускать повторно в поря
     (OLD-фрагменты отсутствуют в живом бандле), `tests/_e2e_ui_cleanup.py`
     (живой UI по aria-меткам, скриншоты docs/ui-cleanup-*.png). Откат:
     *.imagerouter-bak + повторный setup.
+51. **Workflows: облачные ноды + белый список + облачные шаблоны** (22.09;
+    спека/план `docs/superpowers/specs|plans/2026-09-22-workflows-cloud-nodes*`).
+    Четыре инвокации в `imagerouter/devbim_cloud_nodes.py` (деплой
+    `deploy_cloud_nodes` в setup_imagerouter.py, паттерн п.22):
+    `devbim_generate`/`devbim_edit` (батч до 10 промтов, поле prompt
+    одиночное + prompts коллекция — одиночный выход ко входу-коллекции в
+    6.2 НЕ подключается, NodeInputError), `devbim_vlm` (Ask AI, до 4 картинок,
+    модель PROMPT_ENHANCER_MODEL), `devbim_upscale` (режим 2x/4x/WxH,
+    хелперы _pick_upscale_size/_upscale_prompt роутера). Выполняются
+    РЕАЛЬНОЙ очередью (перехват enqueue_batch их не видит: model — строка),
+    результаты сами падают в галерею (context.images.save, GENERAL).
+    Дропдауны моделей — Literal с tuple(...) на ИМПОРТЕ модуля из файлов
+    выбора админа (data/imagerouter_main_models.json — edit фильтруется по
+    входу-image каталога; imagerouter_upscale.json); файла нет —
+    DEFAULT_MAIN_MODELS/DEFAULT_UPSCALE_MODELS роутера; смена списка —
+    рестарт сервера. Allowlist: `patch_nodes_allowlist` (config-slice
+    index-бандла, 24 типа — включая iterate/collect: вопреки разведке спеки
+    они в 6.2 ЕСТЬ, graph.py:258/279; iterate обязателен для цепочки
+    collection→single). Шаблоны: 5 JSON в `imagerouter/cloud_workflows/`,
+    `deploy_cloud_workflows` убирает стоковые (бэкап *.orig), БД дочищает
+    _sync_default_workflows на старте. ГРАБЛИ: (а) field label/notes
+    воркфлоу вместо Note-нод — формат Note-ноды фронтендовской zod не
+    верифицировать локально; (б) якорь nodesAllowlist ровно один в
+    index-бандле — проверять node-import; (в) пустой список админа у нод
+    даёт дефолты (Literal не бывает пустым); (г) модель-значение в шаблонах
+    НЕ задаётся (value опущен) — дефолт Literal = первый элемент списка
+    админа, при открытии шаблона подбирается автоматически. Тесты:
+    tests/test_cloud_nodes.py; E2E tests/_e2e_cloud_nodes.py.
 
 
 ```powershell
