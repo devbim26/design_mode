@@ -50,7 +50,9 @@ def test_interior_wall_palette():
     assert wall_palette_key(scene, scene["walls"][1]) == ("ext", "Y")   # [38,2]->[38,28]
     assert wall_palette_key(scene, scene["walls"][4]) == ("int", "Y")   # перегородка
     diag = dict(scene)
-    diag["walls"] = [{"points_px": [[0, 0], [10, 10]], "thickness_m": 0.2,
+    # диагональ ЮЗ->СВ: в метрах плана (Y-флип) это +45°; [0,0]->[10,10]
+    # давало бы −45° -> сектор D135 (проверено по формуле wall_palette_key)
+    diag["walls"] = [{"points_px": [[0, 28], [10, 18]], "thickness_m": 0.2,
                       "exterior": False}]
     assert wall_palette_key(diag, diag["walls"][0]) == ("int", "D45")
 
