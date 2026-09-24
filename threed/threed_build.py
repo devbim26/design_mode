@@ -733,11 +733,27 @@ ASSUMPTION_INTERIOR = (
 )
 
 INTERIOR_DEFAULT_COLORS = {
-    "slab": "#d9d4c8", "wall": "#c8b89a", "opening": "#202830", "room": "#e6ecf2",
+    "slab": "#d9d4c8", "door": "#7A4E35", "window": "#A8D4EA", "room": "#e6ecf2",
     "bed": "#8fa3bf", "sofa": "#7f9b8e", "table": "#c9a227", "chair": "#d4ac9e",
     "wardrobe": "#a58d6f", "kitchen": "#9aa3ad", "bath": "#bfd8e6",
     "toilet": "#e0e4e8", "sink": "#d6e0e8", "lamp": "#f0d68a", "other": "#b8bcc2",
 }
+
+# Палитра стен интерьера: тон = наружная/перегородка, оттенок = ориентация
+# (4 сектора по 45°, ось двунаправленная). Смежные перпендикулярные стены
+# всегда в разных секторах -> всегда разного цвета.
+INTERIOR_WALL_PALETTE = {
+    ("ext", "X"): "#C2765B", ("ext", "D45"): "#C9924F",
+    ("ext", "Y"): "#A98F55", ("ext", "D135"): "#B58383",
+    ("int", "X"): "#E8C9B8", ("int", "D45"): "#E9D9B8",
+    ("int", "Y"): "#D6DCC3", ("int", "D135"): "#D9D0DC",
+}
+WALL_SECTOR_LABELS = {"X": "В-З", "D45": "45°", "Y": "С-Ю", "D135": "135°"}
+INTERIOR_COLOR_LEGEND = (
+    "Стены: наружные — терракота В-З, охра 45°, хаки С-Ю, пыльная роза 135°; "
+    "перегородки — пастельные аналоги; двери коричневые; окна голубые "
+    "полупрозрачные. Цвет кодирует тип и ориентацию, не материал."
+)
 
 FURNITURE_RU = {
     "bed": "Кровать", "sofa": "Диван", "table": "Стол", "chair": "Стул",
@@ -785,6 +801,16 @@ def _outline_point_at(data, dist_px):
     return None
 
 
+def wall_palette_key(data, wall):
+    """Ключ стиля стены: (ext|int, сектор). Сектор считается по углу сегмента
+    в метрах плана (Y-флип учтён); 180° = та же ось, поэтому 4 корзины."""
+    (x1, y1), (x2, y2) = (_px_to_m(data, *wall["points_px"][0]),
+                          _px_to_m(data, *wall["points_px"][1]))
+    ang = float(np.degrees(np.arctan2(y2 - y1, x2 - x1))) % 180.0
+    sector = ("X", "D45", "Y", "D135")[int(round(ang / 45.0)) % 4]
+    return ("ext" if wall.get("exterior") else "int"), sector
+
+
 def build_interior(scene, ifc_path, preview_path, meta):
     """Сцена интерьера (validate_interior) -> IFC4 + чертёж-превью."""
     data = dict(scene)
@@ -825,12 +851,23 @@ def build_interior(scene, ifc_path, preview_path, meta):
     fstyles = {}
     for key, color in colors.items():
         r, g, b = matplotlib.colors.to_rgb(color)
-        style = _api("style.add_style", file=model, name=f"Interior{key.capitalize()}")
+        sname = {"door": "Door", "window": "Window"}.get(
+            key, f"Interior{key.capitalize()}")
+        style = _api("style.add_style", file=model, name=sname)
         _api("style.add_surface_style", file=model, style=style,
              ifc_class="IfcSurfaceStyleShading",
              attributes={"SurfaceColour": {"Name": key, "Red": r, "Green": g, "Blue": b},
-                         "Transparency": 0.0})
+                         "Transparency": 0.55 if key == "window" else 0.0})
         fstyles[key] = style
+    for (kind, sector), color in INTERIOR_WALL_PALETTE.items():
+        r, g, b = matplotlib.colors.to_rgb(color)
+        style = _api("style.add_style", file=model, name=f"Wall{kind.capitalize()}{sector}")
+        _api("style.add_surface_style", file=model, style=style,
+             ifc_class="IfcSurfaceStyleShading",
+             attributes={"SurfaceColour": {"Name": f"wall-{kind}-{sector}",
+                                                "Red": r, "Green": g, "Blue": b},
+                         "Transparency": 0.0})
+        fstyles[(kind, sector)] = style
 
     def rbox(name, bw, bd, bh, cx, cy, z, rot_deg, color_key, container,
              ifc_class, object_type, predefined=None):
@@ -911,10 +948,12 @@ def build_interior(scene, ifc_path, preview_path, meta):
         if length < 0.05:
             continue
         ang = np.degrees(np.arctan2(dy, dx))
-        ext = " нар." if wall.get("exterior") else ""
-        rbox(f"Стена {idx:02d}{ext}", length, wall["thickness_m"], wh,
+        kind, sector = wall_palette_key(data, wall)
+        rbox(f"Стена {idx:02d} {'наружная' if kind == 'ext' else 'перегородка'} "
+             f"{WALL_SECTOR_LABELS[sector]}",
+             length, wall["thickness_m"], wh,
              (p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2, 0.0, ang,
-             "wall", storey, "IfcWall", "CONCEPTUAL_WALL", predefined="USERDEFINED")
+             (kind, sector), storey, "IfcWall", "CONCEPTUAL_WALL", predefined="USERDEFINED")
 
     # --- проёмы: сквозь стену с выступом 0.03 м (урок фазы 2: заподлицо
     #     совпадающие грани не рендерятся и не кликаются)
@@ -943,8 +982,8 @@ def build_interior(scene, ifc_path, preview_path, meta):
             n_windows += 1
             name, otype = f"Окно {n_windows}", "CONCEPTUAL_WINDOW"
         rbox(name, op["width_m"], thickness + 0.06, op["height_m"], cx, cy,
-             op["sill_m"], ang, "opening", storey,
-             "IfcBuildingElementProxy", otype, predefined="USERDEFINED")
+             op["sill_m"], ang, "door" if op["kind"] == "door" else "window",
+             storey, "IfcBuildingElementProxy", otype, predefined="USERDEFINED")
 
     # --- комнаты: IfcSpace с именами с плана + pset Room
     for room in data["rooms"]:
@@ -965,6 +1004,7 @@ def build_interior(scene, ifc_path, preview_path, meta):
         "Walls": len(data["walls"]), "Openings": len(data["openings"]),
         "Rooms": len(data["rooms"]), "Furniture": len(data["furniture"]),
         "ApproximateGeometry": True, "Notes": ASSUMPTION_INTERIOR,
+        "ColorLegend": INTERIOR_COLOR_LEGEND,
     })
 
     _write_header(model, ifc_path)
@@ -1000,7 +1040,8 @@ def _draw_interior_preview(data, preview_path):
         t = wall["thickness_m"]
         ax.add_patch(PlotPolygon(rect_corners((p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2,
                                               length, t, ang),
-                                 facecolor=data["colors"]["wall"], edgecolor="#263747",
+                                 facecolor=INTERIOR_WALL_PALETTE[wall_palette_key(data, wall)],
+                                 edgecolor="#263747",
                                  linewidth=0.8))
     for op in data["openings"]:
         widx = op["wall_idx"]
@@ -1024,7 +1065,8 @@ def _draw_interior_preview(data, preview_path):
             cx, cy = p1[0] + ux * t, p1[1] + uy * t
             ang = np.degrees(np.arctan2(p2[1] - p1[1], p2[0] - p1[0]))
         ax.add_patch(PlotPolygon(rect_corners(cx, cy, op["width_m"], thickness + 0.06, ang),
-                                 facecolor=data["colors"]["opening"], edgecolor="white",
+                                 facecolor=data["colors"]["door" if op["kind"] == "door"
+                                                          else "window"], edgecolor="white",
                                  linewidth=0.6))
     for room in data["rooms"]:
         pts = [_px_to_m(data, x, y) for x, y in room["points_px"]]
@@ -1056,6 +1098,13 @@ def _draw_interior_preview(data, preview_path):
     ax.axis("off")
     ax.set_title(f"3D Design — интерьер: стены {wh:g} м, масштаб {scale:g} м/px",
                  fontsize=13)
+    handles = [PlotPolygon([[0, 0], [1, 0], [1, 1], [0, 1]], facecolor=c,
+                           edgecolor="#263747", linewidth=0.5)
+               for c in INTERIOR_WALL_PALETTE.values()]
+    labels = [f"{'нар.' if k == 'ext' else 'перег.'} {WALL_SECTOR_LABELS[s]}"
+              for k, s in INTERIOR_WALL_PALETTE]
+    fig.legend(handles, labels, loc="lower center", ncol=4, fontsize=7,
+               frameon=False, title="Палитра стен (тип × ориентация)")
     fig.tight_layout()
     preview_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(preview_path, dpi=160, facecolor="white")

@@ -136,6 +136,79 @@ def test_build_interior():
     print("test_build_interior OK")
 
 
+def test_interior_wall_palette():
+    import ifcopenshell
+    from ifcopenshell.util.element import get_psets
+    from threed.threed_build import (build_interior, INTERIOR_WALL_PALETTE,
+                                     wall_palette_key, INTERIOR_COLOR_LEGEND)
+
+    scene = sample_interior_scene()
+    # сектор в МЕТРАХ плана (Y-флип учтён), ось двунаправленная -> 4 корзины
+    assert wall_palette_key(scene, scene["walls"][0]) == ("ext", "X")   # [2,2]->[38,2]
+    assert wall_palette_key(scene, scene["walls"][1]) == ("ext", "Y")   # [38,2]->[38,28]
+    assert wall_palette_key(scene, scene["walls"][4]) == ("int", "Y")   # перегородка
+    diag = dict(scene)
+    # (отклонение от брифа: [[0,0],[10,10]] в метрах плана — диагональ ↘, -45° -> D135;
+    # фикстура заменена на ↗ +45° ([0,28]->[10,18]: юго-запад -> северо-восток),
+    # чтобы выполнялся ассерт брифа ("int", "D45") при вербатим-реализации)
+    diag["walls"] = [{"points_px": [[0, 28], [10, 18]], "thickness_m": 0.2,
+                      "exterior": False}]
+    assert wall_palette_key(diag, diag["walls"][0]) == ("int", "D45")
+
+    TMP.mkdir(exist_ok=True)
+    ifc = TMP / "3D_interior_palette.ifc"
+    prev = TMP / "3D_interior_palette_preview.png"
+    build_interior(scene, ifc, prev, {"Scenario": "interior", "Prompt": "тест",
+                                      "Model": "test/model", "Source": "3D Design"})
+    assert ifc.is_file() and prev.is_file()
+
+    m = ifcopenshell.open(str(ifc))
+
+    def style_name(product):
+        item = product.Representation.Representations[0].Items[0]
+        return item.StyledByItem[0].Styles[0].Name
+
+    walls = m.by_type("IfcWall")
+    assert len(walls) == 5
+    names = sorted(w.Name for w in walls)
+    assert any("наружная В-З" in n for n in names), names
+    assert any("перегородка С-Ю" in n for n in names), names
+    assert not any("нар." in n for n in names), "старый суффикс «нар.» должен уйти"
+    # каждой стене — свой стиль по типу×ориентации
+    assert {style_name(w) for w in walls} == {"WallExtX", "WallExtY", "WallIntY"}
+
+    # двери — один стиль, окна — голубые полупрозрачные
+    proxies = m.by_type("IfcBuildingElementProxy")
+    doors = [p for p in proxies if p.ObjectType == "CONCEPTUAL_DOOR"]
+    wins = [p for p in proxies if p.ObjectType == "CONCEPTUAL_WINDOW"]
+    assert len(doors) == 2 and len(wins) == 1
+    assert {style_name(p) for p in doors} == {"Door"}
+    assert {style_name(p) for p in wins} == {"Window"}
+    shading = [s for s in m.by_type("IfcSurfaceStyleShading")
+               if s.SurfaceColour.Name == "window"][0]
+    assert abs(shading.Transparency - 0.55) < 1e-6, "окно должно быть прозрачным"
+    col = shading.SurfaceColour
+    assert abs(col.Red - 0xA8 / 255) < 0.02 and abs(col.Blue - 0xEA / 255) < 0.02 \
+        and abs(col.Green - 0xD4 / 255) < 0.02, "окно должно быть голубым #A8D4EA"
+
+    # цвет WallExtX = терракота #C2765B; одноимённые сектора ext/int различаются
+    def surf_rgb(style_name_):
+        st = [s for s in m.by_type("IfcSurfaceStyle") if s.Name == style_name_][0]
+        c = st.Styles[0].SurfaceColour
+        return (c.Red, c.Green, c.Blue)
+    import matplotlib.colors as _mc
+    for name, hexc in (("WallExtX", "#C2765B"), ("WallIntX", "#E8C9B8")):
+        want = _mc.to_rgb(hexc)
+        got = surf_rgb(name)
+        assert all(abs(a - b) < 0.02 for a, b in zip(want, got)), (name, got)
+    assert len(INTERIOR_WALL_PALETTE) == 8
+
+    # легенда едет с файлом
+    pset = get_psets(m.by_type("IfcBuilding")[0]).get("InteriorModel", {})
+    assert INTERIOR_COLOR_LEGEND[:40] in (pset.get("ColorLegend") or ""), pset
+    print("test_interior_wall_palette OK")
+
+
 def test_build_facade():
     import ifcopenshell
     from threed.threed_build import build_facade
@@ -952,6 +1025,8 @@ def test_admin_threed_section():
 if __name__ == "__main__":
     test_build_facade()
     test_build_interior()
+    test_interior_wall_palette()
+    print("OK test_interior_wall_palette")
     test_build_genplan()
     test_extract_json()
     test_validate_genplan()
