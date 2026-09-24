@@ -149,6 +149,32 @@ def test_snapbar_tab_mode() -> None:
         "в App-бандле нет IFE v2 (захват __devbimIfcCtx) — перезапустите setup_ifcviewer.py"
 
 
+def test_ai_palette() -> None:
+    s = SRC.read_text(encoding="utf-8")
+    assert 'id="btn-palette"' in s, "нет кнопки AI-палитры в тулбаре"
+    assert "#toolbar button.active" in s, "нет стиля активной кнопки тулбара"
+    js = module_script(s)
+    assert 'posX: "#F0A35C"' in js, "нет палитры шести корзин"
+    assert "AI_SHELL_HEXES" in js and "AI_EXT_HEXES" in js, "нет hex-наборов оболочки"
+    assert "dFdx(vAIWorld)" in js and "dFdy(vAIWorld)" in js, \
+        "нет покраски по геометрической нормали грани"
+    assert 'localStorage.getItem("devbim:ifc:aiPalette")' in js, "состояние не переживает F5"
+    assert "aiPaletteState.on ? AI_PALETTE_LEGEND" in js, "легенда не копируется при снимке"
+    assert "if (aiPaletteState.on) aiApply();" in js, "палитра не переживает загрузку модели"
+    assert "if (aiPaletteState.on) aiEnsure();" in js, "нет самопроверки подмены при LOD"
+    assert "palette: {" in js, "нет отладочного __ifc.palette"
+
+
+def test_module_syntax() -> None:
+    import subprocess
+    js = module_script(SRC.read_text(encoding="utf-8"))
+    p = BASE / "tests" / "_threed_tmp" / "ifc_module.mjs"
+    p.parent.mkdir(exist_ok=True)
+    p.write_text(js, encoding="utf-8")
+    r = subprocess.run(["node", "--check", str(p)], capture_output=True, text=True)
+    assert r.returncode == 0, f"синтаксис module-скрипта: {r.stderr[:400]}"
+
+
 if __name__ == "__main__":
     test_panel_markup()
     print("OK test_panel_markup")
@@ -162,6 +188,10 @@ if __name__ == "__main__":
     print("OK test_person_logic")
     test_snapbar_tab_mode()
     print("OK test_snapbar_tab_mode")
+    test_ai_palette()
+    print("OK test_ai_palette")
+    test_module_syntax()
+    print("OK test_module_syntax")
     test_deployed()
     print("OK test_deployed")
     print("ВСЕ ТЕСТЫ OK")

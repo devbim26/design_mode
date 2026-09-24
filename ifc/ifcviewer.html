@@ -89,6 +89,7 @@
     z-index:5;
   }
   #toolbar button{padding:4px 10px; font-size:12px; font-weight:500}
+  #toolbar button.active{background:#38BDF8;border-color:#38BDF8;color:#08222e}
   #navhelp{
     position:absolute; right:10px; bottom:10px; font-size:11px; color:var(--muted);
     background:rgba(12,13,15,.75); border:1px solid var(--border); border-radius:6px; padding:4px 9px;
@@ -274,6 +275,7 @@
       <button id="btn-sections" class="ghost" title="Сечения: горизонтальные и вертикальные, скрытие плоскостей, позиция слайдером">Сечения ▾</button>
       <button id="btn-person" class="ghost" title="Человек для масштаба: постановка на перекрытие и вид от глаз (1,7 м)">👤 ▾</button>
       <button id="btn-camera" class="ghost" title="Камера для ИИ-рендеринга: FOV, вертикали, орто-фасад, рамка кадра">📷 ▾</button>
+      <button id="btn-palette" class="ghost" title="AI-палитра: плоские цвета по нормалям граней (стороны света + вверх/вниз) — снимок для ИИ, где внутренний/наружный угол однозначен; легенда копируется при снимке">🎨</button>
     </div>
     <div id="campanel">
       <h3>Камера <span class="spacer"></span><button id="cam-close" class="ghost" title="Закрыть панель">✕</button></h3>
@@ -408,7 +410,7 @@ const clipper = new Clipper(components);
 clipper.enabled = true;
 
 // обновление LOD/видимости фрагментов при движении камеры
-world.camera.controls.addEventListener("update", () => fragments.core.update());
+world.camera.controls.addEventListener("update", () => { fragments.core.update(); if (aiPaletteState.on) aiEnsure(); });
 
 const ifcLoader = new IfcLoader(components);
 await ifcLoader.setup({
@@ -492,6 +494,7 @@ async function loadIfc(bytes, name) {
   model.useCamera(world.camera.three);
   world.scene.three.add(model.object);
   fragments.core.update(true);
+  if (aiPaletteState.on) aiApply();   // AI-палитра переживает загрузку модели
   await setProgress(0.9);
 
   await buildTree();
@@ -632,6 +635,10 @@ window.__ifc = {
     return fragments.raycast({ camera: world.camera.three, mouse, dom });
   },
   capture: () => renderSnapshot().toDataURL("image/png"),
+  palette: {
+    enable: () => aiSetEnabled(true), disable: () => aiSetEnabled(false),
+    get state() { return { ...aiPaletteState }; },
+  },
 };
 
 // --- контекст для ИИ-промта: этаж/помещение по предкам в дереве ---
@@ -685,7 +692,8 @@ function ctxName(localId) { return ctxNames.get(localId) ?? `#${localId}`; }
 
 // копия строки контекста в буфер при снимке — пользователь вставляет её в промт
 function copyContextToClipboard() {
-  const s = $("person-context").value;
+  const s = [$("person-context").value, aiPaletteState.on ? AI_PALETTE_LEGEND : ""]
+    .filter(Boolean).join("\n");
   if (!s) return;
   const notify = () => embedToast("Prompt context copied — paste it into the prompt (Ctrl+V)", false, 4000);
   const fallback = () => {
@@ -700,6 +708,130 @@ function copyContextToClipboard() {
   if (navigator.clipboard?.writeText) navigator.clipboard.writeText(s).then(notify).catch(fallback);
   else fallback();
 }
+
+// --- AI-палитра: плоские цвета по нормалям граней (снимки под ИИ-рендер) ---
+const AI_PALETTE = { posX: "#F0A35C", negX: "#E8D260", posY: "#9EC78A",
+                     negY: "#9CC8E0", posZ: "#F2F2EE", negZ: "#838A93" };
+const AI_DARK = 0.62;              // тёмный вариант корзины — наружные стены
+// материалы «оболочки» из сборщика интерьеров (hex): совпадение -> красить.
+// Наружные стены (AI_EXT_HEXES) — тёмным, перегородки/пол — светлым.
+// Совпадений нет (чужая модель) -> красим все непрозрачные меши светлым.
+const AI_EXT_HEXES = new Set(["#C2765B", "#C9924F", "#A98F55", "#B58383"]);
+const AI_SHELL_HEXES = new Set([...AI_EXT_HEXES,
+  "#E8C9B8", "#E9D9B8", "#D6DCC3", "#D9D0DC", "#D9D4C8"]);
+const AI_PALETTE_LEGEND =
+  "AI-палитра снимка: оранжевый — грань смотрит на восток (+X), жёлтый — на запад (−X), " +
+  "зелёный — на север (+Y), голубой — на юг (−Y), белый — вверх, серый — вниз; " +
+  "тёмные оттенки — наружные стены, светлые — перегородки и пол. Это служебный код " +
+  "ориентации граней, не материалы: перерисуй все поверхности реальными материалами " +
+  "с референсов, сохрани геометрию и направления граней.";
+
+const aiPaletteState = { on: false, meshes: 0 };
+
+function aiMaterial(dark) {
+  // MeshBasicMaterial + инъекция: цвет = корзина доминирующей оси ГЕОМЕТРИЧЕСКОЙ
+  // нормали грани в мировых координатах (dFdx/dFdy) — работает на любой геометрии,
+  // инстансинг и клиппинг-плоскости обрабатывает сам three.
+  const mat = new MeshBasicMaterial({ color: 0xffffff });
+  const cols = Object.values(AI_PALETTE)
+    .map((h) => new Color(h).multiplyScalar(dark ? AI_DARK : 1.0));
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uAICols = { value: cols };
+    shader.vertexShader = "varying vec3 vAIWorld;\n" + shader.vertexShader.replace(
+      "#include <project_vertex>",
+      `#include <project_vertex>
+      { vec4 aiwp = vec4(transformed, 1.0);
+        #ifdef USE_INSTANCING
+          aiwp = instanceMatrix * aiwp;
+        #endif
+        vAIWorld = (modelMatrix * aiwp).xyz; }`);
+    shader.fragmentShader = "varying vec3 vAIWorld;\nuniform vec3 uAICols[6];\n" +
+      shader.fragmentShader.replace(
+        "#include <color_fragment>",
+        `#include <color_fragment>
+        { vec3 ain = normalize(cross(dFdx(vAIWorld), dFdy(vAIWorld)));
+          vec3 aia = abs(ain); vec3 aic;
+          if (aia.x >= aia.y && aia.x >= aia.z) aic = ain.x > 0.0 ? uAICols[0] : uAICols[1];
+          else if (aia.y >= aia.z) aic = ain.y > 0.0 ? uAICols[2] : uAICols[3];
+          else aic = ain.z > 0.0 ? uAICols[4] : uAICols[5];
+          diffuseColor.rgb = aic; }`);
+  };
+  return mat;
+}
+
+const aiMatLight = aiMaterial(false);
+const aiMatDark = aiMaterial(true);
+
+function aiFirstMat(o) {
+  return Array.isArray(o.material) ? o.material[0] : o.material;
+}
+
+function aiApply() {
+  if (!model) return;
+  aiRestore();
+  let shellSeen = false;
+  model.object.traverse((o) => {
+    if (!o.isMesh) return;
+    const m = aiFirstMat(o);
+    if (!m) return;
+    if (m.transparent || m.opacity < 1) return;   // стекло/окна — как есть
+    const hex = m.color ? "#" + m.color.getHexString().toUpperCase() : null;
+    if (!hex || !AI_SHELL_HEXES.has(hex)) return;
+    shellSeen = true;
+    o.userData.aiOriginal = o.material;
+    o.material = AI_EXT_HEXES.has(hex) ? aiMatDark : aiMatLight;
+    aiPaletteState.meshes++;
+  });
+  if (!shellSeen) {
+    // чужая модель без палитры DevBIM — красим все непрозрачные меши светлым
+    model.object.traverse((o) => {
+      if (!o.isMesh || o.userData.aiOriginal) return;
+      const m = aiFirstMat(o);
+      if (!m || m.transparent || m.opacity < 1) return;
+      o.userData.aiOriginal = o.material;
+      o.material = aiMatLight;
+      aiPaletteState.meshes++;
+    });
+  }
+  // сечения (клиппинг) действуют и на подменённые материалы: та же ссылка
+  // на плоскости, что у оригинала
+  model.object.traverse((o) => {
+    if (!o.isMesh || !o.userData.aiOriginal) return;
+    const src = Array.isArray(o.userData.aiOriginal) ? o.userData.aiOriginal[0]
+                                                     : o.userData.aiOriginal;
+    if (src && src.clippingPlanes) o.material.clippingPlanes = src.clippingPlanes;
+  });
+}
+
+function aiRestore() {
+  if (!model) return;
+  model.object.traverse((o) => {
+    if (o.isMesh && o.userData.aiOriginal) {
+      o.material = o.userData.aiOriginal;
+      delete o.userData.aiOriginal;
+    }
+  });
+  aiPaletteState.meshes = 0;
+}
+
+function aiEnsure() {
+  // если библиотека пересоздала меши (LOD) — подмену наводим заново
+  if (!model) return;
+  let ok = true;
+  model.object.traverse((o) => { if (o.isMesh && !o.userData.aiOriginal) ok = false; });
+  if (!ok) aiApply();
+}
+
+function aiSetEnabled(on) {
+  aiPaletteState.on = !!on;
+  localStorage.setItem("devbim:ifc:aiPalette", on ? "1" : "0");
+  const b = $("btn-palette");
+  b.classList.toggle("active", aiPaletteState.on);
+  if (aiPaletteState.on) aiApply(); else aiRestore();
+}
+
+$("btn-palette").addEventListener("click", () => aiSetEnabled(!aiPaletteState.on));
+aiSetEnabled(localStorage.getItem("devbim:ifc:aiPalette") === "1");
 
 function updatePromptContext() {
   const src = personGroup ? personCtxId : (selection.size === 1 ? [...selection][0] : null);
