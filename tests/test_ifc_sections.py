@@ -160,8 +160,16 @@ def test_ai_palette() -> None:
         "нет покраски по геометрической нормали грани"
     assert 'localStorage.getItem("devbim:ifc:aiPalette")' in js, "состояние не переживает F5"
     assert "aiPaletteState.on ? AI_PALETTE_LEGEND" in js, "легенда не копируется при снимке"
-    assert "if (aiPaletteState.on) aiApply();" in js, "палитра не переживает загрузку модели"
     assert "if (aiPaletteState.on) aiEnsure();" in js, "нет самопроверки подмены при LOD"
+    # асинхронные стили @thatopen — палитра обязана пережить замену материалов
+    assert 'setTimeout(() => { if (aiPaletteState.on && model) aiApply(); }, 1500);' in js, \
+        "load-хук не откладывает apply мимо асинхронных стилей @thatopen"
+    restore = js[js.find("function aiRestore"):js.find("function aiEnsure")]
+    assert "cur === aiMatLight || cur === aiMatDark" in restore, \
+        "aiRestore не защищён от устаревших aiOriginal после замены материалов библиотекой"
+    ensure = js[js.find("function aiEnsure"):js.find("function aiSetEnabled")]
+    assert "aiMatLight" in ensure and "aiMatDark" in ensure, \
+        "aiEnsure считает покраску по userData, а не по факту действующей подмены"
     # init стреляет update синхронно → TDZ: объявление обязано стоять до слушателя камеры
     decl = js.find("const aiPaletteState")
     listener = js.find('controls.addEventListener("update"')

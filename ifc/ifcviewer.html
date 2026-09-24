@@ -497,7 +497,8 @@ async function loadIfc(bytes, name) {
   model.useCamera(world.camera.three);
   world.scene.three.add(model.object);
   fragments.core.update(true);
-  if (aiPaletteState.on) aiApply();   // AI-палитра переживает загрузку модели
+  // стили @thatopen докладываются асинхронно после update — даём им осесть; дальнейшую сходимость дожимает aiEnsure
+  if (aiPaletteState.on) setTimeout(() => { if (aiPaletteState.on && model) aiApply(); }, 1500);
   await setProgress(0.9);
 
   await buildTree();
@@ -808,7 +809,9 @@ function aiRestore() {
   if (!model) return;
   model.object.traverse((o) => {
     if (o.isMesh && o.userData.aiOriginal) {
-      o.material = o.userData.aiOriginal;
+      // библиотека может заменить материал поверх подмены — тогда текущий материал истина, aiOriginal устарел
+      const cur = Array.isArray(o.material) ? o.material[0] : o.material;
+      if (cur === aiMatLight || cur === aiMatDark) { o.material = o.userData.aiOriginal; }
       delete o.userData.aiOriginal;
     }
   });
@@ -816,12 +819,17 @@ function aiRestore() {
 }
 
 function aiEnsure() {
-  // пересоздание мешей (LOD) детектим по падению числа покрашенных
-  // относительно последнего apply; неотбираемые меши (окна/без материала)
-  // погоду не делают — иначе гоняли бы 3 обхода на каждый кадр орбиты
+  // замена/пересоздание мешей детектим по факту действующей подмены:
+  // считаем меши, чей материал до сих пор наш (userData переживает замену
+  // материала библиотекой и потому врёт); неотбираемые меши (окна/без
+  // материала) погоду не делают — иначе гоняли бы 3 обхода на каждый кадр орбиты
   if (!model) return;
   let painted = 0;
-  model.object.traverse((o) => { if (o.isMesh && o.userData.aiOriginal) painted++; });
+  model.object.traverse((o) => {
+    if (!o.isMesh) return;
+    const cur = Array.isArray(o.material) ? o.material[0] : o.material;
+    if (cur === aiMatLight || cur === aiMatDark) painted++;
+  });
   if (painted < aiPaletteState.meshes) aiApply();
 }
 
