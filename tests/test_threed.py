@@ -111,12 +111,19 @@ def test_build_interior():
     assert space_names == ["Кухня", "Спальня"]               # имена с плана
     # все IfcSpace в одном сторе
     assert len(m.by_type("IfcBuildingStorey")) == 1
+    # проёмы в стенах — настоящие IfcDoor/IfcWindow в IfcOpeningElement;
+    # на контуре (wall_idx="outline") — прокси без стены-носителя
     proxies = [p for p in m.by_type("IfcBuildingElementProxy")]
     kinds = {}
     for p in proxies:
         kinds[p.ObjectType] = kinds.get(p.ObjectType, 0) + 1
-    assert kinds.get("CONCEPTUAL_DOOR") == 2                 # 2 двери
-    assert kinds.get("CONCEPTUAL_WINDOW") == 1               # окно
+    assert kinds.get("CONCEPTUAL_DOOR") == 1                 # дверь на контуре
+    assert kinds.get("CONCEPTUAL_WINDOW") is None
+    assert len(m.by_type("IfcDoor")) == 1                    # дверь в стене 0
+    assert len(m.by_type("IfcWindow")) == 1                  # окно в стене 1
+    assert len(m.by_type("IfcOpeningElement")) == 2
+    assert len(m.by_type("IfcRelVoidsElement")) == 2
+    assert len(m.by_type("IfcRelFillsElement")) == 2
     furn = m.by_type("IfcFurnishingElement")
     assert len(furn) == 2
     ftypes = sorted(f.ObjectType for f in furn)
@@ -177,13 +184,16 @@ def test_interior_wall_palette():
     # каждой стене — свой стиль по типу×ориентации
     assert {style_name(w) for w in walls} == {"WallExtX", "WallExtY", "WallIntY"}
 
-    # двери — один стиль, окна — голубые полупрозрачные
+    # двери — один стиль, окна — голубые полупрозрачные: заполнения
+    # IfcDoor/IfcWindow в стенах + дверь-прокси на контуре
     proxies = m.by_type("IfcBuildingElementProxy")
     doors = [p for p in proxies if p.ObjectType == "CONCEPTUAL_DOOR"]
     wins = [p for p in proxies if p.ObjectType == "CONCEPTUAL_WINDOW"]
-    assert len(doors) == 2 and len(wins) == 1
-    assert {style_name(p) for p in doors} == {"Door"}
-    assert {style_name(p) for p in wins} == {"Window"}
+    ifc_doors, ifc_wins = m.by_type("IfcDoor"), m.by_type("IfcWindow")
+    assert len(doors) == 1 and wins == [] and len(ifc_doors) == 1 \
+        and len(ifc_wins) == 1
+    assert {style_name(p) for p in doors + ifc_doors} == {"Door"}
+    assert {style_name(p) for p in ifc_wins} == {"Window"}
     shading = [s for s in m.by_type("IfcSurfaceStyleShading")
                if s.SurfaceColour.Name == "window"][0]
     assert abs(shading.Transparency - 0.55) < 1e-6, "окно должно быть прозрачным"
@@ -211,6 +221,86 @@ def test_interior_wall_palette():
     pset = get_psets(m.by_type("IfcBuilding")[0]).get("InteriorModel", {})
     assert INTERIOR_COLOR_LEGEND[:40] in (pset.get("ColorLegend") or ""), pset
     print("test_interior_wall_palette OK")
+
+
+def test_interior_real_openings():
+    """Настоящие проёмы (фикс 24.09): IfcOpeningElement режет стену,
+    IfcWindow/IfcDoor сидят внутри проёма; посадка клампится в габарит
+    сегмента; огрызки (<0,6 м) проёмов не держат. Живой кейс до фикса:
+    окно за торцом стены на 0,2 м, дверь на огрызке 0,2 м под 90°."""
+    import ifcopenshell
+    import numpy as np
+    from ifcopenshell.util.placement import get_local_placement
+    from threed.threed_build import build_interior
+
+    # стена 0: 8 м; стена 1: огрызок 0,32 м (2×0,16 м/px)
+    scene = {
+        "trace_width": 40, "trace_height": 30, "metres_per_trace_pixel": 0.16,
+        "wall_height": 2.7,
+        "outline": [[2, 2], [38, 2], [38, 28], [2, 28]],
+        "walls": [
+            {"points_px": [[2, 2], [52, 2]], "thickness_m": 0.4, "exterior": True},
+            {"points_px": [[4, 28], [6, 28]], "thickness_m": 0.3, "exterior": True},
+        ],
+        "openings": [
+            # окно шире остатка до правого торца: центр заx_px=45 (7,2 м) у
+            # конца стены 8 м -> кламп центра, проём целиком в сегменте
+            {"wall_idx": 0, "x_px": 45, "width_m": 2.0, "height_m": 1.5,
+             "sill_m": 0.9, "kind": "window"},
+            # дверь на огрызке 0,32 м — должна выброситься
+            {"wall_idx": 1, "x_px": 1, "width_m": 0.9, "height_m": 2.1,
+             "sill_m": 0.0, "kind": "door"},
+        ],
+        "rooms": [], "furniture": [],
+    }
+    TMP.mkdir(exist_ok=True)
+    ifc = TMP / "3D_interior_openings_test.ifc"
+    prev = TMP / "3D_interior_openings_test_preview.png"
+    build_interior(scene, ifc, prev, {"Scenario": "interior", "Prompt": "тест",
+                                      "Model": "test/model", "Source": "3D Design"})
+    m = ifcopenshell.open(str(ifc))
+
+    # огрызок не держит проём: 1 окно, 0 дверей, 1+1 voids/fills
+    assert len(m.by_type("IfcWindow")) == 1
+    assert len(m.by_type("IfcDoor")) == 0
+    assert len(m.by_type("IfcOpeningElement")) == 1
+    assert len(m.by_type("IfcRelVoidsElement")) == 1
+    assert len(m.by_type("IfcRelFillsElement")) == 1
+    rel = m.by_type("IfcRelVoidsElement")[0]
+    assert rel.RelatingBuildingElement.is_a("IfcWall")
+    assert rel.RelatedOpeningElement.is_a("IfcOpeningElement")
+    assert m.by_type("IfcRelFillsElement")[0].RelatedBuildingElement.is_a("IfcWindow")
+
+    # геометрия: окно внутри проёма, глубина стекла меньше толщины стены,
+    # посадка в сегменте (стена от x=0,32 до 8,32 м при y≈0,32; вдоль X)
+    wall = rel.RelatingBuildingElement
+    win = m.by_type("IfcWindow")[0]
+    op = m.by_type("IfcOpeningElement")[0]
+
+    def box(el):
+        mat = get_local_placement(el.ObjectPlacement)
+        pts = el.Representation.Representations[0].Items[0] \
+            .SweptArea.OuterCurve.Points.CoordList
+        xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
+        return ((mat[0, 3], mat[1, 3], mat[2, 3]),
+                max(xs) - min(xs), max(ys) - min(ys),
+                el.Representation.Representations[0].Items[0].Depth)
+
+    (wx, wy, wz), wbw, wbd, wdep = box(wall)
+    (ox, oy, oz), obw, obd, odep = box(op)
+    (vx, vy, vz), vbw, vbd, vdep = box(win)
+    wall_t = wbd
+    # коробка проёма режет стену насквозь с запасом, стекло — внутри стены
+    assert obd > wall_t and abs(obd - wall_t - 0.02) < 1e-6
+    assert vbd < wall_t and abs(vbd - min(wall_t - 0.04, 0.08)) < 1e-6, \
+        "стекло не должно выступать за плоскости стены"
+    # центр вдоль стены: x_px=45*0.16=7,2 м; конец стены 8,32-0,32=8,0 м
+    # от p1; кламп центра: 8,0 - 2,0/2 - 0,05 = 6,95 -> мировой x = 0,32+6,95
+    assert abs(ox - (0.32 + 6.95)) < 1e-3, (ox, ox - 0.32)
+    assert abs(vx - ox) < 1e-6 and abs(vy - oy) < 1e-6
+    lo, hi = ox - obw / 2, ox + obw / 2
+    assert 0.32 - 1e-6 <= lo and hi <= 8.32 + 1e-6, (lo, hi)
+    print("test_interior_real_openings OK")
 
 
 def test_build_facade():

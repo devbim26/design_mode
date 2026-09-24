@@ -125,9 +125,12 @@ def scene_overview(scenario, scene):
             "context_counts": context_counts}
 
 
-# классы, чьи продукты считаем (порядок = читаемость дампа)
+# классы, чьи продукты считаем (порядок = читаемость дампа); IfcDoor/IfcWindow —
+# заполнения настоящих проёмов интерьера (IfcOpeningElement не считаем: это
+# дыра, а не продукт, дубль с заполнением)
 _BUILT_CLASSES = ("IfcBuildingElementProxy", "IfcGeographicElement",
-                  "IfcWall", "IfcSlab", "IfcSpace", "IfcFurnishingElement")
+                  "IfcWall", "IfcSlab", "IfcSpace", "IfcFurnishingElement",
+                  "IfcDoor", "IfcWindow")
 
 
 def built_overview(ifc_path):

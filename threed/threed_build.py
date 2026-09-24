@@ -880,7 +880,9 @@ def build_interior(scene, ifc_path, preview_path, meta):
     def rbox(name, bw, bd, bh, cx, cy, z, rot_deg, color_key, container,
              ifc_class, object_type, predefined=None):
         """Прямоугольный блок с поворотом вокруг Z: профиль bw×bd, выдавливание
-        bh вверх от z. rot_deg — против часовой в метрах плана."""
+        bh вверх от z. rot_deg — против часовой в метрах плана.
+        container=None — без spatial-контейнера (IfcOpeningElement живёт
+        только в IfcRelVoidsElement); color_key вне fstyles — без стиля."""
         kwargs = dict(file=model, ifc_class=ifc_class, name=name)
         if predefined is not None:
             kwargs["predefined_type"] = predefined
@@ -892,14 +894,16 @@ def build_interior(scene, ifc_path, preview_path, meta):
         representation = _api("geometry.add_profile_representation", file=model,
                               context=body, profile=profile, depth=bh, cardinal_point=None)
         _api("geometry.assign_representation", file=model, product=product,
-             representation=representation)
-        _api("spatial.assign_container", file=model, products=[product],
-             relating_structure=container)
+              representation=representation)
+        if container is not None:
+            _api("spatial.assign_container", file=model, products=[product],
+                 relating_structure=container)
         matrix = _rot_z(rot_deg)
         matrix[0, 3], matrix[1, 3], matrix[2, 3] = float(cx), float(cy), float(z)
         _api("geometry.edit_object_placement", file=model, product=product, matrix=matrix)
-        _api("style.assign_representation_styles", file=model,
-             shape_representation=representation, styles=[fstyles[color_key]])
+        if color_key in fstyles:
+            _api("style.assign_representation_styles", file=model,
+                 shape_representation=representation, styles=[fstyles[color_key]])
         return product
 
     def poly(name, points_px, depth, z, color_key, container, ifc_class,
@@ -946,7 +950,8 @@ def build_interior(scene, ifc_path, preview_path, meta):
              "IfcSlab", "CONCEPTUAL_FLOOR", predefined="FLOOR")
 
     # --- стены: сегменты -> повёрнутые боксы
-    wall_geo = []  # (p1_m, p2_m, length_m, angle_deg) для проёмов
+    wall_geo = []        # (p1_m, p2_m, length_m) для проёмов
+    wall_products = []   # IfcWall по тем же индексам (None — вырожденный сегмент)
     for idx, wall in enumerate(data["walls"], start=1):
         p1 = _px_to_m(data, *wall["points_px"][0])
         p2 = _px_to_m(data, *wall["points_px"][1])
@@ -954,44 +959,77 @@ def build_interior(scene, ifc_path, preview_path, meta):
         length = float(np.hypot(dx, dy))
         wall_geo.append((p1, p2, length))
         if length < 0.05:
+            wall_products.append(None)
             continue
         ang = np.degrees(np.arctan2(dy, dx))
         kind, sector = wall_palette_key(data, wall)
-        rbox(f"Стена {idx:02d} {'наружная' if kind == 'ext' else 'перегородка'} "
-             f"{WALL_SECTOR_LABELS[sector]}",
-             length, wall["thickness_m"], wh,
-             (p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2, 0.0, ang,
-             (kind, sector), storey, "IfcWall", "CONCEPTUAL_WALL", predefined="USERDEFINED")
+        wall_products.append(rbox(
+            f"Стена {idx:02d} {'наружная' if kind == 'ext' else 'перегородка'} "
+            f"{WALL_SECTOR_LABELS[sector]}",
+            length, wall["thickness_m"], wh,
+            (p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2, 0.0, ang,
+            (kind, sector), storey, "IfcWall", "CONCEPTUAL_WALL", predefined="USERDEFINED"))
 
-    # --- проёмы: сквозь стену с выступом 0.03 м (урок фазы 2: заподлицо
-    #     совпадающие грани не рендерятся и не кликаются)
+    # --- проёмы: настоящие IfcOpeningElement (стена булево режется) +
+    #     IfcWindow/IfcDoor ВНУТРИ проёма. Фикс 24.09: раньше прокси-коробка
+    #     ложилась на сплошную стену (за стеклом не было дыры), а промах
+    #     VLM по x_px/wall_idx выезжал коробкой за пределы помещения
+    #     (живой кейс: окно за торцом стены на 0,2 м, дверь на огрызке
+    #     0,2 м под 90°). Коробка проёма — сквозь стену +0,02 м: чистый
+    #     булев, заподлицо совпадающие грани глитчат (урок фазы 2)
     n_doors = n_windows = 0
     for op in data["openings"]:
-        widx = op["wall_idx"]
-        if widx == "outline":
+        width, height, sill = (float(op["width_m"]), float(op["height_m"]),
+                               float(op["sill_m"]))
+        host = None
+        if op["wall_idx"] == "outline":
             hit = _outline_point_at(data, op["x_px"]) if data["outline"] else None
             if hit is None:
                 continue
             cx, cy, ang, len_px = hit
             thickness = 0.4
         else:
+            widx = op["wall_idx"]
             p1, p2, length = wall_geo[widx]
-            if length < 0.05:  # вырожденный сегмент (пропущен стеной)
+            if length < 0.6:  # огрызок проёма не держит (промах VLM)
                 continue
             thickness = data["walls"][widx]["thickness_m"]
+            # посадка в габарит сегмента: ширина и центр с полями 0,05 м
+            width = min(width, length - 0.1)
+            if width < 0.3:
+                continue
+            height = min(height, wh - sill - 0.05)
+            if height < 0.3:
+                continue
             t = max(0.0, min(op["x_px"] * scale, length))
+            t = max(width / 2 + 0.05, min(t, length - width / 2 - 0.05))
             ux, uy = (p2[0] - p1[0]) / length, (p2[1] - p1[1]) / length
             cx, cy = p1[0] + ux * t, p1[1] + uy * t
             ang = np.degrees(np.arctan2(p2[1] - p1[1], p2[0] - p1[0]))
+            host = wall_products[widx]
         if op["kind"] == "door":
             n_doors += 1
             name, otype = f"Дверь {n_doors}", "CONCEPTUAL_DOOR"
         else:
             n_windows += 1
             name, otype = f"Окно {n_windows}", "CONCEPTUAL_WINDOW"
-        rbox(name, op["width_m"], thickness + 0.06, op["height_m"], cx, cy,
-             op["sill_m"], ang, "door" if op["kind"] == "door" else "window",
-             storey, "IfcBuildingElementProxy", otype, predefined="USERDEFINED")
+        color_key = "door" if op["kind"] == "door" else "window"
+        if host is None:
+            # на контуре стены-носителя нет — прокси без проёма (как раньше)
+            rbox(name, width, thickness + 0.06, height, cx, cy, sill, ang,
+                 color_key, storey, "IfcBuildingElementProxy", otype,
+                 predefined="USERDEFINED")
+            continue
+        opening = rbox(f"{name} — проём", width, thickness + 0.02, height,
+                       cx, cy, sill, ang, "opening", None,
+                       "IfcOpeningElement", None, predefined="OPENING")
+        _api("feature.add_feature", file=model, feature=opening, element=host)
+        # заполнение внутри проёма: рама/полотно не выступают за стену
+        fill = rbox(name, width, min(thickness - 0.04, 0.08), height,
+                    cx, cy, sill, ang, color_key, storey,
+                    "IfcDoor" if op["kind"] == "door" else "IfcWindow", otype,
+                    predefined="DOOR" if op["kind"] == "door" else "WINDOW")
+        _api("feature.add_filling", file=model, opening=opening, element=fill)
 
     # --- комнаты: IfcSpace с именами с плана + pset Room
     for room in data["rooms"]:
