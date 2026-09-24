@@ -409,6 +409,9 @@ const hider = new Hider(components);
 const clipper = new Clipper(components);
 clipper.enabled = true;
 
+// init библиотеки синхронно стреляет update камеры → объявление обязано стоять ДО слушателя (иначе TDZ)
+const aiPaletteState = { on: false, meshes: 0 };
+
 // обновление LOD/видимости фрагментов при движении камеры
 world.camera.controls.addEventListener("update", () => { fragments.core.update(); if (aiPaletteState.on) aiEnsure(); });
 
@@ -725,8 +728,6 @@ const AI_PALETTE_LEGEND =
   "тёмные оттенки — наружные стены, светлые — перегородки и пол. Это служебный код " +
   "ориентации граней, не материалы: перерисуй все поверхности реальными материалами " +
   "с референсов, сохрани геометрию и направления граней.";
-
-const aiPaletteState = { on: false, meshes: 0 };
 
 function aiMaterial(dark) {
   // MeshBasicMaterial + инъекция: цвет = корзина доминирующей оси ГЕОМЕТРИЧЕСКОЙ

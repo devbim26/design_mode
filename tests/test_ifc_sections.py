@@ -162,6 +162,11 @@ def test_ai_palette() -> None:
     assert "aiPaletteState.on ? AI_PALETTE_LEGEND" in js, "легенда не копируется при снимке"
     assert "if (aiPaletteState.on) aiApply();" in js, "палитра не переживает загрузку модели"
     assert "if (aiPaletteState.on) aiEnsure();" in js, "нет самопроверки подмены при LOD"
+    # init стреляет update синхронно → TDZ: объявление обязано стоять до слушателя камеры
+    decl = js.find("const aiPaletteState")
+    listener = js.find('controls.addEventListener("update"')
+    assert decl != -1 and listener != -1 and decl < listener, \
+        "const aiPaletteState объявлен после слушателя камеры — ReferenceError при синхронном update в init"
     assert "palette: {" in js, "нет отладочного __ifc.palette"
 
 
