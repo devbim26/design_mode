@@ -856,10 +856,16 @@ def build_interior(scene, ifc_path, preview_path, meta):
         sname = {"door": "Door", "window": "Window"}.get(
             key, f"Interior{key.capitalize()}")
         style = _api("style.add_style", file=model, name=sname)
+        attrs = {"SurfaceColour": {"Name": key, "Red": r, "Green": g, "Blue": b},
+                 "Transparency": 0.55 if key == "window" else 0.0}
+        if key == "window":
+            # web-ifc (вьювер) читает Transparency только с IfcSurfaceStyleRendering:
+            # базовому Shading цвет берёт, альфу молча игнорирует
+            attrs["ReflectanceMethod"] = "NOTDEFINED"
         _api("style.add_surface_style", file=model, style=style,
-             ifc_class="IfcSurfaceStyleShading",
-             attributes={"SurfaceColour": {"Name": key, "Red": r, "Green": g, "Blue": b},
-                         "Transparency": 0.55 if key == "window" else 0.0})
+             ifc_class="IfcSurfaceStyleRendering" if key == "window"
+                       else "IfcSurfaceStyleShading",
+             attributes=attrs)
         fstyles[key] = style
     for (kind, sector), color in INTERIOR_WALL_PALETTE.items():
         r, g, b = matplotlib.colors.to_rgb(color)

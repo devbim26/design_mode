@@ -187,6 +187,10 @@ def test_interior_wall_palette():
     shading = [s for s in m.by_type("IfcSurfaceStyleShading")
                if s.SurfaceColour.Name == "window"][0]
     assert abs(shading.Transparency - 0.55) < 1e-6, "окно должно быть прозрачным"
+    # web-ifc (вьювер) читает Transparency только с подтипа IfcSurfaceStyleRendering:
+    # базовому Shading цвет берёт, альфу молча игнорирует (окно видно сплошным)
+    assert shading.is_a("IfcSurfaceStyleRendering"), \
+        "прозрачность окна должна ехать на IfcSurfaceStyleRendering"
     col = shading.SurfaceColour
     assert abs(col.Red - 0xA8 / 255) < 0.02 and abs(col.Blue - 0xEA / 255) < 0.02 \
         and abs(col.Green - 0xD4 / 255) < 0.02, "окно должно быть голубым #A8D4EA"
