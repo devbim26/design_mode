@@ -491,6 +491,106 @@ def test_model_choice_and_put(monkeypatch=None):
     print("test_model_choice_and_put OK")
 
 
+def test_generate_job_flow():
+    """Фоновая задача (фикс 524): _run_job синхронно — статусы/этапы/result.
+    _ifc_dir мокается на TMP — артефакты теста не попадают в боевой data/ifc."""
+    from PIL import Image
+    import threed.threed_router as R
+    R._vlm_list_cached = lambda: []  # без сети
+    orig_ifc_dir = R._ifc_dir
+    R._ifc_dir = lambda: TMP
+    try:
+        scene = sample_scene()
+        R._call_vlm = _mock_vlm_ok("```json\n" + json.dumps(scene, ensure_ascii=False) + "\n```")
+        TMP.mkdir(exist_ok=True)
+        img = Image.new("RGB", (800, 600), (245, 245, 240))
+        job = R._job_new("plan")
+        assert job["status"] == "queued" and len(job["id"]) == 12
+        R._run_job(job, "тест", img)  # в главном потоке: семафор свободен
+        assert job["status"] == "done", job.get("error")
+        assert (TMP / job["result"]["name"]).is_file()
+        pub = R._job_public(job)
+        assert pub["jobId"] == job["id"] and pub["status"] == "done"
+        assert pub["result"]["name"].startswith("3D_plan_") and \
+            pub["result"]["name"].endswith(".ifc")
+        assert pub["elapsed_s"] >= 0
+        # прямой прогресс-контракт _generate_impl: анализ -> сборка (verify выкл)
+        seen = []
+        R._generate_impl("plan", "", img, TMP, progress=seen.append)
+        assert seen[0] == "analysis" and seen[-1] == "build"
+    finally:
+        R._ifc_dir = orig_ifc_dir
+    print("test_generate_job_flow OK")
+
+
+def test_job_cleanup_ttl():
+    import threed.threed_router as R
+    R._jobs.clear()
+    old = R._job_new("plan")
+    old.update(status="done", ts=time.time() - R.JOBS_TTL_S - 1)
+    fresh = R._job_new("facade")
+    assert old["id"] not in R._jobs, "устаревшая done-задача не удалена"
+    assert fresh["id"] in R._jobs
+    # лимит количества: JOBS_MAX не превышается
+    for _ in range(R.JOBS_MAX + 5):
+        R._job_new("scene")
+    assert len(R._jobs) <= R.JOBS_MAX
+    R._jobs.clear()
+    print("test_job_cleanup_ttl OK")
+
+
+def test_get_job_404():
+    from fastapi import HTTPException
+    import threed.threed_router as R
+    try:
+        R.get_job("nosuchjob")
+        raise AssertionError("ожидался 404")
+    except HTTPException as e:
+        assert e.status_code == 404
+    # живая задача отдаётся публичным видом без внутренних полей
+    job = R._job_new("plan")
+    pub = R.get_job(job["id"])
+    assert pub["jobId"] == job["id"] and "created" not in pub
+    R._jobs.clear()
+    print("test_get_job_404 OK")
+
+
+def test_post_generate_shape():
+    """POST /generate: битая dataURL — синхронный 422; валидная — {jobId},
+    сценарий-гейт внутри задачи -> error с текстом «в разработке»."""
+    import base64
+    import io as _io
+    from PIL import Image
+    from fastapi import HTTPException
+    import threed.threed_router as R
+    R._vlm_list_cached = lambda: []
+    R._jobs.clear()
+    try:
+        R.generate(R.GenerateBody(scenario="plan", prompt="",
+                                  image="data:image/png;base64,not-base64!"))
+        raise AssertionError("ожидался 422 на битую dataURL")
+    except HTTPException as e:
+        assert e.status_code == 422 and "изображение" in e.detail.lower()
+    assert not R._jobs, "битая dataURL не должна создавать задачу"
+    buf = _io.BytesIO()
+    Image.new("RGB", (40, 30), (250, 250, 248)).save(buf, format="PNG")
+    dataurl = "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()
+    resp = R.generate(R.GenerateBody(scenario="attic", prompt="", image=dataurl))
+    assert resp.get("jobId") and resp.get("status") == "queued"
+    assert resp["jobId"] in R._jobs
+    # фоновый поток доводит гейт-ошибку до error (без VLM-затрат)
+    for _ in range(100):  # до 5 с
+        if R._jobs[resp["jobId"]]["status"] in ("done", "error"):
+            break
+        time.sleep(0.05)
+    job = R._jobs[resp["jobId"]]
+    assert job["status"] == "error" and "в разработке" in job["error"]
+    pub = R._job_public(job)
+    assert pub["error"] == job["error"] and "result" not in pub
+    R._jobs.clear()
+    print("test_post_generate_shape OK")
+
+
 def test_setup_threed():
     import setup_threed as S
     TMP.mkdir(exist_ok=True)
@@ -814,6 +914,10 @@ if __name__ == "__main__":
     test_generate_impl_facade()
     test_generate_impl_interior()
     test_model_choice_and_put()
+    test_generate_job_flow()
+    test_job_cleanup_ttl()
+    test_get_job_404()
+    test_post_generate_shape()
     test_setup_threed()
     test_ifcviewer_autoload()
     test_widget_3d_modal()

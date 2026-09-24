@@ -9,8 +9,11 @@
  * из патча App-бандла (patch_prompt_enhance_button v2): DevbimPEWatch в
  * ряду Generate держит window.__devbimPEStore свежим и пишет флаг занятости
  * window.__devbimPEPending. «3D Design» открывает модалку генерации 3D
- * (сценарий/источник/промт -> POST /api/v1/threed/generate -> вкладка IFC;
- * сценарии: генплан, фасад, интерьер — все активны (фазы 1–3).
+ * (сценарий/источник/промт -> POST /api/v1/threed/generate -> {jobId} ->
+ * поллинг GET /jobs/{id} с этапами (анализ/сборка/проверка) -> вкладка IFC;
+ * сценарии: генплан, фасад, интерьер, сцена — все активны (фазы 1–4).
+ * Фоновые задачи — фикс 524: конвейер 2–6 мин не влезает в ~100-секундный
+ * лимит Cloudflare-туннеля на длинный HTTP-ответ.
  *
  * Ряд очереди ищется локале-независимо: жёлтая (invokeYellow) кнопка
  * ~36px в верхней части панели → её контейнер 200px → родительский ряд
@@ -48,6 +51,9 @@
       promptPhInterior: 'Уточнения: «высота стен 2.8, масштаб 0.01 м/px, стены по чертежу»',
       promptPhScene: 'Уточнения: «2 дома: главный 7 этажей, второй 3 справа; деревья вдоль дороги; камера слева»',
       netErr: 'Ошибка сети/сервера',
+      stageQueued: 'В очереди', stageAnalysis: 'Анализ картинки (VLM)',
+      stageBuild: 'Сборка IFC-модели', stageVerify: 'Самопроверка VLM',
+      jobLost: 'Задача потеряна (перезапуск сервера?) — готовые модели во вкладке IFC',
       needTab: 'Откройте вкладку Generate или Холст и повторите'
     },
     en: {
@@ -63,6 +69,9 @@
       promptPhInterior: 'Hints: "wall height 2.8, scale 0.01 m/px, walls as drawn"',
       promptPhScene: 'Hints: "2 houses: main 7 storeys, second 3 on the right; trees along the road; camera on the left"',
       netErr: 'Network/server error',
+      stageQueued: 'Queued', stageAnalysis: 'Analyzing image (VLM)',
+      stageBuild: 'Building IFC model', stageVerify: 'VLM self-check',
+      jobLost: 'Job lost (server restart?) — finished models in the IFC tab',
       needTab: 'Open the Generate or Canvas tab and try again'
     }
   };
@@ -388,24 +397,24 @@
     refresh3DSource();
   }
 
+  var STAGE_KEYS = { analysis: 'stageAnalysis', build: 'stageBuild', verify: 'stageVerify' };
+
   async function run3D() {
     if (S3.busy || !S3.image) { if (!S3.image) toast(t().noSource); return; }
     var go = document.getElementById('devbim-3d-go');
     var stEl = document.getElementById('devbim-3d-status');
     S3.busy = true; go.disabled = true; go.textContent = t().generating;
     var t0 = Date.now();
-    S3.timer = setInterval(function () {
-      stEl.textContent = '⏳ ' + Math.round((Date.now() - t0) / 1000) + ' s';
-    }, 500);
-    try {
-      var r = await fetch('/api/v1/threed/generate', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scenario: S3.scenario,
-                               prompt: (document.getElementById('devbim-3d-prompt').value || '').trim(),
-                               image: S3.image })
-      });
-      var j = null; try { j = await r.json(); } catch (e) {}
-      if (!r.ok) throw new Error((j && (j.detail || j.message)) || ('HTTP ' + r.status));
+    // этап фоновой задачи (S3.stage пишет поллинг) — иначе пустой счётчик секунд
+    S3.stage = '';
+    function stageLine() {
+      var key = STAGE_KEYS[S3.stage];
+      var label = key ? t()[key] : t().stageQueued;
+      stEl.textContent = '⏳ ' + Math.round((Date.now() - t0) / 1000) + ' s · ' + label;
+    }
+    S3.timer = setInterval(stageLine, 500);
+    function finish3D(j) {
+      if (S3.timer) { clearInterval(S3.timer); S3.timer = null; }
       if (j.warnings && j.warnings.length) toast(j.warnings.join(' · '));
       try { localStorage.setItem('devbim:ifc:lastModel', j.name); } catch (e) {}
       if (j.camHint) { try { localStorage.setItem('devbim:ifc:camHint',
@@ -421,10 +430,40 @@
           vNote = ' · \u26A0 ' + v.issues.join('; ');
       }
       toast(t().done + ' ' + j.name + vNote);
-    } catch (e) {
+    }
+    function fail3D(msg) {
       S3.busy = false; go.disabled = false; go.textContent = t().generate;
       if (S3.timer) { clearInterval(S3.timer); S3.timer = null; }
-      stEl.textContent = (e && e.message) || t().netErr;
+      stEl.textContent = msg || t().netErr;
+    }
+    try {
+      var r = await fetch('/api/v1/threed/generate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scenario: S3.scenario,
+                               prompt: (document.getElementById('devbim-3d-prompt').value || '').trim(),
+                               image: S3.image })
+      });
+      var j = null; try { j = await r.json(); } catch (e) {}
+      if (!r.ok) throw new Error((j && (j.detail || j.message)) || ('HTTP ' + r.status));
+      if (j && j.name) { finish3D(j); return; }  // старый синхронный бэк
+      if (!j || !j.jobId) throw new Error('нет jobId в ответе сервера');
+      // Фоновая задача (фикс 524): конвейер длиннее ~100 с, туннель рвёт
+      // длинный ответ — опрашиваем короткими GET, живём без лимита
+      var jobId = j.jobId;
+      for (;;) {
+        await new Promise(function (res) { setTimeout(res, 2500); });
+        var pr = await fetch('/api/v1/threed/jobs/' + jobId);
+        if (pr.status === 404) { fail3D(t().jobLost); return; }
+        var pj = null; try { pj = await pr.json(); } catch (e) {}
+        if (!pr.ok || !pj)
+          throw new Error((pj && (pj.detail || pj.error)) || ('HTTP ' + pr.status));
+        S3.stage = pj.stage || '';
+        stageLine();
+        if (pj.status === 'done') { finish3D(pj.result || {}); return; }
+        if (pj.status === 'error') { fail3D(pj.error); return; }
+      }
+    } catch (e) {
+      fail3D((e && e.message) || t().netErr);
     }
   }
 

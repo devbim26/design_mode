@@ -2213,6 +2213,43 @@ invokeai==6.2.0` их нужно запускать повторно в поря
     админа, при открытии шаблона подбирается автоматически. Тесты:
     tests/test_cloud_nodes.py; E2E tests/_e2e_cloud_nodes.py.
 
+52. **3D Design: фоновые задачи генерации — фикс 524 за Cloudflare-туннелем**
+    (24.09, ветка `interior`; спека/план `docs/superpowers/{specs,plans}/
+    2026-09-24-3d-async-jobs*`). Триггер: живой интерьер 24.09 занял 147 с
+    (анализ ~100 с + verify ~40 с), Cloudflare-туннель рвёт ответы длиннее
+    ~100 с → «HTTP 524» в модалке, при этом бэкенд УСПЕШНО дописывал IFC
+    (модель «пропадала» — UI узнавал имя файла только из ответа POST).
+    Лимит CF бесплатный, не настраивается; конвейер с петлёй самопроверки
+    законно занимает 2–6 мин. Решение — job-API: `POST /api/v1/threed/
+    generate` теперь мгновенно отвечает `{jobId, status:"queued"}`
+    (быстрые отказы — битая dataURL — остаются синхронным 422), генерация
+    крутится в daemon-потоке (`_run_job`: `Semaphore(1)` — одна VLM-
+    генерация одновременно, остальные job'ы стоят в queued), `GET
+    /api/v1/threed/jobs/{id}` → `{jobId, status, stage, scenario,
+    elapsed_s[, result|error]}`; result = прежнее тело generate ({name,
+    warnings[, camHint][, verify]}), error = прежний текст 422-detail.
+    Этапы: `_generate_impl(..., progress=None)` зовёт progress
+    ("analysis" перед VLM → "build" перед build_* → "verify" перед
+    самопроверкой). Job store в памяти: `_jobs` + lock, последние
+    JOBS_MAX=20, готовые старше JOBS_TTL_S=1800 чистятся при создании
+    новой; рестарт сервера очередь обнуляет (IFC-артефакты переживают).
+    Фронт `imagerouter/devbim_topright_buttons.js` (run3D): POST →
+    jobId → поллинг 2,5 с со статус-строкой «⏳ N s · этап» (RU/EN:
+    stageQueued/Analysis/Build/Verify, jobLost на 404 — «сервер
+    перезапущен, модели во вкладке IFC»); ответ со старого бэка (есть
+    name) по-прежнему принимается. ГРАБЛИ: (а) статус в ответе POST —
+    константа "queued": поток мог перевести job в running ДО возврата
+    response (гонка в тесте); (б) поллинг переживает закрытие модалки
+    Esc — по done сам переключит вкладку IFC и тостнет; close3D чистит
+    таймер/busy — finish3D идемпотентен; (в) после setup+рестарта
+    вкладка браузера ОБЯЗАНА перезагрузиться (грабля п.23а). Тесты:
+    tests/test_threed.py +4 (test_generate_job_flow / test_job_cleanup_
+    ttl / test_get_job_404 / test_post_generate_shape — 23 функции).
+    Смоук curl (бесплатно, без VLM): POST {scenario:"attic"} → jobId →
+    поллинг отдаёт error «Сценарий … в разработке» (гейт внутри job),
+    GET /jobs/nosuch → 404, битая dataURL → синхронный 422. E2E:
+    модалка 4 сценария + консоль чистая (шум rehydrating — ядро).
+
 
 ```powershell
 cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"

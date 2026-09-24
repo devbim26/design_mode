@@ -2,7 +2,9 @@
 """3D Design: генерация IFC по картинке (VLM ImageRouter) + выбор модели в менеджере.
 
 Монтируется под /api:
-    POST /api/v1/threed/generate  {scenario: plan|facade|interior, prompt, image} -> {name, warnings}
+    POST /api/v1/threed/generate  {scenario: plan|facade|interior|scene, prompt,
+                                   image} -> {jobId, status} (фоновая задача)
+    GET  /api/v1/threed/jobs/{id} {jobId, status, stage, elapsed_s[, result|error]}
     GET  /api/v1/threed/model     {model, source, vlms:[...]}
     PUT  /api/v1/threed/model     {model} -> {ok}
 
@@ -18,7 +20,9 @@ import io
 import json
 import os
 import re
+import threading
 import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -41,8 +45,17 @@ CHAT_TIMEOUT_S = 180
 VLM_LIST_CACHE_S = 600
 MAX_SIDE = 1536
 MAX_TOKENS = 8000  # reasoning-модели тратят лимит до начала ответа (грабля п.22)
+JOBS_MAX = 20      # храним последних N задач
+JOBS_TTL_S = 1800  # готовые (done/error) живут 30 минут
 
 _vlm_cache = {"ts": 0.0, "list": []}
+
+# --- фоновые задачи (фикс 524: синхронный POST длиннее ~100 с рвёт
+# Cloudflare-туннель, при этом бэкенд успевает дописать IFC — UI терял
+# имя файла). Генерация уходит в daemon-поток, фронт поллит /jobs/{id}. ---
+_jobs: dict[str, dict] = {}
+_jobs_lock = threading.Lock()
+_gen_lock = threading.Semaphore(1)  # одна VLM-генерация одновременно
 
 
 class GenerateBody(BaseModel):
@@ -212,12 +225,14 @@ def _call_vlm(system: str, prompt: str, image_url: str, model: str) -> str:
     return text
 
 
-def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = None) -> dict:
+def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = None,
+                   progress=None) -> dict:
     """Без HTTP: анализ -> сцена -> IFC + превью (+ петля самокоррекции всех
     сценариев, задача 5 п.44/п.46: вердикт ок=False с issues -> повторный
     анализ с CORRECTIONS -> пересборка -> повторный verify; победитель по
     ok/числу issues; сбои верификации и попыток >= 2 генерацию не роняют —
-    выход на лучшего).
+    выход на лучшего). progress(stage) опционально уведомляет о этапе
+    ("analysis" | "build" | "verify") для статуса фоновой задачи.
     Raises ValueError (роутер даст 422)."""
     if scenario not in SCENARIOS:
         raise ValueError(f"Сценарий «{scenario}» в разработке (доступны: plan, facade, interior, scene)")
@@ -240,6 +255,8 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
         scene = None
         last_err = ""
         raw_head = ""  # голова успешного сырого ответа VLM (диагностика дампа)
+        if progress:
+            progress("analysis")
         for try_no in (1, 2):  # один ретрай на невалидный JSON
             raw = _call_vlm(system,
                             user_prompt + ("\n(attempt 2: return ONLY the strict JSON)" if try_no == 2
@@ -267,6 +284,8 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
         ifc_path = out_dir / name
         preview_path = out_dir / (Path(name).stem + "_preview.png")
         meta = {"Scenario": scenario, "Prompt": prompt, "Model": model, "Source": "3D Design"}
+        if progress:
+            progress("build")
         if scenario == "interior":
             threed_build.build_interior(scene, ifc_path, preview_path, meta)
         elif scenario == "scene":
@@ -319,6 +338,8 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
         verify_payload = None
         if _verify_enabled():
             try:
+                if progress:
+                    progress("verify")
                 verify_payload = _verify_attempt(scene, ifc_path)
             except Exception as e:
                 verify_payload = {"overview": None,
@@ -395,15 +416,82 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
     return res
 
 
+# --- фоновой выполнение (job-API) ---
+def _job_new(scenario: str) -> dict:
+    """Создать задачу; почистить готовые старше TTL и лишние по счёту
+    (рестарт сервера очередь обнуляет — артефакты IFC переживают)."""
+    now = time.time()
+    with _jobs_lock:
+        for jid in [k for k, v in _jobs.items()
+                    if v["status"] in ("done", "error") and now - v["ts"] > JOBS_TTL_S]:
+            del _jobs[jid]
+        while len(_jobs) >= JOBS_MAX:
+            del _jobs[next(iter(_jobs))]  # dict упорядочен — старейшая
+        job = {"id": uuid.uuid4().hex[:12], "status": "queued", "stage": "",
+               "scenario": scenario, "created": now, "ts": now,
+               "result": None, "error": None}
+        _jobs[job["id"]] = job
+        return job
+
+
+def _job_touch(job: dict, **kw) -> None:
+    with _jobs_lock:
+        job.update(kw)
+        job["ts"] = time.time()
+
+
+def _job_public(job: dict) -> dict:
+    out = {"jobId": job["id"], "status": job["status"], "stage": job["stage"],
+           "scenario": job["scenario"],
+           "elapsed_s": round(max(0.0, time.time() - job["created"]), 1)}
+    if job["status"] == "done":
+        out["result"] = job["result"]
+    elif job["status"] == "error":
+        out["error"] = job["error"]
+    return out
+
+
+def _run_job(job: dict, prompt: str, image) -> None:
+    """Тело фоновой задачи: семафор(1) строит VLM-очередь; ошибки любого
+    рода — в job (error), не в HTTP."""
+    with _gen_lock:
+        _job_touch(job, status="running", stage="analysis")
+        try:
+            res = _generate_impl(
+                job["scenario"], prompt, image,
+                progress=lambda stage: _job_touch(job, stage=stage))
+            _job_touch(job, status="done", stage="done", result=res)
+        except ValueError as e:
+            _job_touch(job, status="error", error=str(e))
+        except Exception as e:  # сборщик/сеть — единый вид для модалки
+            _job_touch(job, status="error", error=f"3D-генерация не удалась: {e}")
+
+
 @threed_router.post("/generate")
 def generate(body: GenerateBody) -> dict:
+    """Фоновый запуск: конвейер (VLM-анализ + сборка + самопроверка) длится
+    минуты и не вписывается в ~100-секундный лимит Cloudflare-туннеля —
+    ответ мгновенный {jobId}, результат фронт забирает поллингом
+    GET /jobs/{id}. Быстрый отказ (битая dataURL) — синхронно 422."""
     try:
         image = _prepare_png(body.image)
-        return _generate_impl(body.scenario, body.prompt, image)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-    except Exception as e:  # сборщик/сеть — единый вид для модалки
-        raise HTTPException(status_code=422, detail=f"3D-генерация не удалась: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Некорректное изображение: {e}")
+    job = _job_new(body.scenario)
+    threading.Thread(target=_run_job, args=(job, body.prompt, image),
+                     daemon=True, name=f"threed-{job['id']}").start()
+    # статус фиксирован (не из job): поток мог уже перевести его в running
+    return {"jobId": job["id"], "status": "queued"}
+
+
+@threed_router.get("/jobs/{job_id}")
+def get_job(job_id: str) -> dict:
+    with _jobs_lock:
+        job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(
+            status_code=404, detail="Задача не найдена (перезапуск сервера?)")
+    return _job_public(job)
 
 
 @threed_router.get("/model")
