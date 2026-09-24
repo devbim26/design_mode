@@ -794,8 +794,8 @@ function aiApply() {
       aiPaletteState.meshes++;
     });
   }
-  // сечения (клиппинг) действуют и на подменённые материалы: та же ссылка
-  // на плоскости, что у оригинала
+  // страховка на случай материальных клиппинг-плоскостей: та же ссылка на
+  // плоскости, что у оригинала (сечения реально режут на уровне рендерера)
   model.object.traverse((o) => {
     if (!o.isMesh || !o.userData.aiOriginal) return;
     const src = Array.isArray(o.userData.aiOriginal) ? o.userData.aiOriginal[0]
@@ -816,11 +816,13 @@ function aiRestore() {
 }
 
 function aiEnsure() {
-  // если библиотека пересоздала меши (LOD) — подмену наводим заново
+  // пересоздание мешей (LOD) детектим по падению числа покрашенных
+  // относительно последнего apply; неотбираемые меши (окна/без материала)
+  // погоду не делают — иначе гоняли бы 3 обхода на каждый кадр орбиты
   if (!model) return;
-  let ok = true;
-  model.object.traverse((o) => { if (o.isMesh && !o.userData.aiOriginal) ok = false; });
-  if (!ok) aiApply();
+  let painted = 0;
+  model.object.traverse((o) => { if (o.isMesh && o.userData.aiOriginal) painted++; });
+  if (painted < aiPaletteState.meshes) aiApply();
 }
 
 function aiSetEnabled(on) {

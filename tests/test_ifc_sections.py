@@ -168,6 +168,27 @@ def test_ai_palette() -> None:
     assert decl != -1 and listener != -1 and decl < listener, \
         "const aiPaletteState объявлен после слушателя камеры — ReferenceError при синхронном update в init"
     assert "palette: {" in js, "нет отладочного __ifc.palette"
+    # hex-контракт сборщик↔вьювер — держать синхронно при правке палитры
+    import sys
+    sys.path.insert(0, str(BASE))
+    from threed.threed_build import INTERIOR_WALL_PALETTE, INTERIOR_DEFAULT_COLORS
+
+    def viewer_hexes(name):
+        m = re.search(re.escape(name) + r"\s*=\s*new Set\(\[(.*?)\]\)", js, re.S)
+        assert m, f"во вьювере нет {name} = new Set([...])"
+        return set(re.findall(r'"(#[0-9A-Fa-f]{6})"', m.group(1)))
+
+    ext_js = viewer_hexes("AI_EXT_HEXES")
+    shell_js = viewer_hexes("AI_SHELL_HEXES") | ext_js   # спред ...AI_EXT_HEXES
+    expected_ext = {"#" + INTERIOR_WALL_PALETTE[k].lstrip("#").upper()
+                    for k in INTERIOR_WALL_PALETTE if k[0] == "ext"}
+    expected_shell = ({"#" + c.lstrip("#").upper()
+                       for c in INTERIOR_WALL_PALETTE.values()}
+                      | {INTERIOR_DEFAULT_COLORS["slab"].upper()})
+    assert ext_js == expected_ext, \
+        f"AI_EXT_HEXES разошлись с INTERIOR_WALL_PALETTE: {ext_js} != {expected_ext}"
+    assert shell_js == expected_shell, \
+        f"AI_SHELL_HEXES разошлись с палитрой сборщика: {shell_js} != {expected_shell}"
 
 
 def test_module_syntax() -> None:
