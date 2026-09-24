@@ -54,6 +54,7 @@
       stageQueued: 'В очереди', stageAnalysis: 'Анализ картинки (VLM)',
       stageBuild: 'Сборка IFC-модели', stageVerify: 'Самопроверка VLM',
       jobLost: 'Задача потеряна (перезапуск сервера?) — готовые модели во вкладке IFC',
+      spent: 'потрачено',
       needTab: 'Откройте вкладку Generate или Холст и повторите'
     },
     en: {
@@ -72,6 +73,7 @@
       stageQueued: 'Queued', stageAnalysis: 'Analyzing image (VLM)',
       stageBuild: 'Building IFC model', stageVerify: 'VLM self-check',
       jobLost: 'Job lost (server restart?) — finished models in the IFC tab',
+      spent: 'spent',
       needTab: 'Open the Generate or Canvas tab and try again'
     }
   };
@@ -429,7 +431,11 @@
         else if (v.ok === false && v.issues && v.issues.length)
           vNote = ' · \u26A0 ' + v.issues.join('; ');
       }
-      toast(t().done + ' ' + j.name + vNote);
+      // фактическая стоимость VLM-запросов генерации (токены × тариф каталога)
+      var cNote = '';
+      if (j.usage && j.usage.cost_usd != null)
+        cNote = ' · ' + t().spent + ' $' + j.usage.cost_usd;
+      toast(t().done + ' ' + j.name + vNote + cNote);
     }
     function fail3D(msg) {
       S3.busy = false; go.disabled = false; go.textContent = t().generate;

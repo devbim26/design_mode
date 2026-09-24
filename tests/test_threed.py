@@ -591,6 +591,58 @@ def test_post_generate_shape():
     print("test_post_generate_shape OK")
 
 
+def test_usage_cost_and_record():
+    """Учёт стоимости VLM: тарифы каталога -> расчёт -> запись -> итог;
+    мок VLM в _generate_impl usage не пишет (обратная совместимость)."""
+    from PIL import Image
+    import threed.threed_router as R
+    R._vlm_list_cached = lambda: [
+        {"id": "openai/gpt-6-astra",
+         "pricing": {"prompt": "10.0e-6", "completion": "50.0e-6",
+                     "input_cache_read": "1.0e-6"}}]
+    R._usage_log.clear()
+    # расчёт по тарифам: 2000 вх×10e-6 + 3000 вых×50e-6 = $0.17
+    u = {"prompt_tokens": 2000, "completion_tokens": 3000}
+    assert abs(R._call_cost_usd("openai/gpt-6-astra", u) - 0.17) < 1e-9
+    # кэш-чтение дешевле полного входа: (2000-1000)×10e-6 + 1000×1e-6
+    u2 = {"prompt_tokens": 2000, "completion_tokens": 0,
+          "prompt_tokens_details": {"cached_tokens": 1000}}
+    assert abs(R._call_cost_usd("openai/gpt-6-astra", u2) - 0.011) < 1e-9
+    # готовый cost из API приоритетнее тарифов
+    assert R._call_cost_usd("openai/gpt-6-astra", {"cost": "0.123"}) == 0.123
+    # модель без тарифов -> None
+    assert R._call_cost_usd("x/unknown", u) is None
+    # запись успешных вызовов с тегами этапов
+    R._usage_stage[0] = "analysis"
+    R._record_usage("openai/gpt-6-astra",
+                    {"usage": {"prompt_tokens": 2000, "completion_tokens": 3000}})
+    R._usage_stage[0] = "verify"
+    R._record_usage("openai/gpt-6-astra",
+                    {"usage": {"prompt_tokens": 2500, "completion_tokens": 150}})
+    s = R._usage_summary()
+    assert s["tokens"] == {"in": 4500, "out": 3150}
+    assert [c["stage"] for c in s["calls"]] == ["analysis", "verify"]
+    assert abs(s["cost_usd"] - round(0.17 + 2500 * 10e-6 + 150 * 50e-6, 4)) < 1e-9
+    R._usage_log.clear()
+    assert R._usage_summary() == {}
+    # мок VLM -> генерация без usage-секции (изоляция от выбора модели
+    # в test_model_choice_and_put: дефолт astra есть в каталоге-моке)
+    R._model_store_path = lambda: TMP / "missing_usage_model.json"
+    scene = sample_scene()
+    R._call_vlm = _mock_vlm_ok(json.dumps(scene))
+    img = Image.new("RGB", (800, 600), (245, 245, 240))
+    res = R._generate_impl("plan", "", img, TMP)
+    assert "usage" not in res
+    print("test_usage_cost_and_record OK")
+
+
+def test_widget_cost_toast():
+    src = (ROOT / "imagerouter" / "devbim_topright_buttons.js").read_text(encoding="utf-8")
+    assert "cost_usd" in src, "фронт не показывает стоимость"
+    assert "потрачено" in src and "spent" in src
+    print("test_widget_cost_toast OK")
+
+
 def test_setup_threed():
     import setup_threed as S
     TMP.mkdir(exist_ok=True)
@@ -918,6 +970,8 @@ if __name__ == "__main__":
     test_job_cleanup_ttl()
     test_get_job_404()
     test_post_generate_shape()
+    test_usage_cost_and_record()
+    test_widget_cost_toast()
     test_setup_threed()
     test_ifcviewer_autoload()
     test_widget_3d_modal()

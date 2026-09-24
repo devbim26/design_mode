@@ -2249,6 +2249,24 @@ invokeai==6.2.0` их нужно запускать повторно в поря
     поллинг отдаёт error «Сценарий … в разработке» (гейт внутри job),
     GET /jobs/nosuch → 404, битая dataURL → синхронный 422. E2E:
     модалка 4 сценария + консоль чистая (шум rehydrating — ядро).
+    - **Учёт стоимости VLM** (24.09, вечер; запрос пользователя «не
+    понимаю сколько денег уходит на планировку»): реальный `_call_vlm`
+    пишет usage каждого вызова в `_usage_log` (`_record_usage`; моки
+    тестов не пишут — обратная совместимость), этап тегируется
+    `_usage_stage` (analysis/verify), стоимость — готовый `usage.cost`
+    API или расчёт по тарифам каталога (`_call_cost_usd`: prompt/
+    completion за токен + кэш-чтение; тарифы теперь лежат в
+    `_vlm_list_cached` → GET /threed/model). Итог `_usage_summary()`
+    (calls/tokens/cost_usd) попадает в результат (res["usage"] → тост
+    «потрачено $X.XXXX» в finish3D виджета) и в дамп `_threed_last.json`
+    (ключ usage). ГРАБЛИ: (а) тест test_model_choice_and_put оставляет
+    выбор «x/vlm-2» в TMP — тесты с _generate_impl изолируют
+    _model_store_path на несуществующий файл; (б) каталог недоступен →
+    pricing {} → cost_usd нет, токены пишутся (деградация без падения).
+    Тесты: test_usage_cost_and_record + test_widget_cost_toast (26
+    функций). Баланс ImageRouter: GET /api/v1/imagerouter/credits
+    (прокси /v1/credits) — 24.09 остаток $2.75; astra $10/$50 за 1M,
+    sol $2/$10, luna $0.1/$0.5 → планировка ~$0.22/0.045/0.003.
 
 
 ```powershell

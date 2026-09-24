@@ -50,6 +50,11 @@ JOBS_TTL_S = 1800  # готовые (done/error) живут 30 минут
 
 _vlm_cache = {"ts": 0.0, "list": []}
 
+# --- учёт стоимости VLM-вызовов (реальные вызовы only; моки тестов сюда
+# не попадают). Один семафор _gen_lock = одна генерация => один лог. ---
+_usage_log: list[dict] = []   # токены/цена каждого вызова текущей генерации
+_usage_stage = ["analysis"]   # тег этапа: "analysis" | "verify"
+
 # --- фоновые задачи (фикс 524: синхронный POST длиннее ~100 с рвёт
 # Cloudflare-туннель, при этом бэкенд успевает дописать IFC — UI терял
 # имя файла). Генерация уходит в daemon-поток, фронт поллит /jobs/{id}. ---
@@ -159,7 +164,8 @@ def _vlm_list_cached() -> list[dict]:
         arch = m.get("architecture") or {}
         if "image" in (arch.get("input_modalities") or []) and \
                 "text" in (arch.get("output_modalities") or []):
-            out.append({"id": m.get("id", "")})
+            # pricing (за токен, строки вида "10.0e-6") — расчёт стоимости
+            out.append({"id": m.get("id", ""), "pricing": m.get("pricing") or {}})
     _vlm_cache.update(ts=now, list=out)
     return out
 
@@ -222,7 +228,74 @@ def _call_vlm(system: str, prompt: str, image_url: str, model: str) -> str:
     text = ((choices[0].get("message") or {}).get("content") or "") if choices else ""
     if not text.strip():
         raise ValueError("VLM вернула пустой ответ (попробуйте другую модель в менеджере)")
+    _record_usage(model, data)
     return text
+
+
+# --- учёт стоимости (см. блок _usage_log выше) ---
+def _pricing_for(model: str) -> dict:
+    for m in _vlm_list_cached():
+        if m.get("id") == model:
+            return m.get("pricing") or {}
+    return {}
+
+
+def _call_cost_usd(model: str, usage: dict) -> float | None:
+    """Стоимость вызова, $: готовый cost из usage (если API даёт) иначе
+    тариф каталога — prompt/completion за токен, кэш-чтение дешевле.
+    None = данных нет (мок VLM, каталог недоступен, нулевая цена)."""
+    if not isinstance(usage, dict):
+        return None
+    if usage.get("cost") not in (None, ""):
+        try:
+            return float(usage["cost"])
+        except (TypeError, ValueError):
+            pass
+    pr = _pricing_for(model)
+    if not pr:
+        return None
+    try:
+        p_in = float(usage.get("prompt_tokens") or 0)
+        p_out = float(usage.get("completion_tokens") or 0)
+        cached = 0.0
+        det = usage.get("prompt_tokens_details")
+        if isinstance(det, dict):
+            cached = float(det.get("cached_tokens") or 0)
+        cost = (p_in - cached) * float(pr.get("prompt") or 0) \
+            + p_out * float(pr.get("completion") or 0) \
+            + cached * float(pr.get("input_cache_read") or 0)
+        return cost if cost > 0 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _record_usage(model: str, data) -> None:
+    """Токены/стоимость ВЫПОЛНЕННОГО VLM-вызова -> _usage_log (очищается
+    в начале _generate_impl). Этап ставится в точке вызова (_usage_stage)."""
+    u = data.get("usage") if isinstance(data, dict) else None
+    if not isinstance(u, dict):
+        return
+    entry = {"stage": _usage_stage[0], "model": model,
+             "tokens_in": u.get("prompt_tokens"),
+             "tokens_out": u.get("completion_tokens")}
+    cost = _call_cost_usd(model, u)
+    if cost is not None:
+        entry["cost_usd"] = round(cost, 6)
+    _usage_log.append(entry)
+
+
+def _usage_summary() -> dict:
+    """Итог генерации для ответа/дампа: вызовы, суммы токенов, цена."""
+    if not _usage_log:
+        return {}
+    calls = [dict(e) for e in _usage_log]
+    costs = [e["cost_usd"] for e in calls if "cost_usd" in e]
+    out = {"calls": calls,
+           "tokens": {"in": sum(e.get("tokens_in") or 0 for e in calls),
+                      "out": sum(e.get("tokens_out") or 0 for e in calls)}}
+    if costs:
+        out["cost_usd"] = round(sum(costs), 4)
+    return out
 
 
 def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = None,
@@ -236,6 +309,7 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
     Raises ValueError (роутер даст 422)."""
     if scenario not in SCENARIOS:
         raise ValueError(f"Сценарий «{scenario}» в разработке (доступны: plan, facade, interior, scene)")
+    _usage_log.clear()
     model, source = _load_model_choice()
     try:
         _validate_model_in_list(model)
@@ -257,6 +331,7 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
         raw_head = ""  # голова успешного сырого ответа VLM (диагностика дампа)
         if progress:
             progress("analysis")
+        _usage_stage[0] = "analysis"
         for try_no in (1, 2):  # один ретрай на невалидный JSON
             raw = _call_vlm(system,
                             user_prompt + ("\n(attempt 2: return ONLY the strict JSON)" if try_no == 2
@@ -299,6 +374,7 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
     def _verify_attempt(scene, ifc_path):
         """Самопроверка (пилот MCP4IFC-паттерна): обзор «задумано + построено»
         -> второй VLM-запрос с исходной картинкой -> вердикт {ok, issues}."""
+        _usage_stage[0] = "verify"
         overview = {"scene": threed_verify.scene_overview(scenario, scene),
                     "built": threed_verify.built_overview(ifc_path)}
         return {"overview": overview,
@@ -380,6 +456,9 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
         extra = ("\nCORRECTIONS from QA verification - fix these in your JSON:\n- "
                  + "\n- ".join(issues))
     _, res, verify_payload, ifc_path, preview_path, raw_head = best
+    usage_sum = _usage_summary()
+    if usage_sum:
+        res["usage"] = usage_sum  # фронт: тост «потрачено $X»
     if verify_payload is not None:
         verify_payload["iterations"] = len(history)  # res["verify"] — победитель
     # проигравшие попытки (IFC+превью) удаляем: в out_dir остаётся только
@@ -407,7 +486,7 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
             "model": model, "warnings": res["warnings"], "name": ifc_path.name,
             "image": {"bytes": img_bytes, "sha1": img_sha1,
                       "w": image.width, "h": image.height},
-            "vlm_head": raw_head, "verify": dump_verify}
+            "vlm_head": raw_head, "usage": usage_sum, "verify": dump_verify}
     try:
         (out_dir / "_threed_last.json").write_text(
             json.dumps(dump, ensure_ascii=False, indent=1), encoding="utf-8")
