@@ -2446,6 +2446,59 @@ invokeai==6.2.0` их нужно запускать повторно в поря
 
 
 
+57. **Переход вьювер → канвас без маски, рамка 3:2 + fit** (25.09, ветка
+    `interface`; жалоба: после «To Canvas» из вьюверов (IFC/PDF/Design
+    Code — все через общий мост `window.__devbimIfc.toCanvas`)
+    автоматически создавался слой «Маска перерисовки», а рамка канваса
+    становилась «Free» с габаритами под пропорции снимка; нужно: маски НЕТ,
+    рамка по умолчанию 3:2, картинка вписана в рамку).
+    - **Корни**: (а) маску создавал сам мост V2 — он копировал кнопку
+      «Редактировать» (`withInpaintMask:!0` + `tool.$tool.set("brush")`,
+      п.13); (б) «Free» ставит экшен `bboxChangedFromCanvas` ВНУТРИ
+      `sentImageToCanvas` — кладя снимок, тот ставит `bbox.rect` под
+      пропорции картинки, а редьюсер при смене пропорций сбрасывает
+      `aspectRatio.id` в `"Free"`. Никакой опции «оставить рамку» у
+      `sentImageToCanvas` нет — ratio выставляется ПОСЛЕ укладки.
+    - **Мост V3** (`setup_ifcviewer.py`, `JS_BRIDGE_V3`; миграции V1/V2 и
+      ревизий V3 автозаменой при повторном запуске, идемпотентно):
+      `withInpaintMask:!1`, кисть не трогаем; затем сырой экшен
+      `{type:"canvas/bboxAspectRatioIdChanged",payload:{id:"3:2"}}` —
+      СТРОКА типа стабильна между сборками (имя слайса canvas + ключ
+      редьюсера), минифицированный action-крейтор (в этой сборке App —
+      `r0e` = экспорт `mf` из index) использовать НЕ стали; редьюсер
+      залочит 3:2 и пересчитает rect с той же площадью (кратно 8; 800×1000
+      → bbox 1248×832). Затем слой вписывается последовательностью пункта
+      «Fit to Bbox» меню слоя: `adapter.transformer.startTransform({silent:
+      !0})` → `fitToBboxContain()` → `await applyTransform()` — applyTransform
+      ЗАПЕКАЕТ вписанную картинку единственным image-объектом (800×1000 →
+      666×832). generate-режим (`QCe`) — без изменений.
+    - **ГРАБЛИ**: (а) fit нельзя звать, пока картинка не отрендерилась —
+      адаптер слоя существует сразу, но `$pixelRect` трансформера 0×0,
+      `fitToBboxContain` делит на `proxyRect.width()`=0 → scale=Infinity →
+      applyTransform растеризует пустой прямоугольник (`replaceObjects:!0`)
+      и СЛОЙ ТЕРЯЕТ объекты; мост ждёт (до 4 с) ненулевой
+      `transformer.$pixelRect.get()` (ревизия 2, миграция `JS_V3_R1_WAIT_
+      OLD`→`JS_V3_R2_WAIT_NEW`). (б) `$pixelRect` пересчитывается с
+      ЗАДЕРЖКОЙ (~1 с после applyTransform) — в проверках источник истины
+      объекты состояния (запечённый image w/h), не $pixelRect.
+      (в) состояние канваса обёрнуто: `state.canvas.PRESENT` (хелпер
+      `cs()` в мосту, см. п.16). (г) ошибка консоли «Problem
+      rehydrating/persisting state» — преждесуществующая (старый
+      persisted-стейт в профиле браузера), к мосту отношения не имеет.
+    - Подсказки вьюверов обновлены (кнопки «To Canvas» IFC/PDF/Design
+      Code + тосты): без обещаний маски, «3:2 frame». Нужна маска —
+      виджет «Маска/Слой» сверху (п.16) добавляет слой руками.
+    - **Проверка**: `tests/test_canvas_bridge_v3.py` (содержимое V3,
+      миграции, node --check моста, тексты вьюверов) — ALL OK; живой E2E
+      `tests/_e2e_bridge_v3.py` (Playwright, вход по SITE_PASSWORD, вкладка
+      PDF держит `__devbimIfcCtx`, аплоад 800×1000 через
+      /api/v1/images/upload, вызов моста): рамка 3:2 locked, rect
+      1248×832=1.500, масок 0, слой 666×832 ≤ bbox, пропорции сохранены —
+      E2E OK (скриншот `docs/bridge-v3-canvas.png`). Деплой:
+      setup_ifcviewer.py (мост) + setup_pdfviewer.py/setup_designcode.py
+      (тексты) + рестарт; парсинг App-бандла `node -e import(...)` —
+      только рантайм «document is not defined».
+
 ```powershell
 cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
 .\venv\Scripts\python.exe .\setup_imagerouter.py        # применить патчи

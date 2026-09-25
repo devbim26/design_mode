@@ -113,7 +113,7 @@
   <span class="info" id="capLiveHint">Capture a screen fragment of the site, then send it to the canvas or assets</span>
   <button id="btnCapture" title="Capture the visible site area — the browser will ask what to share, choose this tab">&#x1F4F7; Capture</button>
   <span class="info" id="capSelInfo" hidden>Fragment: <b id="capSelOut">&mdash;</b></span>
-  <button id="btnToCanvas" hidden title="Place the fragment on the canvas as a base layer (with an inpaint mask layer)">&#x1F5BC; To Canvas</button>
+  <button id="btnToCanvas" hidden title="Place the fragment on the canvas as a base layer (3:2 frame, image fit to frame)">&#x1F5BC; To Canvas</button>
   <button id="btnToAssets" class="ghost to-assets" hidden title="Save the fragment to the gallery (Assets tab)">&#x1F4BE; To Assets</button>
   <button id="btnCapCancel" class="ghost" hidden title="Back to the live site (Esc)">&#x2715;</button>
 </div>
@@ -521,7 +521,7 @@
             hideFreeze(); return;
           }
           return toCanvasViaBridge(dto).then(function () {
-            toast("Fragment placed on canvas — brush an inpaint mask, then Generate");
+            toast("Fragment placed on canvas in a 3:2 frame — edit or press Generate");
             hideFreeze();
           });
         })

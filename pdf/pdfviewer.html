@@ -229,7 +229,7 @@
     </div>
     <div id="actionbar">
       <span class="info">Fragment: <span class="out" id="sel-out">—</span></span>
-      <button id="btn-to-canvas" title="Place the fragment on the canvas as a base layer (with an inpaint mask layer)">🖼 To Canvas</button>
+      <button id="btn-to-canvas" title="Place the fragment on the canvas as a base layer (3:2 frame, image fit to frame)">🖼 To Canvas</button>
       <button id="btn-save-assets" class="ghost" style="color:var(--ok);border-color:var(--ok)" title="Save the fragment to the gallery (Assets tab)">💾 To Assets</button>
     </div>
     <div id="navhelp">Drag — select fragment · ESC — reset · Ctrl+wheel — zoom</div>
@@ -804,7 +804,7 @@ async function sendFragment({ toCanvas = false } = {}) {
     if (toCanvas) {
       const dto = await uploadImage(blob, name, "general");
       await toCanvasViaBridge(dto);
-      setStatus(`Page ${pageNum} fragment placed on canvas — brush an inpaint mask, then Generate`);
+      setStatus(`Page ${pageNum} fragment placed on canvas in a 3:2 frame — edit or press Generate`);
     } else {
       const dto = await uploadImage(blob, name, "user");
       setStatus(`Page ${pageNum} fragment saved to the gallery "Assets" tab (${name})`);

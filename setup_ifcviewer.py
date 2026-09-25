@@ -15,10 +15,9 @@
        панель «IFC Viewer» (iframe /ifcviewer.html?embed=1 — вьювер без
        боковых панелей), рядом с «Image Viewer»; компонент IFCV экспортирует
        мост window.__devbimIfc.toCanvas(imageDTO, generate) — снимок модели
-       кладётся на холст подложкой (sentImageToCanvas), вместе с ним
-       создаётся выделенный слой «Маска перерисовки» и включается кисть
-       (как у кнопки «Редактировать» в Image Viewer) и, опционально,
-       сразу запускается генерация холста (enqueue);
+       кладётся на холст подложкой (sentImageToCanvas) БЕЗ слоя маски,
+       рамка ставится в 3:2 и слой вписывается в неё (fitToBbox), при
+       generate сразу запускается генерация холста (enqueue);
      - index-бандл: 'ifc' добавляется в zod-enum activeTab, чтобы сохранённая
        вкладка пережила перезагрузку страницы.
 
@@ -105,19 +104,52 @@ JS_COMPONENTS_NEW = 'components:{...JUe,ifcviewer:jn(IFCV)},onReady:t,theme:ew'
 #     менеджера холста (ЧИТАТЬ ru.get(), НЕ $p() — $p=()=>ie(ru) это ХУК
 #     useSyncExternalStore, вызов вне компонента роняет React #321); QCe —
 #     enqueue генерации холста (то же, что кнопка Generate на холсте).
-#     «На холст» повторяет кнопку «Редактировать» (Edit) из Image Viewer
-#     (хук Ize в бандле): withInpaintMask:!0 — вместе со снимком создаётся
-#     ВЫДЕЛЕННЫЙ слой «Маска перерисовки» (inpaintMaskAdded), после передачи
-#     включается кисть (tool.$tool.set("brush")) — рисование по этому слою
-#     даёт маску со штриховкой (наклонные полоски). Пустая (не нарисованная)
-#     маска генерацию не ломает: посредник при пустом выделении правит
-#     картинку целиком.
+#     «На холст» V3: withInpaintMask:!1 — слой «Маска перерисовки» НЕ
+#     создаётся, кисть НЕ включается (нужна маска — виджет слоёв сверху);
 #     ФОКУС-РЕГИОН: только "viewer" (общий с Image Viewer) — список
 #     разрешённых регионов зашит в бандле (q2e), посторонний регион роняет
 #     рендер панели (useFocusRegion читает K2e["$"+region]).
 #     TAB-КОМПОНЕНТ: t$ — тот же, что у панели Image Viewer на холсте
 #     (карта tabComponents вкладки canvas — QUe — знает только launchpad/
 #     viewer/workspace; посторонний id роняет addPanel). ---
+# V3 (25.09, п.56): БЕЗ «Маски перерисовки» и кисти; после укладки снимка
+# рамка ставится в 3:2 сырым экшеном {type:"canvas/bboxAspectRatioIdChanged"}
+# (строка типа стабильна между сборками, в отличие от минифицированных имён),
+# затем слой вписывается в рамку той же последовательностью, что пункт
+# «Fit to Bbox» меню слоя: startTransform({silent:!0}) -> fitToBboxContain()
+# -> applyTransform(). Рамка — ПОСЛЕ _c: sentImageToCanvas ставит bbox.rect
+# под пропорции картинки (bboxChangedFromCanvas), а редьюсер при смене
+# пропорций сбрасывает aspectRatio.id в "Free" — отсюда и брался «Free».
+#     Fit ждёт ГЛУБЖЕ, чем менеджер: адаптер слоя существует сразу, но
+#     картинка рендерится асинхронно — пока не готова, у трансформера
+#     $pixelRect 0x0, fitToBboxContain делит на proxyRect.width()=0 →
+#     scale=Infinity, applyTransform растеризует пустой прямоугольник
+#     (replaceObjects:!0) и СЛОЙ ТЕРЯЕТ объекты (поймано E2E в headless).
+JS_BRIDGE_V3 = (
+    'window.__devbimIfc={async toCanvas(e,t){'
+    'const n=window.__devbimIfcCtx;'
+    'if(!n)throw new Error("IFC: canvas context unavailable");'
+    'await Fe.focusPanel("canvas",On),'
+    'await _c({imageDTO:e,withResize:!1,withInpaintMask:!1,type:"raster_layer",'
+    'dispatch:n.dispatch,getState:n.getState});'
+    'n.dispatch({type:"canvas/bboxAspectRatioIdChanged",payload:{id:"3:2"}});'
+    'let s=ru.get();'
+    'for(let i=0;i<20&&!s;i++)await new Promise(k=>setTimeout(k,100)),s=ru.get();'
+    'if(!s)throw new Error("IFC: canvas manager unavailable");'
+    'const cs=()=>{const c=n.getState().canvas;return c&&c.present?c.present:c};'
+    'let d=null;'
+    'for(let i=0;i<40&&!d;i++){'
+    'const sel=cs().selectedEntityIdentifier;'
+    'if(sel&&sel.type==="raster_layer"){const a=s.getAdapter(sel),p=a&&a.transformer&&a.transformer.$pixelRect&&a.transformer.$pixelRect.get();'
+    'p&&p.width>0&&p.height>0&&(d=a)}'
+    'if(!d)await new Promise(k=>setTimeout(k,100))}'
+    'if(d)try{await d.transformer.startTransform({silent:!0}),'
+    'd.transformer.fitToBboxContain(),await d.transformer.applyTransform()}'
+    'catch(y){console.warn("devbim fitToBbox:",y)}'
+    'if(t)await QCe(n,s,!1)}};'
+)
+# Мост второй версии (withInpaintMask:!0 + кисть, рамка под снимок) —
+# нужен для миграции уже пропатченных бандлов на поведение V3.
 JS_BRIDGE_V2 = (
     'window.__devbimIfc={async toCanvas(e,t){'
     'const n=window.__devbimIfcCtx;'
@@ -144,10 +176,10 @@ JS_IFC_EMBED_PANEL = (
     'return o.jsx(yf,{tab:"canvas",children:o.jsx("iframe",{src:"/ifcviewer.html?embed=1",'
     'title:"IFC Viewer",style:{width:"100%",height:"100%",border:"none"}})});});'
     'IFCV.displayName="IFCViewerPanel";'
-) + JS_BRIDGE_V2
+) + JS_BRIDGE_V3
 
 # Мост первой версии (withInpaintMask:!1, инструмент не переключался) —
-# нужен для миграции уже пропатченных бандлов на поведение «Редактировать».
+# нужен для миграции уже пропатченных бандлов на поведение V3.
 JS_BRIDGE_V1 = (
     'window.__devbimIfc={async toCanvas(e,t){'
     'const n=window.__devbimIfcCtx;'
@@ -159,6 +191,25 @@ JS_BRIDGE_V1 = (
     'for(let i=0;i<20&&!s;i++)await new Promise(k=>setTimeout(k,100)),s=ru.get();'
     'if(!s)throw new Error("IFC: canvas manager unavailable");'
     'await QCe(n,s,!1)}}};'
+)
+
+
+# Ревизии внутри V3 (миграция уже задеплоенных V3-мостов): ревизия 1 ждала
+# только адаптер слоя — fit на нерендеренной картинке терял объекты,
+# ревизия 2 ждёт ненулевой $pixelRect трансформера.
+JS_V3_R1_WAIT_OLD = (
+    'for(let i=0;i<20&&!d;i++){'
+    'const sel=cs().selectedEntityIdentifier;'
+    'if(sel&&sel.type==="raster_layer"){const a=s.getAdapter(sel);'
+    'a&&a.transformer&&(d=a)}'
+    'if(!d)await new Promise(k=>setTimeout(k,100))}'
+)
+JS_V3_R2_WAIT_NEW = (
+    'for(let i=0;i<40&&!d;i++){'
+    'const sel=cs().selectedEntityIdentifier;'
+    'if(sel&&sel.type==="raster_layer"){const a=s.getAdapter(sel),p=a&&a.transformer&&a.transformer.$pixelRect&&a.transformer.$pixelRect.get();'
+    'p&&p.width>0&&p.height>0&&(d=a)}'
+    'if(!d)await new Promise(k=>setTimeout(k,100))}'
 )
 
 
@@ -243,11 +294,17 @@ def patch_app_bundle() -> bool:
 
     # 2) панель «IFC Viewer» на вкладке «Холст» + мост к холсту
     if "__devbimIfc" in s:
-        if JS_BRIDGE_V2 in s:
+        if JS_BRIDGE_V3 in s:
             print("App-бандл: панель IFC на холсте уже на месте, пропуск")
+        elif JS_BRIDGE_V2 in s:
+            s = s.replace(JS_BRIDGE_V2, JS_BRIDGE_V3, 1)
+            print("App-бандл: мост IFC->холст обновлён до V3 (без маски, рамка 3:2 + fitToBbox)")
         elif JS_BRIDGE_V1 in s:
-            s = s.replace(JS_BRIDGE_V1, JS_BRIDGE_V2, 1)
-            print("App-бандл: мост IFC->холст обновлён (withInpaintMask + кисть маски)")
+            s = s.replace(JS_BRIDGE_V1, JS_BRIDGE_V3, 1)
+            print("App-бандл: мост IFC->холст обновлён до V3 (без маски, рамка 3:2 + fitToBbox)")
+        elif JS_V3_R1_WAIT_OLD in s:
+            s = s.replace(JS_V3_R1_WAIT_OLD, JS_V3_R2_WAIT_NEW, 1)
+            print("App-бандл: мост V3 обновлён (fit ждёт $pixelRect>0)")
         else:
             print("ОШИБКА: мост __devbimIfc неизвестной версии — патч не применён")
             sys.exit(1)

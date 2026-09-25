@@ -339,7 +339,7 @@
     <div id="etoast"></div>
     <div id="snapbar">
       <select id="embed-server-list" title="Model"><option value="">— model —</option></select>
-      <button id="btn-snap" title="Place the snapshot on the canvas as a base layer (with an inpaint mask layer)">📸 To Canvas</button>
+      <button id="btn-snap" title="Place the snapshot on the canvas as a base layer (3:2 frame, image fit to frame)">📸 To Canvas</button>
       <button id="btn-snap-assets" class="ghost" style="color:var(--ok);border-color:var(--ok)" title="Save the snapshot to the gallery (Assets tab)">💾 To Assets</button>
     </div>
     <div id="navhelp">ЛКМ — вращение · колесо — зум · ПКМ — панорама · клик — выбор элемента</div>
@@ -1936,7 +1936,7 @@ async function sendSnapshot({ toCanvas = true } = {}) {
     const dto = await uploadImage(renderSnapshot(), name, toCanvas ? "general" : "user");
     if (toCanvas) {
       await toCanvasViaBridge(dto);
-      embedToast("Snapshot placed on canvas — brush an inpaint mask, then Generate");
+      embedToast("Snapshot placed on canvas in a 3:2 frame — edit or press Generate");
     } else {
       embedToast(`Snapshot saved to the gallery "Assets" tab (${name})`);
     }
