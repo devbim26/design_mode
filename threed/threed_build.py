@@ -20,6 +20,14 @@ from PIL import Image
 from shapely.geometry import Polygon
 from shapely.geometry.polygon import orient
 
+try:  # константы контракта проёмов (п.55-числа, п.56-вынос в общие):
+    # в venv threed_scenarios лежит рядом с этим файлом
+    from invokeai.app.api.routers.threed_scenarios import (
+        OPENING_MIN_HOST, OPENING_MARGIN, OPENING_MIN)
+except ImportError:  # дерево проекта (тесты)
+    from threed.threed_scenarios import (
+        OPENING_MIN_HOST, OPENING_MARGIN, OPENING_MIN)
+
 COLORS = {
     "Residential5": "#ded3b8", "Residential6": "#b6c7d3",
     "School": "#d68967", "Kindergarten": "#e5bd57",
@@ -991,18 +999,20 @@ def build_interior(scene, ifc_path, preview_path, meta):
         else:
             widx = op["wall_idx"]
             p1, p2, length = wall_geo[widx]
-            if length < 0.6:  # огрызок проёма не держит (промах VLM)
+            if length < OPENING_MIN_HOST:  # огрызок проёма не держит (промах VLM)
                 continue
             thickness = data["walls"][widx]["thickness_m"]
-            # посадка в габарит сегмента: ширина и центр с полями 0,05 м
-            width = min(width, length - 0.1)
-            if width < 0.3:
+            # посадка в габарит сегмента: ширина и центр с полями (последний
+            # рубеж — контракт п.56 делает то же ДО сборки с warning'ами)
+            width = min(width, length - 2 * OPENING_MARGIN)
+            if width < OPENING_MIN:
                 continue
-            height = min(height, wh - sill - 0.05)
-            if height < 0.3:
+            height = min(height, wh - sill - OPENING_MARGIN)
+            if height < OPENING_MIN:
                 continue
             t = max(0.0, min(op["x_px"] * scale, length))
-            t = max(width / 2 + 0.05, min(t, length - width / 2 - 0.05))
+            t = max(width / 2 + OPENING_MARGIN,
+                    min(t, length - width / 2 - OPENING_MARGIN))
             ux, uy = (p2[0] - p1[0]) / length, (p2[1] - p1[1]) / length
             cx, cy = p1[0] + ux * t, p1[1] + uy * t
             ang = np.degrees(np.arctan2(p2[1] - p1[1], p2[0] - p1[0]))

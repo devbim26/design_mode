@@ -558,10 +558,27 @@ ROOM_TYPES = {"living", "bedroom", "kitchen", "bath", "wc", "hall",
               "wardrobe", "balcony", "other"}
 FURNITURE_TYPES = {"bed", "sofa", "table", "chair", "wardrobe", "kitchen",
                    "bath", "toilet", "sink", "lamp", "other"}
+
+SYSTEM_REPAIR = """You are a BIM data fixer. You get a parametric interior scene JSON
+that failed automated placement and consistency checks. Fix ONLY the listed
+issues by editing numbers (move furniture inside rooms, re-seat openings onto
+their host walls, add missing wall segments). Keep every other value EXACTLY
+as given. Reply with STRICT JSON ONLY - the full corrected scene, same schema,
+no markdown fences, no comments.
+
+Issues to fix come with the scene JSON in the user message."""
 INTERIOR_SCALE_DEFAULT = 0.01
 # MAX 0.5 (не 0.1): валидны и миниатюрные растровые планы — 40×30 px ≈
 # 10×7.5 м при 0.25 м/px; жёсткий потолок ловит лишь бессмыслицу от VLM.
 INTERIOR_SCALE_MIN, INTERIOR_SCALE_MAX = 0.001, 0.5
+
+# --- контракт посадки проёмов (п.56; числа п.55 — сборщик импортирует их
+# как последний рубеж) ---
+OPENING_MIN_HOST = 0.6   # стена-носитель короче — огрызок, проём не держит
+OPENING_MARGIN = 0.05    # поле от проёма до торца стены-носителя
+OPENING_MIN = 0.3        # минимальный проём после клампов (меньше — мусор VLM)
+OPENING_TRANSFER_MAX_M = 1.5  # дальность переноса проёма с огрызка, м
+ROOM_WALL_COVER_MIN = 0.6     # минимум покрытия контура комнаты стенами
 
 
 def _num(value, default, lo, hi, field, warnings):
@@ -594,11 +611,156 @@ def _px_point(value, w, h):
     return [_clamp(x, 0, w), _clamp(y, 0, h)]
 
 
+def _pt_seg_dist(px, py, ax, ay, bx, by):
+    """Расстояние от точки до отрезка (любые единицы, px или м)."""
+    dx, dy = bx - ax, by - ay
+    l2 = dx * dx + dy * dy
+    if l2 <= 0:
+        return ((px - ax) ** 2 + (py - ay) ** 2) ** 0.5
+    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / l2))
+    return ((px - ax - t * dx) ** 2 + (py - ay - t * dy) ** 2) ** 0.5
+
+
+def _point_in_poly(x, y, pts):
+    """Луч-кастинг: точка внутри контура (замкнутость не требуется)."""
+    inside = False
+    n = len(pts)
+    for i in range(n):
+        x1, y1 = pts[i]
+        x2, y2 = pts[(i + 1) % n]
+        if (y1 > y) != (y2 > y):
+            if x < x1 + (y - y1) * (x2 - x1) / (y2 - y1):
+                inside = not inside
+    return inside
+
+
+def _seat_openings(out, warnings, issues):
+    """Контракт посадки (п.56): то, что чинится кодом, правим с warning'ами
+    «посажен» (сегодня то же самое сборщик делает молча после оплаты);
+    семантическое (нет носителя) — в issues. Проёмы wall_idx:"outline" не
+    проверяются: у контура нет стены-носителя."""
+    scale = out["metres_per_trace_pixel"]
+    segs = [tuple(w["points_px"][0]) + tuple(w["points_px"][1])
+            for w in out["walls"]]
+    seated = []
+    for i, op in enumerate(out["openings"], start=1):
+        widx = op["wall_idx"]
+        if widx == "outline":
+            seated.append(op)
+            continue
+        x1, y1, x2, y2 = segs[widx]
+        length_m = ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5 * scale
+        if length_m < OPENING_MIN_HOST:
+            # огрызок: перенос на ближайшую подходящую стену >= 0.6 м
+            ax, ay = (x1 + x2) / 2, (y1 + y2) / 2
+            best = None
+            for j, (bx1, by1, bx2, by2) in enumerate(segs):
+                if j == widx:
+                    continue
+                lm = ((bx2 - bx1) ** 2 + (by2 - by1) ** 2) ** 0.5 * scale
+                if lm < OPENING_MIN_HOST:
+                    continue
+                d = _pt_seg_dist(ax, ay, bx1, by1, bx2, by2) * scale
+                if best is None or d < best[0]:
+                    best = (d, j)
+            if best is None or best[0] > OPENING_TRANSFER_MAX_M:
+                issues.append(f"Проём {i} ({op['kind']} {op['width_m']:g} м): "
+                              f"стена-носитель {widx + 1} короче "
+                              f"{OPENING_MIN_HOST:g} м, подходящей стены рядом "
+                              f"нет — проём без стены-носителя")
+                continue
+            j = best[1]
+            bx1, by1, bx2, by2 = segs[j]
+            dx, dy = bx2 - bx1, by2 - by1
+            l2 = dx * dx + dy * dy
+            t = max(0.0, min(1.0, ((ax - bx1) * dx + (ay - by1) * dy) / l2))
+            op["wall_idx"] = j
+            op["x_px"] = t * (l2 ** 0.5)
+            warnings.append(f"Проём {i}: стена-носитель {widx + 1} — огрызок "
+                            f"{length_m:g} м — посажен на стену {j + 1}")
+            x1, y1, x2, y2 = bx1, by1, bx2, by2
+            length_m = ((x2 - x1) ** 2 + (y2 - y1) ** 2) ** 0.5 * scale
+        # посадка в габарит сегмента: ширина/высота/центр (п.55-числа)
+        if op["width_m"] > length_m - 2 * OPENING_MARGIN:
+            op["width_m"] = length_m - 2 * OPENING_MARGIN
+            warnings.append(f"Проём {i}: ширина срезана до {op['width_m']:g} м — "
+                            f"посажено в стену {op['wall_idx'] + 1}")
+        if op["width_m"] < OPENING_MIN:
+            warnings.append(f"Проём {i}: ширина после посадки < {OPENING_MIN:g} м — "
+                            f"удалён")
+            continue
+        h_max = out["wall_height"] - op["sill_m"] - OPENING_MARGIN
+        if op["height_m"] > h_max:
+            op["height_m"] = h_max
+            warnings.append(f"Проём {i}: высота срезана до {h_max:g} м — "
+                            f"посажено под потолок")
+        if op["height_m"] < OPENING_MIN:
+            warnings.append(f"Проём {i}: высота после посадки < {OPENING_MIN:g} м — "
+                            f"удалён")
+            continue
+        t_m = op["x_px"] * scale
+        lo = op["width_m"] / 2 + OPENING_MARGIN
+        hi = length_m - op["width_m"] / 2 - OPENING_MARGIN
+        if t_m < lo or t_m > hi:
+            t_m = max(lo, min(hi, t_m))
+            op["x_px"] = t_m / scale
+            warnings.append(f"Проём {i}: центр вне сегмента — посажен на "
+                            f"{t_m:g} м от начала стены {op['wall_idx'] + 1}")
+        seated.append(op)
+    out["openings"] = seated
+
+
+def _check_furniture_rooms(out, issues):
+    """Мебель вне комнат (семантика): центр вне всех комнат (нет комнат —
+    вне контура; нет ни того, ни другого — проверка пропускается)."""
+    polys = [r["points_px"] for r in out["rooms"]] or \
+            ([out["outline"]] if out["outline"] else [])
+    if not polys:
+        return
+    for i, item in enumerate(out["furniture"], start=1):
+        if not any(_point_in_poly(item["x_px"], item["y_px"], p) for p in polys):
+            issues.append(f"Мебель {i} ({item['type']}): вне комнат — "
+                          f"переместить внутрь помещения")
+
+
+def _check_rooms_closed(out, issues):
+    """Комната не замкнута стенами (семантика): точка контура «закрыта»,
+    если в допуске (thickness/2 + 0.15 м) от оси какой-либо стены; покрытие
+    < ROOM_WALL_COVER_MIN -> issue (стена потеряна VLM)."""
+    scale = out["metres_per_trace_pixel"]
+    segs = [(tuple(w["points_px"][0]), tuple(w["points_px"][1]), w["thickness_m"])
+            for w in out["walls"]]
+    step_px = max(1.0, 0.3 / scale)
+    for room in out["rooms"]:
+        pts = room["points_px"]
+        total = covered = 0
+        for k in range(len(pts)):
+            (ax, ay), (bx, by) = pts[k], pts[(k + 1) % len(pts)]
+            el = ((bx - ax) ** 2 + (by - ay) ** 2) ** 0.5
+            n = max(2, int(el / step_px))
+            for s in range(n):
+                t = s / n
+                px, py = ax + (bx - ax) * t, ay + (by - ay) * t
+                total += 1
+                for (x1, y1), (x2, y2), th in segs:
+                    if _pt_seg_dist(px, py, x1, y1, x2, y2) <= (th / 2 + 0.15) / scale:
+                        covered += 1
+                        break
+        if total and covered / total < ROOM_WALL_COVER_MIN:
+            issues.append(f"Комната «{room['name']}»: контур закрыт стенами на "
+                          f"{round(100 * covered / total)}% — комната не замкнута")
+
+
 def validate_interior(scene, img_w, img_h):
-    """Сцена интерьера от VLM -> (чистая сцена, warnings). ValueError — не план."""
+    """Сцена интерьера от VLM -> (чистая сцена, warnings, issues). ValueError —
+    не план. warnings — нормализовано кодом (клампы величин + посадка проёмов
+    «посажено»); issues — семантические нарушения (мебель вне комнат, комната
+    не замкнута, проём без стены-носителя): вход ремонта п.56 и, если доживут
+    до verify, — CORRECTIONS."""
     if not isinstance(scene, dict):
         raise ValueError("Сцена не является JSON-объектом")
     warnings = []
+    issues = []
     out = {"trace_width": int(img_w), "trace_height": int(img_h),
            "metres_per_trace_pixel": INTERIOR_SCALE_DEFAULT, "wall_height": 2.7,
            "outline": [], "walls": [], "openings": [], "rooms": [], "furniture": []}
@@ -730,7 +892,13 @@ def validate_interior(scene, img_w, img_h):
 
     if not out["walls"] and not out["rooms"] and not out["furniture"]:
         raise ValueError("На картинке не найдено объектов для 3D-модели")
-    return out, warnings
+
+    # контракт посадки (п.56): до сборки и оплаты verify — нормализуемое
+    # правим кодом с warning'ами, семантическое уходит в issues
+    _seat_openings(out, warnings, issues)
+    _check_furniture_rooms(out, issues)
+    _check_rooms_closed(out, issues)
+    return out, warnings, issues
 
 
 # ===================== Фаза 4: сценарий «Сцена» (camera mapping) =====================

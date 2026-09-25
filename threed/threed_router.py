@@ -13,6 +13,10 @@
 фильтром (существующий GET /imagerouter/models фильтрует output=image и VLM
 не возвращает!). IFC пишется в root_path/ifc (список IFC-вьювера), диагностический
 дамп — root_path/_threed_last.json.
+Tiered-конвейер (п.56): THREED_MODEL — ПОЛНЫЙ override всех стадий; иначе
+поэтапные рульки .env THREED_ANALYSIS/REPAIR/VERIFY/ESCALATION_MODEL
+(дефолты astra/luna/astra/astra; пустая эскалация = выключена). Ремонт JSON
+идёт без картинки, эскалация — одна финальная попытка при провале раунда.
 Разворачивается в venv скриптом setup_threed.py.
 """
 import base64
@@ -40,6 +44,10 @@ from invokeai.app.services.config.config_default import get_config
 threed_router = APIRouter(prefix="/v1/threed", tags=["threed"])
 
 DEFAULT_MODEL = "openai/gpt-6-astra"
+# tiered-конвейер (п.56): дешёвые ярусы каталога; тарифы за 1M токенов
+# astra $10/$50, sol $2/$10, luna $0.1/$0.5 — id сверены с /v3/models 24.09
+DEFAULT_REPAIR_MODEL = "openai/gpt-6-luna"
+REPAIR_RETRY_MODEL = "openai/gpt-6-sol"
 SCENARIOS = {"plan", "facade", "interior", "scene"}
 CHAT_TIMEOUT_S = 180
 VLM_LIST_CACHE_S = 600
@@ -48,12 +56,20 @@ MAX_TOKENS = 8000  # reasoning-модели тратят лимит до нач�
 JOBS_MAX = 20      # храним последних N задач
 JOBS_TTL_S = 1800  # готовые (done/error) живут 30 минут
 
+# per-stage модели: THREED_<STAGE>_MODEL (env) -> дефолт; THREED_MODEL
+# (env/file-store) глушит всё — поведение как до п.56
+STAGES = ("analysis", "repair", "verify", "escalation")
+STAGE_ENV = {"analysis": "THREED_ANALYSIS_MODEL", "repair": "THREED_REPAIR_MODEL",
+             "verify": "THREED_VERIFY_MODEL", "escalation": "THREED_ESCALATION_MODEL"}
+STAGE_DEFAULTS = {"analysis": DEFAULT_MODEL, "repair": DEFAULT_REPAIR_MODEL,
+                  "verify": DEFAULT_MODEL, "escalation": DEFAULT_MODEL}
+
 _vlm_cache = {"ts": 0.0, "list": []}
 
 # --- учёт стоимости VLM-вызовов (реальные вызовы only; моки тестов сюда
 # не попадают). Один семафор _gen_lock = одна генерация => один лог. ---
 _usage_log: list[dict] = []   # токены/цена каждого вызова текущей генерации
-_usage_stage = ["analysis"]   # тег этапа: "analysis" | "verify"
+_usage_stage = ["analysis"]   # тег этапа: analysis | repair | verify | escalation
 
 # --- фоновые задачи (фикс 524: синхронный POST длиннее ~100 с рвёт
 # Cloudflare-туннель, при этом бэкенд успевает дописать IFC — UI терял
@@ -88,22 +104,29 @@ def _model_store_path() -> Path:
     return _data_dir() / "imagerouter_threed_model.json"
 
 
-def _env_threed_model() -> str | None:
-    v = os.environ.get("THREED_MODEL")
-    if v and v.strip():
+def _env_threed_var(name: str) -> str | None:
+    """Значение THREED*-переменной: os.environ -> .env проекта/компании
+    (как design_code), без кэширования. None = не задана; '' = задана
+    пустой (для эскалации — «выключено»)."""
+    v = os.environ.get(name)
+    if v is not None:
         return v.strip()
-    # .env проекта/компании (как design_code), без кэширования
     for cand in (_data_dir().parent / ".env", Path.cwd() / ".env"):
         try:
             if not cand.is_file():
                 continue
             for line in cand.read_text(encoding="utf-8").splitlines():
                 line = line.strip()
-                if line.startswith("THREED_MODEL=") and line.partition("=")[2].strip():
+                if line.startswith(name + "="):
                     return line.partition("=")[2].strip().strip('"').strip("'")
         except Exception:
             continue
     return None
+
+
+def _env_threed_model() -> str | None:
+    v = _env_threed_var("THREED_MODEL")
+    return v if v else None
 
 
 def _load_model_choice() -> tuple[str, str]:
@@ -119,6 +142,24 @@ def _load_model_choice() -> tuple[str, str]:
     if env:
         return env, "env"
     return DEFAULT_MODEL, "default"
+
+
+def _stage_model(stage: str) -> tuple[str, str]:
+    """Модель стадии конвейера -> (model, source). Полный override THREED_MODEL
+    (file-store PUT /model или env) глушит per-stage: все стадии на одной
+    модели, поведение как до п.56. Иначе env THREED_<STAGE>_MODEL -> дефолт.
+    Эскалация: пустое значение = выключено -> ("", "off")."""
+    if stage not in STAGE_ENV:
+        raise ValueError(f"Неизвестная стадия: {stage}")
+    m, src = _load_model_choice()
+    if src in ("file", "env"):
+        return m, src
+    v = _env_threed_var(STAGE_ENV[stage])
+    if v:
+        return v, "env:stage"
+    if v == "" and stage == "escalation":
+        return "", "off"
+    return STAGE_DEFAULTS[stage], "default"
 
 
 def _save_model_choice(model: str) -> None:
@@ -193,16 +234,18 @@ def _to_dataurl(pil) -> str:
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-def _call_vlm(system: str, prompt: str, image_url: str, model: str) -> str:
+def _call_vlm(system: str, prompt: str, image_url: str | None, model: str) -> str:
     """Запрос в ImageRouter chat completions (паттерн prompt_enhancer.call_vlm).
-    Возвращает СЫРОЙ ответ (разбор JSON — на вызывающем)."""
+    image_url=None — text-only вызов (ремонт JSON п.56: числовая/семантическая
+    правка, зрение не нужно). Возвращает СЫРОЙ ответ (разбор — на вызывающем)."""
     from invokeai.app.api.routers.imagerouter import CHAT_COMPLETIONS_URL, _load_key
 
     key = _load_key()
     if not key:
         raise ValueError("API-ключ ImageRouter не задан (.env: IMAGEROUTER_API_KEY)")
-    content = [{"type": "text", "text": prompt or "No user prompt; analyze the image."},
-               {"type": "image_url", "image_url": {"url": image_url}}]
+    content = [{"type": "text", "text": prompt or "No user prompt; analyze the image."}]
+    if image_url:
+        content.append({"type": "image_url", "image_url": {"url": image_url}})
     resp = requests.post(
         CHAT_COMPLETIONS_URL,
         headers={"Authorization": f"Bearer {key}"},
@@ -298,23 +341,64 @@ def _usage_summary() -> dict:
     return out
 
 
+def _repair_scene(scene, issues, img_w, img_h):
+    """JSON-ремонт семантических issues контракта — БЕЗ картинки (п.56:
+    числовая/семантическая правка, зрение не нужно). Ремонт-модель ->
+    гейт (extract_json + validate_interior) -> при провале один повтор на
+    sol. Возвращает (fixed_scene | None, warnings, issues_left): None —
+    ремонт не удался, вызывающий оставляет исходную сцену, issues едут в
+    CORRECTIONS следующей итерации/эскалации (как сегодня)."""
+    repair_model = _stage_model("repair")[0]
+    prompt = ("Scene JSON:\n" + json.dumps(scene, ensure_ascii=False)
+              + "\n\nIssues to fix:\n- " + "\n- ".join(issues)
+              + "\n\nReturn the corrected FULL scene JSON.")
+    for model in (repair_model, REPAIR_RETRY_MODEL):
+        _usage_stage[0] = "repair"
+        raw = _call_vlm(threed_scenarios.SYSTEM_REPAIR, prompt, None, model)
+        fixed = threed_scenarios.extract_json(raw)
+        if fixed is None:
+            continue
+        try:
+            fixed_scene, wns, left = threed_scenarios.validate_interior(
+                fixed, img_w, img_h)
+        except ValueError:
+            continue
+        wns.append(f"контракт: {len(issues)} issues -> ремонт {model} -> "
+                   f"осталось {len(left)}")
+        return fixed_scene, wns, left
+    return None, [f"контракт: ремонт не помог ({repair_model} и "
+                  f"{REPAIR_RETRY_MODEL}) — issues едут в CORRECTIONS"], \
+        list(issues)
+
+
 def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = None,
                    progress=None) -> dict:
     """Без HTTP: анализ -> сцена -> IFC + превью (+ петля самокоррекции всех
     сценариев, задача 5 п.44/п.46: вердикт ок=False с issues -> повторный
     анализ с CORRECTIONS -> пересборка -> повторный verify; победитель по
     ok/числу issues; сбои верификации и попыток >= 2 генерацию не роняют —
-    выход на лучшего). progress(stage) опционально уведомляет о этапе
-    ("analysis" | "build" | "verify") для статуса фоновой задачи.
+    выход на лучшего). Tiered-надстройка п.56: контракт посадки до сборки
+    (validate_interior -> issues) с text-only ремонтом, per-stage модели,
+    после раунда — ОДНА эскалационная попытка при провале. progress(stage)
+    опционально уведомляет о этапе ("analysis" | "build" | "verify"; ремонт
+    и эскалация идут под "analysis") для статуса фоновой задачи.
     Raises ValueError (роутер даст 422)."""
     if scenario not in SCENARIOS:
         raise ValueError(f"Сценарий «{scenario}» в разработке (доступны: plan, facade, interior, scene)")
     _usage_log.clear()
-    model, source = _load_model_choice()
-    try:
-        _validate_model_in_list(model)
-    except ValueError:
-        raise ValueError(f"Модель 3D-анализа {model} недоступна (не VLM или нет в каталоге)")
+    model, source = _stage_model("analysis")
+    stage_models = {st: _stage_model(st)[0] for st in STAGES}
+    # вверх проверяем только модели, которые генерация ТОЧНО использует:
+    # analysis всегда, verify при включённой верификации. Ремонт/эскалация —
+    # лениво (случайный сценарий не блокируется опечаткой в чужой рульке;
+    # их сбой глушится гейтом ремонта / записью в history, не 422)
+    for st in (("analysis",) + (("verify",) if _verify_enabled() else ())):
+        try:
+            _validate_model_in_list(stage_models[st])
+        except ValueError:
+            raise ValueError(
+                f"Модель стадии {st} ({stage_models[st]}) недоступна "
+                f"(не VLM или нет в каталоге; рулька {STAGE_ENV[st]})")
     image_url = _to_dataurl(image)
     out_dir = Path(out_dir) if out_dir else _ifc_dir()
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -323,20 +407,24 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
               else threed_scenarios.SYSTEM_FACADE if scenario == "facade"
               else threed_scenarios.SYSTEM_GENPLAN)
 
-    def _attempt(user_prompt: str, attempt_no: int):
-        """Анализ -> валидация -> сборка IFC+превью (одна попытка петли).
-        Попытки >= 2 получают суффикс _rN — не перезаписывают друг друга."""
+    def _attempt(user_prompt: str, attempt_no: int, model_override=None,
+                 stage: str = "analysis"):
+        """Анализ -> валидация (+ контракт посадки и ремонт п.56) -> сборка
+        IFC+превью (одна попытка петли). Попытки >= 2 получают суффикс _rN —
+        не перезаписывают друг друга; эскалационная попытка приходит с
+        model_override и stage="escalation"."""
+        a_model = model_override or model
         scene = None
         last_err = ""
         raw_head = ""  # голова успешного сырого ответа VLM (диагностика дампа)
         if progress:
             progress("analysis")
-        _usage_stage[0] = "analysis"
+        _usage_stage[0] = stage
         for try_no in (1, 2):  # один ретрай на невалидный JSON
             raw = _call_vlm(system,
                             user_prompt + ("\n(attempt 2: return ONLY the strict JSON)" if try_no == 2
                                            else ""),
-                            image_url, model)
+                            image_url, a_model)
             scene = threed_scenarios.extract_json(raw)
             if scene is not None:
                 raw_head = raw[:300]
@@ -344,9 +432,20 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
             last_err = raw[:200]
         if scene is None:
             raise ValueError(f"Модель не смогла описать сцену (не JSON): {last_err}")
+        contract_issues = []
         if scenario == "interior":
-            scene, warnings = threed_scenarios.validate_interior(
+            scene, warnings, contract_issues = threed_scenarios.validate_interior(
                 scene, image.width, image.height)
+            if contract_issues:  # счастливый путь не платит (п.56, часть 2)
+                try:
+                    fixed, rep_wns, contract_issues = _repair_scene(
+                        scene, contract_issues, image.width, image.height)
+                except Exception as e:  # сеть/ключ — ремонт не роняет попытку
+                    rep_wns = [f"контракт: ремонт не удался ({e})"]
+                else:
+                    if fixed is not None:
+                        scene = fixed
+                warnings = list(warnings) + rep_wns
         elif scenario == "scene":
             scene, warnings = threed_scenarios.validate_scene(scene)
         elif scenario == "facade":
@@ -358,7 +457,8 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
                 else f"3D_{scenario}_{stamp}_r{attempt_no}.ifc")
         ifc_path = out_dir / name
         preview_path = out_dir / (Path(name).stem + "_preview.png")
-        meta = {"Scenario": scenario, "Prompt": prompt, "Model": model, "Source": "3D Design"}
+        meta = {"Scenario": scenario, "Prompt": prompt, "Model": a_model,
+                "Source": "3D Design"}
         if progress:
             progress("build")
         if scenario == "interior":
@@ -369,35 +469,48 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
             threed_build.build_facade(scene, ifc_path, preview_path, meta)
         else:
             threed_build.build_genplan(scene, image, ifc_path, preview_path, meta)
-        return scene, warnings, ifc_path, preview_path, raw_head
+        return scene, warnings, ifc_path, preview_path, raw_head, contract_issues
 
-    def _verify_attempt(scene, ifc_path):
+    def _verify_attempt(scene, ifc_path, structural):
         """Самопроверка (пилот MCP4IFC-паттерна): обзор «задумано + построено»
-        -> второй VLM-запрос с исходной картинкой -> вердикт {ok, issues}."""
+        -> второй VLM-запрос с исходной картинкой -> вердикт {ok, issues}.
+        Судья всегда на THREED_VERIFY_MODEL (>= sol по ярусу — эхо-камера
+        исключена конструктивно). structural (п.58) — машинные дефекты сборки
+        отдельным блоком (C): верификатор получает их как ground truth."""
         _usage_stage[0] = "verify"
         overview = {"scene": threed_verify.scene_overview(scenario, scene),
-                    "built": threed_verify.built_overview(ifc_path)}
+                    "built": threed_verify.built_overview(ifc_path),
+                    "structural": (structural or {}).get("issues") or []}
         return {"overview": overview,
                 "verdict": threed_verify.verify(
-                    image_url, overview, _call_vlm, model)}
+                    image_url, overview, _call_vlm, stage_models["verify"])}
 
     # петля самокоррекции — все сценарии (п.46: раньше только facade; сцена
     # с мебелью без повтора теряла выпавшие VLM предметы): ok is False с
-    # непустыми issues -> повторный анализ с блоком CORRECTIONS; победитель —
-    # ok=True, иначе меньше issues; тай-брейк — попытка, чей verify ОТВЕТИЛ
-    # (ok=False), бьёт «молчаливую» (ok=None, сбой verify): у той нет ни
-    # issues, ни обзора; при равенстве ранга — последняя попытка. Любой сбой
-    # (верификации ИЛИ попытки >= 2) НЕ роняет генерацию: предупреждение в
-    # history/дампе, выход на лучшего (п.44; C1/I2 ревью задачи 5).
+    # непустыми issues (verify ИЛИ контракта п.56) -> повторный анализ с
+    # блоком CORRECTIONS; победитель — ok=True, иначе меньше issues;
+    # тай-брейк — попытка, чей verify ОТВЕТИЛ (ok=False), бьёт «молчаливую»
+    # (ok=None, сбой verify): у той нет ни issues, ни обзора; при равенстве
+    # ранга — последняя попытка. Любой сбой (верификации ИЛИ попытки >= 2)
+    # НЕ роняет генерацию: предупреждение в history/дампе, выход на лучшего
+    # (п.44; C1/I2 ревью задачи 5).
     history = []
     best = None  # (rank, res_i, verify_payload, ifc_path, preview_path, raw_head)
-    extra = ""
-    max_iters = 1 + (_verify_iters() if _verify_enabled() else 0)
-    attempt_files = []
-    for attempt_no in range(1, max_iters + 1):
+    corr_pool = []  # накопленные коррекции: verify issues + issues контракта
+
+    def _add_corr(items):
+        for it in items:
+            if it and it not in corr_pool:
+                corr_pool.append(it)
+
+    def _run_attempt(user_prompt, attempt_no, a_model, stage):
+        """Попытка целиком: анализ -> контракт/ремонт -> сборка -> verify ->
+        history/ранг/победитель. None = сбой попытки >= 2 (ушёл в history),
+        иначе (ok, verify-issues, оставшиеся issues контракта)."""
+        nonlocal best
         try:
-            scene, warnings, ifc_path, preview_path, raw_head = _attempt(
-                prompt + extra, attempt_no)
+            scene, warnings, ifc_path, preview_path, raw_head, c_issues = _attempt(
+                user_prompt, attempt_no, model_override=a_model, stage=stage)
         except Exception as e:
             if attempt_no == 1:
                 raise  # первой попытки нет — генерации нечего отдавать (422)
@@ -406,32 +519,45 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
             # в history, победителем остаётся лучшая выполненная попытка;
             # cleanup/dump ниже выполняются по общему выходу
             history.append({"attempt": attempt_no, "warnings": [],
+                            "contract_issues": [],
                             "scene_summary": None,
                             "verdict": {"ok": None,
                                         "error": f"attempt failed: {e}"}})
-            break
+            return None
         attempt_files.append((ifc_path, preview_path))
+        # п.58: структурные проверки собранного IFC — всегда (бесплатные,
+        # без VLM-запросов; при выключенном THREED_VERIFY тоже считаются).
+        # Мягкий режим: не влияет на ранг/corr_pool — дефект сборщика не
+        # материал для CORRECTIONS повторного анализа сцены
+        try:
+            structural = threed_verify.structural_report(ifc_path)
+        except Exception as e:
+            structural = {"ok": None, "issues": [], "error": str(e)}
         verify_payload = None
         if _verify_enabled():
             try:
                 if progress:
                     progress("verify")
-                verify_payload = _verify_attempt(scene, ifc_path)
+                verify_payload = _verify_attempt(scene, ifc_path, structural)
             except Exception as e:
                 verify_payload = {"overview": None,
                                   "verdict": {"ok": None, "error": str(e)}}
         v = (verify_payload or {}).get("verdict") or {}
         issues = v.get("issues") or []
         history.append({"attempt": attempt_no, "warnings": warnings,
+                        "contract_issues": c_issues,
                         "scene_summary": ((verify_payload or {}).get("overview")
                                           or {}).get("scene"),
                         "verdict": v})
+        _add_corr(issues)
+        _add_corr(c_issues)
         ok = v.get("ok")
         # 1) ok=True лучше остальных; 2) ответивший verify (ok=False) лучше
         # молчащего (ok=None): иначе (0,0)>(0,-1) и сбойная попытка перебивала
         # информативную; 3) меньше issues. Равенство — последняя попытка.
         rank = (1 if ok is True else 0, 0 if ok is None else 1, -len(issues))
-        res_i = {"name": ifc_path.name, "warnings": warnings}
+        res_i = {"name": ifc_path.name, "warnings": warnings,
+                 "structural": structural}
         if scenario == "scene":
             res_i["camHint"] = dict(scene["camera"])
             # фокус: центроид людей/мебели НА ВЫСОТЕ (балконный мотив фото) —
@@ -446,15 +572,39 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
             res_i["verify"] = verify_payload
         if best is None or rank >= best[0]:
             best = (rank, res_i, verify_payload, ifc_path, preview_path, raw_head)
+        return ok, issues, c_issues
+
+    corr_header = "\nCORRECTIONS from QA verification - fix these in your JSON:\n- "
+    max_iters = 1 + (_verify_iters() if _verify_enabled() else 0)
+    attempt_files = []
+    extra = ""
+    for attempt_no in range(1, max_iters + 1):
+        r = _run_attempt(prompt + extra, attempt_no, model, "analysis")
+        if r is None:
+            break
+        ok, issues, c_issues = r
         if ok is True or attempt_no == max_iters:
             break
-        if ok is not False or not issues:
+        corr_items = issues + [i for i in c_issues if i not in issues]
+        if ok is not False or not corr_items:
             # I2 (ревью з.5): строгий гейт повтора — только ок=False с
-            # непустыми issues; ok=None (сбой verify) и ок=False без issues
-            # не дают коррекций, платная итерация не запускается
+            # непустыми коррекциями (verify или контракта); ok=None (сбой
+            # verify) и ок=False без материала не запускают платную итерацию
             break
-        extra = ("\nCORRECTIONS from QA verification - fix these in your JSON:\n- "
-                 + "\n- ".join(issues))
+        extra = corr_header + "\n- ".join(corr_items)
+
+    # эскалация (п.56, часть 3): раунд попыток на analysis-модели доказал
+    # провал — лучший вердикт ок=False (или verify ни разу не ответил) — и
+    # эскалационная модель ДРУГАЯ (дороже) -> ОДНА финальная попытка с полным
+    # накопленным CORRECTIONS (verify issues всех попыток + semantic issues
+    # контракта). Пустой THREED_ESCALATION_MODEL / verify выключен / полный
+    # override THREED_MODEL (analysis == escalation) -> эскалации нет.
+    esc_model = stage_models["escalation"] if _verify_enabled() else ""
+    best_ok = ((best[2] or {}).get("verdict") or {}).get("ok") if best else None
+    if esc_model and esc_model != model and best_ok is not True:
+        esc_prompt = prompt + (corr_header + "\n- ".join(corr_pool)
+                               if corr_pool else "")
+        _run_attempt(esc_prompt, max_iters + 1, esc_model, "escalation")
     _, res, verify_payload, ifc_path, preview_path, raw_head = best
     usage_sum = _usage_summary()
     if usage_sum:
@@ -484,9 +634,11 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
         dump_verify["history"] = history
     dump = {"ts": datetime.now().isoformat(), "scenario": scenario, "prompt": prompt,
             "model": model, "warnings": res["warnings"], "name": ifc_path.name,
+            "stages": stage_models,
             "image": {"bytes": img_bytes, "sha1": img_sha1,
                       "w": image.width, "h": image.height},
-            "vlm_head": raw_head, "usage": usage_sum, "verify": dump_verify}
+            "vlm_head": raw_head, "usage": usage_sum, "verify": dump_verify,
+            "structural": res.get("structural")}
     try:
         (out_dir / "_threed_last.json").write_text(
             json.dumps(dump, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -576,7 +728,11 @@ def get_job(job_id: str) -> dict:
 @threed_router.get("/model")
 def get_model() -> dict:
     model, source = _load_model_choice()
-    return {"model": model, "source": source, "vlms": _vlm_list_cached()}
+    # stages (п.56): (model, source) каждой стадии конвейера — наблюдаемость
+    # tiered-рулек; фронт по-прежнему читает model/source/vlms
+    stages = {s: _stage_model(s) for s in STAGES}
+    return {"model": model, "source": source, "vlms": _vlm_list_cached(),
+            "stages": stages}
 
 
 @threed_router.put("/model")

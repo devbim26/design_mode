@@ -177,12 +177,18 @@ def test_generate_impl_with_verify():
     assert res["verify"]["overview"]["built"]["CONCEPTUAL_STOREY"] == 5
     dump = json.loads((TMP / "_threed_last.json").read_text(encoding="utf-8"))
     assert dump["verify"]["verdict"]["ok"] is True
+    # п.58: структурные проверки — в результате, обзоре верификатора и дампе
+    assert res["structural"]["ok"] is True and res["structural"]["issues"] == []
+    assert res["verify"]["overview"]["structural"] == []
+    assert dump["structural"]["ok"] is True
 
-    # THREED_VERIFY=0 -> второго запроса нет, ключа verify нет
+    # THREED_VERIFY=0 -> второго запроса нет, ключа verify нет,
+    # структурные проверки всё равно считаются (бесплатные, без VLM)
     os.environ["THREED_VERIFY"] = "0"
     try:
         res2 = R._generate_impl("facade", "", img, TMP)
         assert "verify" not in res2
+        assert res2["structural"]["ok"] is True
     finally:
         os.environ["THREED_VERIFY"] = "1"
     print("test_generate_impl_with_verify OK")
@@ -249,10 +255,128 @@ def test_generate_impl_scene_loop():
     print("test_generate_impl_scene_loop OK")
 
 
+def _facade_v2():
+    """Модуль фасада v2 (вилла с дормерами/башнями) — одна точка правды."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "_threed_facade_v2_samples", ROOT / "tests" / "test_threed_facade_v2.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _interior_openings_scene():
+    """Компактная сцена интерьера с настоящим проёмом (фикс 24.09)."""
+    return {
+        "trace_width": 40, "trace_height": 30, "metres_per_trace_pixel": 0.16,
+        "wall_height": 2.7,
+        "outline": [[2, 2], [38, 2], [38, 28], [2, 28]],
+        "walls": [
+            {"points_px": [[2, 2], [52, 2]], "thickness_m": 0.4, "exterior": True},
+        ],
+        "openings": [
+            {"wall_idx": 0, "x_px": 20, "width_m": 1.5, "height_m": 1.5,
+             "sill_m": 0.9, "kind": "window"},
+        ],
+        "rooms": [], "furniture": [],
+    }
+
+
+def test_structural_report_healthy():
+    """Здоровые модели: все счётчики нули, issues пустые. Interior — проёмы;
+    фасад v2 — дормеры/башни/цоколь в контейнере building (валидный IFC,
+    НЕ сироты — уточнение к формулировке ifc-mcp no_storey_no_aggregate)."""
+    from threed.threed_build import build_facade, build_interior
+    from threed.threed_scenarios import validate_facade
+    from threed.threed_verify import structural_report
+    TMP.mkdir(exist_ok=True)
+
+    ifc_i = TMP / "3D_struct_interior.ifc"
+    build_interior(_interior_openings_scene(), ifc_i,
+                   TMP / "3D_struct_interior_preview.png",
+                   {"Scenario": "interior"})
+    rep = structural_report(ifc_i)
+    assert rep["ok"] is True and rep["issues"] == [], rep
+    assert rep["openings_unhosted"] == 0 and rep["openings_unfilled"] == 0
+    assert rep["fillings_homeless"] == 0 and rep["elements_uncontained"] == 0
+    assert rep["unnamed_products"] == 0
+
+    clean, _warns = validate_facade(_facade_v2().villa_raw())
+    ifc_f = TMP / "3D_struct_facade_v2.ifc"
+    build_facade(clean, ifc_f, TMP / "3D_struct_facade_v2_preview.png",
+                 {"Scenario": "facade"})
+    rep_f = structural_report(ifc_f)
+    assert rep_f["ok"] is True and rep_f["issues"] == [], rep_f
+    assert rep_f["elements_uncontained"] == 0 and rep_f["unnamed_products"] == 0
+    print("test_structural_report_healthy OK")
+
+
+def test_structural_report_catches_defects():
+    """Сломанный файл (из здорового отрезаны отношения, стёрто имя):
+    каждая проверка ловит свой дефект, ok=False, issues непустые."""
+    import ifcopenshell
+    from threed.threed_build import build_interior
+    from threed.threed_verify import structural_report
+    TMP.mkdir(exist_ok=True)
+    healthy = TMP / "3D_struct_interior.ifc"
+    if not healthy.exists():
+        build_interior(_interior_openings_scene(), healthy,
+                       TMP / "3D_struct_interior_preview.png",
+                       {"Scenario": "interior"})
+
+    m = ifcopenshell.open(str(healthy))
+    rels = m.by_type("IfcRelContainedInSpatialStructure")
+    expected_uncontained = sum(len(r.RelatedElements) for r in rels)
+    for r in rels:
+        m.remove(r)
+    for r in list(m.by_type("IfcRelFillsElement")):
+        m.remove(r)
+    for r in list(m.by_type("IfcRelVoidsElement")):
+        m.remove(r)
+    m.by_type("IfcWindow")[0].Name = ""
+    broken = TMP / "3D_struct_broken.ifc"
+    m.write(str(broken))
+
+    rep = structural_report(broken)
+    assert rep["ok"] is False and rep["issues"], rep
+    assert rep["openings_unhosted"] == 1, rep     # VoidsElement отрезан
+    assert rep["openings_unfilled"] == 1, rep     # FillsElement отрезан
+    assert rep["fillings_homeless"] == 1, rep     # окно вне проёма
+    assert rep["elements_uncontained"] == expected_uncontained, rep
+    assert rep["unnamed_products"] == 1, rep
+    assert any("носител" in i for i in rep["issues"])
+    assert rep["examples"], "примеры имён для диагностики обязательны"
+    print("test_structural_report_catches_defects OK")
+
+
+def test_verify_prompt_structural_block():
+    """Блок (C) с машинными дефектами — только при непустом structural."""
+    from threed.threed_verify import verify
+    prompts = []
+
+    def branch(system, prompt, image_url, model):
+        prompts.append(prompt)
+        return '{"ok": false, "issues": ["x"]}'
+    overview = {"scene": {"walls": 1}, "built": {"CONCEPTUAL_WALL": 1},
+                "structural": ["проёмы без стены-носителя: 1 (Окно 1 — проём)"]}
+    v = verify("x", overview, branch, "m")
+    assert v["ok"] is False
+    assert any("(C)" in p and "носителя" in p for p in prompts)
+
+    prompts.clear()
+    verify("x", {"scene": {}, "built": {}, "structural": []}, branch, "m")
+    verify("x", {"scene": {}, "built": {}}, branch, "m")
+    assert prompts and all("(C)" not in p for p in prompts)
+    print("test_verify_prompt_structural_block OK")
+
+
 if __name__ == "__main__":
     test_scene_overview()
     test_built_overview()
     test_verify_verdict_parse()
+    test_structural_report_healthy()
+    test_structural_report_catches_defects()
+    test_verify_prompt_structural_block()
     test_generate_impl_with_verify()
     test_generate_impl_scene_loop()
     test_verify_never_breaks()

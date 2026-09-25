@@ -146,6 +146,74 @@ def built_overview(ifc_path):
     return dict(sorted(counts.items()))
 
 
+# классы, чью пространственную привязку проверяем. IfcOpeningElement исключён:
+# живёт в стене через IfcRelVoidsElement, а не в контейнере — так задумано
+_STRUCT_CLASSES = ("IfcBuildingElementProxy", "IfcGeographicElement",
+                   "IfcWall", "IfcSlab", "IfcSpace", "IfcFurnishingElement",
+                   "IfcDoor", "IfcWindow")
+_STRUCT_NAMES_MAX = 5
+
+
+def structural_report(ifc_path):
+    """Готовый IFC -> детерминированные структурные проверки (п.58; паттерны
+    Daviidro/ifcopenshell-mcp validate_ifc_model, MIT, и smartaec/ifcMCP
+    get_openings_on_wall, Apache-2.0 — подход, не код). Проёмы без стены-
+    носителя/заполнения, двери-окна вне проёма, элементы без привязки,
+    безымянные продукты. Мягкий режим: только факты в overview/дамп; вердикт
+    не меняет, генерацию не роняет (сбой глушится вызывающим)."""
+    import ifcopenshell
+    model = ifcopenshell.open(str(ifc_path))
+
+    hosted, filled, filling_ids = set(), set(), set()
+    for rel in model.by_type("IfcRelVoidsElement"):
+        hosted.add(rel.RelatedOpeningElement.id())
+    for rel in model.by_type("IfcRelFillsElement"):
+        filled.add(rel.RelatingOpeningElement.id())
+        filling_ids.add(rel.RelatedBuildingElement.id())
+
+    attached = set()
+    for rel in model.by_type("IfcRelContainedInSpatialStructure"):
+        attached.update(e.id() for e in rel.RelatedElements)
+    for rel in model.by_type("IfcRelAggregates"):
+        attached.update(e.id() for e in rel.RelatedObjects)
+
+    products = [p for cls in _STRUCT_CLASSES for p in model.by_type(cls)]
+    openings_unhosted = [o for o in model.by_type("IfcOpeningElement")
+                         if o.id() not in hosted]
+    openings_unfilled = [o for o in model.by_type("IfcOpeningElement")
+                         if o.id() not in filled]
+    fillings_homeless = [e for e in model.by_type("IfcDoor")
+                         + model.by_type("IfcWindow")
+                         if e.id() not in filling_ids]
+    uncontained = [e for e in products if e.id() not in attached]
+    unnamed = [e for e in products if not (e.Name or "").strip()]
+
+    report = {"openings_unhosted": len(openings_unhosted),
+              "openings_unfilled": len(openings_unfilled),
+              "fillings_homeless": len(fillings_homeless),
+              "elements_uncontained": len(uncontained),
+              "unnamed_products": len(unnamed),
+              "examples": [e.Name for e in
+                           (openings_unhosted + fillings_homeless
+                            + uncontained)[:_STRUCT_NAMES_MAX]
+                           if e.Name][:_STRUCT_NAMES_MAX]}
+    issues = []
+    if openings_unhosted:
+        issues.append(f"проёмы без стены-носителя: {len(openings_unhosted)}")
+    if openings_unfilled:
+        issues.append(f"проёмы без заполнения: {len(openings_unfilled)}")
+    if fillings_homeless:
+        issues.append(f"двери/окна вне проёма: {len(fillings_homeless)}")
+    if uncontained:
+        issues.append(f"элементы без пространственной привязки: "
+                      f"{len(uncontained)}")
+    if unnamed:
+        issues.append(f"продукты без имени: {len(unnamed)}")
+    report["issues"] = issues[:MAX_ISSUES]
+    report["ok"] = not issues
+    return report
+
+
 def _normalize_verdict(data, raw):
     """Ответ VLM -> {"ok": bool, "issues": [str]} | {"ok": None, "error": ...}."""
     if not isinstance(data, dict) or "ok" not in data:
@@ -176,6 +244,12 @@ def verify(image_url, overview, call_vlm, model):
               + json.dumps(overview.get("built"), ensure_ascii=False)
               + "\n\nCompare (A) and (B) against the image. Reply with STRICT "
                 "JSON ONLY: {\"ok\": true|false, \"issues\": [...]}")
+    structural = [str(s) for s in (overview.get("structural") or [])
+                  if str(s).strip()][:MAX_ISSUES]
+    if structural:  # п.58: машинные дефекты сборки — факт, а не догадка VLM
+        prompt += ("\n\n(C) machine-detected IFC build defects (deterministic "
+                   "ground truth, not guesses — report them as issues):\n- "
+                   + "\n- ".join(structural))
     try:
         raw = call_vlm(SYSTEM_VERIFY, prompt, image_url, model)
     except Exception as e:  # сеть/ключ/таймаут — верификация не роняет генерацию

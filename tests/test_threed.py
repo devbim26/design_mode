@@ -500,13 +500,14 @@ def test_validate_interior():
     assert "furniture" in SYSTEM_INTERIOR and "wall_height" in SYSTEM_INTERIOR
 
     scene = sample_interior_scene()
-    out, warn = validate_interior(scene, 40, 30)
+    out, warn, issues = validate_interior(scene, 40, 30)
     assert out["trace_width"] == 40 and out["trace_height"] == 30
     assert out["wall_height"] == 2.7 and len(out["walls"]) == 5
     assert len(out["openings"]) == 3 and out["openings"][0]["kind"] == "door"
     assert [r["name"] for r in out["rooms"]] == ["Кухня", "Спальня"]
     assert out["furniture"][0]["type"] == "bed"
     assert warn == []
+    assert issues == []  # контракт посадки (п.56): чистый сэмпл без нарушений
 
     # не-dict / пустая сцена -> ValueError
     for bad in (None, [], {}, {"rooms": []}):
@@ -517,25 +518,25 @@ def test_validate_interior():
             pass
 
     # дефолты: масштаб/высота/толщина; мусорные поля выбрасываются
-    out2, warn2 = validate_interior({"outline": [[0, 0], [99, 0], [99, 99], [0, 99]],
-                                     "walls": [
-                                         {"points_px": [[0, 0], [99, 0]],
-                                          "thickness_m": "мусор", "exterior": True},
-                                         {"points_px": [[0, 0]], "thickness_m": 0.1},
-                                         {"points_px": [[0, 0], [1, 0]],
-                                          "thickness_m": 99.0}],
-                                     "openings": [
-                                         {"wall_idx": 7, "x_px": 5, "width_m": 1.0,
-                                          "height_m": 2.0, "sill_m": 0, "kind": "door"},
-                                         {"wall_idx": 0, "x_px": 50, "width_m": 1.0,
-                                          "height_m": 2.0, "sill_m": 0, "kind": "window"}],
-                                     "rooms": [{"name": 123, "type": "sauna",
-                                                "points_px": [[1, 1], [9, 1], [9, 9], [1, 9]]}],
-                                     "furniture": [
-                                         {"type": "spaceship", "x_px": 5, "y_px": 5,
-                                          "w_m": 2.0, "d_m": 2.0, "h_m": 1.0,
-                                          "rot_deg": 900}]},
-                                    100, 100)
+    out2, warn2, issues2 = validate_interior({"outline": [[0, 0], [99, 0], [99, 99], [0, 99]],
+                                              "walls": [
+                                                  {"points_px": [[0, 0], [99, 0]],
+                                                   "thickness_m": "мусор", "exterior": True},
+                                                  {"points_px": [[0, 0]], "thickness_m": 0.1},
+                                                  {"points_px": [[0, 0], [1, 0]],
+                                                   "thickness_m": 99.0}],
+                                              "openings": [
+                                                  {"wall_idx": 7, "x_px": 5, "width_m": 1.0,
+                                                   "height_m": 2.0, "sill_m": 0, "kind": "door"},
+                                                  {"wall_idx": 0, "x_px": 50, "width_m": 1.0,
+                                                   "height_m": 2.0, "sill_m": 0, "kind": "window"}],
+                                              "rooms": [{"name": 123, "type": "sauna",
+                                                         "points_px": [[1, 1], [9, 1], [9, 9], [1, 9]]}],
+                                              "furniture": [
+                                                  {"type": "spaceship", "x_px": 5, "y_px": 5,
+                                                   "w_m": 2.0, "d_m": 2.0, "h_m": 1.0,
+                                                   "rot_deg": 900}]},
+                                             100, 100)
     assert abs(out2["metres_per_trace_pixel"] - 0.01) < 1e-9   # дефолт
     assert out2["wall_height"] == 2.7
     assert len(out2["walls"]) == 2                              # нулевая длина выброшена
@@ -547,7 +548,76 @@ def test_validate_interior():
     assert out2["furniture"][0]["type"] == "other"              # spaceship -> other
     assert out2["furniture"][0]["rot_deg"] == 180.0             # кламп 900 -> 180
     assert any("walls" in w for w in warn2) or warn2
+    # контракт посадки (п.56): окно x_px=50 при стене 0,99 м — ширина срезана
+    # до 0,89, центр посажен на 0,495 м (warning'и, не issues)
+    assert any("посажен" in w for w in warn2)
+    assert issues2 == []
     print("test_validate_interior OK")
+
+
+def test_interior_seating_contract():
+    """Контракт посадки п.56 на фикстурах живых кейсов п.55: нормализуемое
+    чинится кодом с warning'ами «посажено», семантическое — в issues."""
+    from threed.threed_scenarios import validate_interior
+
+    # кейс п.55-1: окно за торцом стены 8 м (x_px=45 при scale 0.16 ->
+    # t=7,2 м; правая граница посадки 8 - 2/2 - 0,05 = 6,95 м)
+    scene = {
+        "trace_width": 60, "trace_height": 30, "metres_per_trace_pixel": 0.16,
+        "wall_height": 2.7,
+        "outline": [[2, 2], [38, 2], [38, 28], [2, 28]],
+        "walls": [{"points_px": [[2, 2], [52, 2]], "thickness_m": 0.4,
+                   "exterior": True}],
+        "openings": [{"wall_idx": 0, "x_px": 45, "width_m": 2.0,
+                      "height_m": 1.5, "sill_m": 0.9, "kind": "window"}],
+        "rooms": [], "furniture": [],
+    }
+    out, warn, issues = validate_interior(scene, 60, 30)
+    assert issues == []
+    assert abs(out["openings"][0]["x_px"] - 6.95 / 0.16) < 1e-6
+    assert any("посажен" in w for w in warn)
+
+    # кейс п.55-2: дверь на огрызке 0,32 м — перенос на ближайшую стену
+    # >= 0,6 м (wall 2: [2,28]-[38,28], 5,76 м, дистанция 0)
+    scene["walls"] = [
+        {"points_px": [[2, 2], [52, 2]], "thickness_m": 0.4, "exterior": True},
+        {"points_px": [[4, 28], [6, 28]], "thickness_m": 0.3, "exterior": True},
+        {"points_px": [[2, 28], [38, 28]], "thickness_m": 0.3, "exterior": True},
+    ]
+    scene["openings"] = [{"wall_idx": 1, "x_px": 1, "width_m": 0.9,
+                          "height_m": 2.1, "sill_m": 0.0, "kind": "door"}]
+    out, warn, issues = validate_interior(scene, 60, 30)
+    assert issues == []
+    assert out["openings"][0]["wall_idx"] == 2
+    assert any("огрызок" in w and "посажен" in w for w in warn)
+
+    # тот же огрызок, подходящей стены рядом нет (ближайшая 4,16 м > 1,5) —
+    # семантический issue, проём удалён
+    scene["walls"] = scene["walls"][:2]
+    out, warn, issues = validate_interior(scene, 60, 30)
+    assert out["openings"] == []
+    assert any("без стены-носителя" in i for i in issues)
+
+    # мебель вне комнат — семантический issue (вход ремонта п.56)
+    scene2 = sample_interior_scene()
+    scene2["furniture"][1]["x_px"] = 60          # стол за спальней
+    out, warn, issues = validate_interior(scene2, 80, 40)
+    assert len(issues) == 1 and "вне комнат" in issues[0]
+
+    # комната не замкнута стенами (одна стена из четырёх) — issue
+    scene3 = {
+        "trace_width": 40, "trace_height": 30, "metres_per_trace_pixel": 0.25,
+        "wall_height": 2.7, "outline": [],
+        "walls": [{"points_px": [[2, 2], [38, 2]], "thickness_m": 0.4,
+                   "exterior": True}],
+        "openings": [],
+        "rooms": [{"name": "Зал", "type": "living",
+                   "points_px": [[2, 2], [20, 2], [20, 28], [2, 28]]}],
+        "furniture": [],
+    }
+    out, warn, issues = validate_interior(scene3, 40, 30)
+    assert any("не замкнута" in i for i in issues)
+    print("test_interior_seating_contract OK")
 
 
 def _mock_vlm_ok(text):
@@ -1126,6 +1196,7 @@ if __name__ == "__main__":
     test_validate_genplan()
     test_validate_facade()
     test_validate_interior()
+    test_interior_seating_contract()
     test_validate_facade_balcony_fit()
     test_validate_scene()
     test_scene_overview_furniture()

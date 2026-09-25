@@ -1,0 +1,13 @@
+{
+  "mcp": {
+    "servers": {
+      "ifcmcp": {
+        "command": "C:\\Users\\Lenovo\\Desktop\\проект SOFT_2\\Дизайн\\InvokeAI\\InvokeAI\\venv\\Scripts\\python.exe",
+        "args": ["-m", "ifc_mcp.cli", "serve", "--quiet"],
+        "env": {
+          "PYTHONUTF8": "1"
+        }
+      }
+    }
+  }
+}

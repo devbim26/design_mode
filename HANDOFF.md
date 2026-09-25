@@ -2444,8 +2444,92 @@ invokeai==6.2.0` их нужно запускать повторно в поря
       фаза 2 про совпадающие грани); (в) старые интерьерные IFC (до
       24.09 вечер) пересоберите — у них проёмы остаются прокси-наклейками.
 
-
-
+56. **Tiered-конвейер 3D: контракт посадки кодом, per-stage модели,
+    ремонт JSON, эскалация** (24.09, ветка `interior`; спека
+    `docs/superpowers/specs/2026-09-24-threed-tiered-pipeline-design.md`,
+    план `docs/superpowers/plans/2026-09-24-threed-tiered-pipeline.md`;
+    мотивация: одна дорогая astra на всё (~$0.22/планировка), класс ошибок
+    «посадка» ловился сборщиком молча после оплаты, а переход на дешёвую
+    sol «в лоб» дал бы эхо-камеру — генератор и судья одна модель).
+    - **Часть 1 — контракт посадки ДО сборки** (`threed/threed_scenarios.py`):
+      константы п.55 вынесены в общие (`OPENING_MIN_HOST=0.6`,
+      `OPENING_MARGIN=0.05`, `OPENING_MIN=0.3`; сборщик импортирует их —
+      последний рубеж бит-в-бит, точные ассерты 6.95 в тестах п.55 живы).
+      `validate_interior` теперь возвращает ТРИ корзины:
+      `(scene, warnings, issues)` — нормализуемое кодом (кламп центра
+      проёма в сегмент, ширина ≤ длина−0.1, высота ≤ wall_height−sill−0.05,
+      перенос с огрызка <0.6 м на ближайшую стену ≥0.6 м в радиусе 1.5 м от
+      его середины) правится на месте с warning'ами «посажен»; семантическое
+      (мебель вне комнат — центр вне всех полигонов комнат/контура; комната
+      не замкнута — покрытие контура стенами <60% при допуске
+      thickness/2+0.15 м и шаге 0.3 м; проём без стены-носителя рядом —
+      огрызок без подходящей стены, проём удаляется) — в `issues`.
+      Проёмы `wall_idx:"outline"` не проверяются (нет носителя). Спека
+      называла это «validate_scene (interior)» — реализовано в
+      `validate_interior`: у уличной validate_scene проёмов нет.
+    - **Части 2–3 — per-stage модели / ремонт / эскалация**
+      (`threed/threed_router.py`): рульки `.env`
+      `THREED_ANALYSIS/REPAIR/VERIFY/ESCALATION_MODEL` (дефолты
+      astra/luna/astra/astra — id сверены с /v3/models; sol-повтор ремонта
+      зашит). `THREED_MODEL` (env или file-store через PUT /api/v1/threed/
+      model) — ПОЛНЫЙ override: все стадии на нём, эскалация выключена
+      (analysis == escalation), поведение/стоимость как до п.56. **Ремонт**:
+      только при непустых semantic issues (счастливый путь не платит),
+      вход — сцена JSON + issues БЕЗ картинки (`_call_vlm` теперь принимает
+      `image_url=None`), выход — strict-JSON; гейт = extract_json +
+      повторная validate_interior; провал → ОДИН повтор на sol; не помогло
+      → issues едут в CORRECTIONS следующей итерации. Сбой ремонта НЕ роняет
+      попытку (warning, исходная сцена). **Эскалация**: после раунда
+      (попытки 1..K, K=1+THREED_VERIFY_ITERS) при включённом verify и
+      лучшем вердикте ok=False (или все ok=None) и analysis ≠ escalation →
+      +1 финальная попытка `_r{K+1}` на эскалационной модели с полным
+      накопленным CORRECTIONS (verify issues всех попыток + semantic issues
+      контракта, пул с дедупом); verify попытки — всегда на своей модели
+      (судья независим); пустой `THREED_ESCALATION_MODEL` = выключено.
+      Победитель — по прежнему рейтингу, проигравшие файлы вычищены.
+      Гейт повтора петли расширен: ok=False + (verify issues ИЛИ issues
+      контракта). `_usage_stage`: analysis|repair|verify|escalation — в
+      cost-дампах видно, какая стадия сколько съела; дамп `_threed_last.json`
+      + ключ `stages` (4 модели), history-записи + `contract_issues`;
+      GET /api/v1/threed/model + ключ `stages`. Прогресс-стадии фронта
+      НЕ менялись (STAGE_KEYS в devbim_topright_buttons.js: ремонт/эскалация
+      идут под «analysis», неизвестные ключи упали бы в «В очереди»).
+    - **Проверка**: `tests/test_threed_tiered.py` (5, NEW: резолв stage-
+      моделей/override/пустая эскалация; порядок analysis→repair→verify с
+      image_url=None у ремонта и «ремонт не вызывается на чистой сцене»;
+      гейт ремонта — мусор от luna → один повтор на sol → принят, оба
+      кривые → issues в CORRECTIONS итерации 2; эскалация — раунд sol →
+      _r3 на astra с полным пулом, verify всегда astra, проигравшие
+      вычищены; отключение и полный override) + test_threed.py
+      (test_validate_interior пересчитан под 3-tuple, новый
+      test_interior_seating_contract — фикстуры кейсов п.55: окно за
+      торцом → посажено с warning, огрызок → перенос/issue, мебель вне
+      комнаты → issue, комната не замкнута → issue) — ALL OK;
+      test_threed_verify / test_threed_facade_v2 — без правок, ALL OK
+      (поведение при дефолтных настройках не изменилось: эскалация off,
+      контракт на их фикстурах чист). Деплой setup_threed.py + рестарт;
+      health-check: GET /api/v1/threed/model (с печенькой site-auth!) —
+      200, `stages` {astra,luna,astra,astra}/default; /api/v1/ifc/list —
+      200. A/B-приёмка дефолта analysis на sol (часть 4 спеки,
+      `data/probe/_probe_threed_tier.py`) — ОТЛОЖЕНО до согласования
+      пользователя; дефолт НЕ переключён.
+    - **ГРАБЛИ**: (а) смена сигнатуры validate_interior (2→3-tuple)
+      требует запуска setup_threed.py ДО test_threed.py — роутер дерева
+      тянет VENV-копии сценариев (п.45-3), распаковка падает «cannot
+      unpack»; новые tiered-тесты от этого свободны (изолятор `_router()`
+      привязывает модули дерева). (б) Ремонт перезапускается в КАЖДОЙ
+      попытке петли (анализ снова вернул битую сцену → снова issues →
+      снова luna+sol) — это by design, в тесте гейта ожидается 2×2 вызова.
+      (в) Стартовая валидация по каталогу — только analysis (+verify при
+      включённом): валидировать все 4 стадии вверх нельзя, опечатка в
+      чужой рульке (например THREED_REPAIR_MODEL при генплане) блокировала
+      бы генерацию 422; ремонт/эскалация проверяются лениво, их сбой
+      глушится гейтом ремонта / записью в history. (г) Health-check API
+      без печеньки site-auth даёт 303 → /auth/login — печеньку собирайте
+      `siteauth.site_auth._token(_site_password())` (COOKIE_NAME).
+      Откат: убрать новые переменные из .env (перестают действовать),
+      контракт посадки — чистая добавка до сборки (п.55 в сборщике
+      остаётся), THREED_MODEL-override работает как раньше.
 57. **Переход вьювер → канвас без маски, рамка 3:2 + fit** (25.09, ветка
     `interface`; жалоба: после «To Canvas» из вьюверов (IFC/PDF/Design
     Code — все через общий мост `window.__devbimIfc.toCanvas`)
@@ -2499,6 +2583,50 @@ invokeai==6.2.0` их нужно запускать повторно в поря
       (тексты) + рестарт; парсинг App-бандла `node -e import(...)` —
       только рантайм «document is not defined».
 
+58. **3D Design: детерминированные структурные проверки IFC** (25.09, ветка
+    `3d_analysys`; спека
+    `docs/superpowers/specs/2026-09-25-threed-structural-verify-design.md`).
+    Дыра QA: вердикт п.44 — только VLM по счётчикам ObjectType; «тихий»
+    слом сборки при правильных счётчиках не видел никто. Разведка MCP-
+    сервисов (ifc-mcp/imants установлен в venv + зарегистрирован в ZCode
+    воркспейсно, `.zcode/config.json`, сервер `ifcmcp`, stdio) показала
+    класс ошибок на живом файле. Паттерны (не код): Daviidro/
+    ifcopenshell-mcp `validate_ifc_model` (MIT), smartaec/ifcMCP
+    `get_openings_on_wall` (Apache-2.0).
+    - `threed_verify.structural_report(ifc_path)` — открывает готовый IFC,
+      считает: проёмы без IfcRelVoidsElement (стены-носителя), проёмы без
+      IfcRelFillsElement, IfcDoor/IfcWindow вне проёма, элементы без
+      IfcRelContainedInSpatialStructure/IfcRelAggregates, безымянные
+      продукты. IfcOpeningElement исключён (живёт в стене — by design);
+      контейнер ЛЮБОГО уровня годится (дормеры/башни/цоколь фасада в
+      building — валидный IFC; формулировка ifc-mcp «нет именно этажа =
+      сирота» — НЕ наша). Фолбэк-прокси проёма (IfcBuildingElementProxy)
+      проверкой door/window не задет. Миллисекунды, без VLM/зависимостей.
+    - **Мягкий режим**: не влияет на вердикт/ранг/corr_pool (дефект
+      сборщика — не материал CORRECTIONS для повторного АНАЛИЗА), считается
+      ВСЕГДА (и при THREED_VERIFY=0), сбой -> `{"ok": null, "error"}`
+      без влияния на генерацию.
+    - Интеграция: `_run_attempt` -> `res_i["structural"]` (результат задачи
+      + дамп `_threed_last.json` ключ `structural`), `_verify_attempt` ->
+      `overview["structural"]`; `threed_verify.verify` при непустых issues
+      добавляет в промпт блок «(C) machine-detected IFC build defects
+      (deterministic ground truth)» — блоки (A)/(B) не тронуты.
+    - **Проверка**: `tests/test_threed_verify.py` — 3 новых теста
+      (здоровые interior+villa-v2: нули; сломанный файл: отрезаны
+      Voids/Fills/Contained + стёрто имя — все счётчики ловят; блок (C)
+      только при непустом structural) + роутерные ассерты (structural в
+      res/overview/дампе, работает при THREED_VERIFY=0) — ALL OK;
+      test_threed / test_threed_facade_v2 / test_threed_tiered — ALL OK.
+      Деплой: setup_threed.py + рестарт; живая проверка — логин через гейт
+      (POST /auth/login, кука) + GET /api/v1/threed/model.
+    - ГРАБЛИ: (а) роутер дерева в тестах импортирует ЗАДЕПЛОЕННУЮ копию из
+      venv (`invokeai.app.api.routers.threed_verify`) — новый символ без
+      перезапуска setup_threed.py даёт AttributeError в тестах (уже было
+      п.56, строка выше); (б) curl по API без куки гейта — пустой ответ/
+      303, не «сервер лежит».
+
+
+
 ```powershell
 cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
 .\venv\Scripts\python.exe .\setup_imagerouter.py        # применить патчи
@@ -2508,6 +2636,7 @@ cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
 .\venv\Scripts\python.exe .\setup_threed.py             # 3D Design (идемпотентно)
 .\venv\Scripts\python.exe .\tests\test_designcode.py    # код доступа/URL + патчи
 .\venv\Scripts\python.exe .\tests\test_threed.py        # 3D Design: сценарий/сборщик/роутер
+.\venv\Scripts\python.exe .\tests\test_threed_verify.py # 3D Design: VLM-верификация + структурные проверки (п.58)
 .\venv\Scripts\python.exe .\tests\test_topright_buttons.py # кнопки Prompt Assistant / 3D Design
 .\venv\Scripts\python.exe .\tests\test_mask_toggle.py   # тумблер Маска/Слой
 .\venv\Scripts\python.exe .\tests\test_cut_tool.py      # ✂ вырезание по контуру
