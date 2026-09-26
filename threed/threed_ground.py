@@ -315,6 +315,10 @@ def facade_pixel_hint(payload, img_w, img_h):
     return (b["x1"], b["y1"], b["x2"], b["y2"]) if b else None
 
 
+# конвертеры по темам (plan/interior — Task 9); роутер зовёт через словарь
+CONVERTERS = {"facade": facade_boxes_to_scene}
+
+
 # ===================== рантайм прогона B (вызов VLM) =====================
 
 def run_ground_pass(scenario, image_url, model, call_vlm):

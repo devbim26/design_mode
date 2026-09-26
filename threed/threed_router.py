@@ -35,9 +35,13 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
 try:  # задеплоено в venv
-    from invokeai.app.api.routers import threed_build, threed_scenarios, threed_verify
+    from invokeai.app.api.routers import (
+        threed_build, threed_scenarios, threed_verify,
+        threed_ground, threed_ensemble, threed_regular)
 except ImportError:  # дерево проекта (тесты)
-    from threed import threed_build, threed_scenarios, threed_verify
+    from threed import (
+        threed_build, threed_scenarios, threed_verify,
+        threed_ground, threed_ensemble, threed_regular)
 
 from invokeai.app.services.config.config_default import get_config
 
@@ -182,6 +186,62 @@ def _verify_iters() -> int:
         return 1
 
 
+# --- двухканальный ансамбль (п.60): прогон B + compare/merge + реферти ---
+DEFAULT_ENSEMBLE_MODEL = ""  # winner зонда з.1b (Task 3 шаг 7); "" -> text-B
+REFEREE_MODEL_DEFAULT = REPAIR_RETRY_MODEL  # sol — ярус выше luna-ремонта
+
+
+def _ensemble_enabled() -> bool:
+    """Двухканальный режим (темы facade/plan/interior): .env THREED_ENSEMBLE=
+    0/false/no/off выключает; дефолт ВКЛ (спека з.6)."""
+    v = _env_threed_var("THREED_ENSEMBLE")
+    return (v if v is not None else "1").strip().lower() not in (
+        "0", "false", "no", "off")
+
+
+def _ensemble_b_model() -> str:
+    """Модель прогона B: env THREED_ENSEMBLE_MODEL -> константа зонда.
+    "" -> text-fallback на ремонт-модели (спека з.1b)."""
+    v = _env_threed_var("THREED_ENSEMBLE_MODEL")
+    if v:
+        return v
+    return DEFAULT_ENSEMBLE_MODEL
+
+
+def _referee_model() -> str:
+    """Модель арбитра споров. ВАЖНО: полным override THREED_MODEL НЕ глушится
+    (спека з.3 «отдельное значение, не luna») — судья споров всегда выше
+    ярусом, иначе эхо-камера."""
+    return _env_threed_var("THREED_REFEREE_MODEL") or REFEREE_MODEL_DEFAULT
+
+
+def _max_calls() -> int:
+    """Лимит VLM-вызовов на ОДНУ попытку (analysis+B+repair+referee+verify;
+    спека з.6; эскалация — своя попытка, свой бюджет)."""
+    try:
+        return max(2, min(20, int(_env_threed_var("THREED_MAX_CALLS_PER_ATTEMPT")
+                                  or 6)))
+    except ValueError:
+        return 6
+
+
+_attempt_calls = [0]  # счётчик вызовов текущей попытки (сброс в _run_attempt)
+
+
+def _budget_left() -> bool:
+    return _attempt_calls[0] < _max_calls()
+
+
+def _vlm_counted(system: str, prompt: str, image_url: str | None, model: str) -> str:
+    """_call_vlm под бюджетом попытки (п.60 з.6). Счётчик живёт ЗДЕСЬ, а не
+    в теле _call_vlm: роутерные тесты подменяют R._call_vlm целиком —
+    замоканные вызовы тоже обязаны платить бюджет (иначе лимит не видит B/
+    реферти и verify уходит за границу). Все вызовы конвейера (analysis/
+    B/repair/referee/verify) идут только через эту обёртку."""
+    _attempt_calls[0] += 1  # бюджет попытки (п.60 з.6): считаем всё
+    return _call_vlm(system, prompt, image_url, model)
+
+
 def _vlm_list_cached() -> list[dict]:
     """VLM каталога (вход image, выход text), кэш VLM_LIST_CACHE_S."""
     now = time.time()
@@ -237,7 +297,8 @@ def _to_dataurl(pil) -> str:
 def _call_vlm(system: str, prompt: str, image_url: str | None, model: str) -> str:
     """Запрос в ImageRouter chat completions (паттерн prompt_enhancer.call_vlm).
     image_url=None — text-only вызов (ремонт JSON п.56: числовая/семантическая
-    правка, зрение не нужно). Возвращает СЫРОЙ ответ (разбор — на вызывающем)."""
+    правка, зрение не нужно). Возвращает СЫРОЙ ответ (разбор — на вызывающем).
+    Бюджет попытки считает обёртка _vlm_counted — вызывать только через неё."""
     from invokeai.app.api.routers.imagerouter import CHAT_COMPLETIONS_URL, _load_key
 
     key = _load_key()
@@ -355,7 +416,7 @@ def _repair_scene(scene, issues, img_w, img_h):
               + "\n\nReturn the corrected FULL scene JSON.")
     for model in (repair_model, REPAIR_RETRY_MODEL):
         _usage_stage[0] = "repair"
-        raw = _call_vlm(threed_scenarios.SYSTEM_REPAIR, prompt, None, model)
+        raw = _vlm_counted(threed_scenarios.SYSTEM_REPAIR, prompt, None, model)
         fixed = threed_scenarios.extract_json(raw)
         if fixed is None:
             continue
@@ -408,6 +469,90 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
               else threed_scenarios.SYSTEM_FACADE if scenario == "facade"
               else threed_scenarios.SYSTEM_GENPLAN)
 
+    ens_hint = [None]  # пиксельный bbox здания из B (якорь оверлея фасада)
+
+    def _ensemble_pass(user_prompt, scene):
+        """Двухканальный режим (п.60): B (grounding|text) -> compare ->
+        merge (реферти по спорам, <=1 вызов) -> регуляризация по гейту.
+        ЛЮБОЙ сбой — warning + исходная A (не хуже текущего поведения)."""
+        if not _ensemble_enabled():
+            return scene, None, []
+        wns = []
+        b_model = _ensemble_b_model()
+        info = {"mode": "grounding" if b_model else "text",
+                "b_model": b_model or _stage_model("repair")[0],
+                "agree_rate": None, "disputed_fields": [], "pixel_hint": None}
+        if not _budget_left():
+            wns.append("ансамбль: прогон B пропущен — лимит VLM-вызовов попытки")
+            return scene, None, wns
+        try:
+            _usage_stage[0] = "ensemble"
+            if b_model:
+                payload, b_wns = threed_ground.run_ground_pass(
+                    scenario, image_url, b_model, _vlm_counted)
+                wns += b_wns
+                if payload is None:
+                    return scene, None, wns
+                raw_b = threed_ground.CONVERTERS[scenario](
+                    payload, image.width, image.height)[0]
+                if scenario == "facade":  # якорь оверлея — бокс building
+                    ens_hint[0] = threed_ground.facade_pixel_hint(
+                        payload, image.width, image.height)
+                    info["pixel_hint"] = ens_hint[0]
+            else:
+                raw_b, b_wns = threed_ground.run_text_pass(
+                    scenario, user_prompt, image_url, info["b_model"], _vlm_counted)
+                wns += b_wns
+                if raw_b is None:
+                    return scene, None, wns
+            if not raw_b:
+                wns.append("ансамбль: сцена B пуста — работаем с A")
+                return scene, None, wns
+            try:
+                if scenario == "facade":
+                    b_scene, _ = threed_scenarios.validate_facade(dict(raw_b))
+                elif scenario == "plan":
+                    b_scene, _ = threed_scenarios.validate_genplan(
+                        dict(raw_b), image.width, image.height)
+                else:
+                    b_scene, _, _ = threed_scenarios.validate_interior(
+                        dict(raw_b), image.width, image.height)
+            except ValueError as e:
+                wns.append(f"ансамбль: сцена B невалидна ({e}) — работаем с A")
+                return scene, None, wns
+            cmp = threed_ensemble.compare_scenes(scenario, scene, b_scene)
+
+            def referee(fields):
+                body = {f: {"A": cmp["disputed"][f][0],
+                            "B": cmp["disputed"][f][1]} for f in fields}
+                raw = _vlm_counted(
+                    threed_ensemble.SYSTEM_REFEREE,
+                    "Image = the source the fields were extracted from.\n"
+                    "Disputed fields of two independent extractions:\n"
+                    + json.dumps(body, ensure_ascii=False)
+                    + "\nFor EACH field pick the value better matching the "
+                      "image. STRICT JSON only.", image_url, _referee_model())
+                return threed_scenarios.extract_json(raw)
+
+            _usage_stage[0] = "ensemble"
+            scene, confidence, m_wns = threed_ensemble.merge_scenes(
+                scenario, scene, b_scene, cmp,
+                referee=referee if cmp["disputed"] and _budget_left() else None)
+            wns += m_wns
+            if cmp["disputed"] and not _budget_left():
+                wns.append("ансамбль: реферти за бюджетом — спорные из A")
+            info["agree_rate"] = confidence["agree_rate"]
+            info["disputed_fields"] = confidence["disputed_fields"]
+            if confidence["agree_rate"] >= threed_regular.REGULAR_GATE:
+                scene = threed_regular.regularize(scenario, scene,
+                                                  confidence, wns)
+            else:
+                wns.append("regularization skipped: low ensemble agreement")
+        except Exception as e:
+            wns.append(f"ансамбль: сбой прогона B ({e}) — работаем с A")
+            return scene, None, wns
+        return scene, info, wns
+
     def _attempt(user_prompt: str, attempt_no: int, model_override=None,
                  stage: str = "analysis"):
         """Анализ -> валидация (+ контракт посадки и ремонт п.56) -> сборка
@@ -422,10 +567,10 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
             progress("analysis")
         _usage_stage[0] = stage
         for try_no in (1, 2):  # один ретрай на невалидный JSON
-            raw = _call_vlm(system,
-                            user_prompt + ("\n(attempt 2: return ONLY the strict JSON)" if try_no == 2
-                                           else ""),
-                            image_url, a_model)
+            raw = _vlm_counted(system,
+                               user_prompt + ("\n(attempt 2: return ONLY the strict JSON)" if try_no == 2
+                                              else ""),
+                               image_url, a_model)
             scene = threed_scenarios.extract_json(raw)
             if scene is not None:
                 raw_head = raw[:300]
@@ -437,16 +582,6 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
         if scenario == "interior":
             scene, warnings, contract_issues = threed_scenarios.validate_interior(
                 scene, image.width, image.height)
-            if contract_issues:  # счастливый путь не платит (п.56, часть 2)
-                try:
-                    fixed, rep_wns, contract_issues = _repair_scene(
-                        scene, contract_issues, image.width, image.height)
-                except Exception as e:  # сеть/ключ — ремонт не роняет попытку
-                    rep_wns = [f"контракт: ремонт не удался ({e})"]
-                else:
-                    if fixed is not None:
-                        scene = fixed
-                warnings = list(warnings) + rep_wns
         elif scenario == "scene":
             scene, warnings = threed_scenarios.validate_scene(scene)
         elif scenario == "facade":
@@ -454,12 +589,37 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
         else:
             scene, warnings = threed_scenarios.validate_genplan(
                 scene, image.width, image.height)
+        ensemble_info = None
+        if scenario in ("facade", "plan", "interior"):
+            scene, ensemble_info, ens_wns = _ensemble_pass(user_prompt, scene)
+            warnings += ens_wns
+            if scenario == "interior" and ensemble_info:
+                # merge мог заменить комнаты/стены — перепосадить проёмы
+                # константами п.55 (общий импорт, не дублировать)
+                threed_scenarios._seat_openings(scene, warnings, contract_issues)
+        if scenario == "interior" and contract_issues:
+            try:  # ремонт ПОСЛЕ merge (порядок стадий спеки з.6)
+                if not _budget_left():
+                    raise ValueError("лимит VLM-вызовов попытки")
+                fixed, rep_wns, contract_issues = _repair_scene(
+                    scene, contract_issues, image.width, image.height)
+            except Exception as e:  # сеть/ключ/бюджет — ремонт не роняет попытку
+                rep_wns = [f"контракт: ремонт не удался ({e})"]
+            else:
+                if fixed is not None:
+                    scene = fixed
+            warnings = list(warnings) + rep_wns
         name = (f"3D_{scenario}_{stamp}.ifc" if attempt_no == 1
                 else f"3D_{scenario}_{stamp}_r{attempt_no}.ifc")
         ifc_path = out_dir / name
         preview_path = out_dir / (Path(name).stem + "_preview.png")
         meta = {"Scenario": scenario, "Prompt": prompt, "Model": a_model,
                 "Source": "3D Design"}
+        if ensemble_info and ensemble_info.get("agree_rate") is not None:
+            meta["EnsembleAgreement"] = json.dumps(
+                {"agree_rate": ensemble_info["agree_rate"],
+                 "disputed_fields": ensemble_info["disputed_fields"],
+                 "mode": ensemble_info["mode"]}, ensure_ascii=False)
         if progress:
             progress("build")
         if scenario == "interior":
@@ -470,21 +630,34 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
             threed_build.build_facade(scene, ifc_path, preview_path, meta)
         else:
             threed_build.build_genplan(scene, image, ifc_path, preview_path, meta)
-        return scene, warnings, ifc_path, preview_path, raw_head, contract_issues
+        return scene, warnings, ifc_path, preview_path, raw_head, \
+            contract_issues, ensemble_info
 
-    def _verify_attempt(scene, ifc_path, structural):
+    def _verify_attempt(scene, ifc_path, structural, ensemble_info=None):
         """Самопроверка (пилот MCP4IFC-паттерна): обзор «задумано + построено»
         -> второй VLM-запрос с исходной картинкой -> вердикт {ok, issues}.
         Судья всегда на THREED_VERIFY_MODEL (>= sol по ярусу — эхо-камера
         исключена конструктивно). structural (п.58) — машинные дефекты сборки
-        отдельным блоком (C): верификатор получает их как ground truth."""
+        отдельным блоком (C): верификатор получает их как ground truth.
+        Оверлей з.5: судья получает [оригинал, оверлей сцены-победителя
+        ДО сборки] (пиксельный якорь — бокс building прогона B)."""
+        if not _budget_left():
+            raise ValueError("verify: лимит VLM-вызовов попытки")
         _usage_stage[0] = "verify"
+        overlay_url = None
+        try:
+            ov = threed_verify.render_overlay(
+                scenario, scene, image, pixel_hint=ens_hint[0])
+            overlay_url = _to_dataurl(ov)
+        except Exception:
+            pass  # оверлей не критичен: судья увидит хотя бы оригинал
         overview = {"scene": threed_verify.scene_overview(scenario, scene),
                     "built": threed_verify.built_overview(ifc_path),
                     "structural": (structural or {}).get("issues") or []}
-        return {"overview": overview,
+        return {"overview": overview, "ensemble": ensemble_info,
                 "verdict": threed_verify.verify(
-                    image_url, overview, _call_vlm, stage_models["verify"])}
+                    image_url, overview, _vlm_counted, stage_models["verify"],
+                    overlay_url=overlay_url)}
 
     # петля самокоррекции — все сценарии (п.46: раньше только facade; сцена
     # с мебелью без повтора теряла выпавшие VLM предметы): ok is False с
@@ -508,10 +681,12 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
         """Попытка целиком: анализ -> контракт/ремонт -> сборка -> verify ->
         history/ранг/победитель. None = сбой попытки >= 2 (ушёл в history),
         иначе (ok, verify-issues, оставшиеся issues контракта)."""
+        _attempt_calls[0] = 0  # бюджет попытки (п.60 з.6): своя — свой лимит
         nonlocal best
         try:
-            scene, warnings, ifc_path, preview_path, raw_head, c_issues = _attempt(
-                user_prompt, attempt_no, model_override=a_model, stage=stage)
+            scene, warnings, ifc_path, preview_path, raw_head, c_issues, \
+                ens_info = _attempt(user_prompt, attempt_no,
+                                    model_override=a_model, stage=stage)
         except Exception as e:
             if attempt_no == 1:
                 raise  # первой попытки нет — генерации нечего отдавать (422)
@@ -539,7 +714,8 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
             try:
                 if progress:
                     progress("verify")
-                verify_payload = _verify_attempt(scene, ifc_path, structural)
+                verify_payload = _verify_attempt(scene, ifc_path, structural,
+                                                 ensemble_info=ens_info)
             except Exception as e:
                 verify_payload = {"overview": None,
                                   "verdict": {"ok": None, "error": str(e)}}
@@ -549,7 +725,7 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
                         "contract_issues": c_issues,
                         "scene_summary": ((verify_payload or {}).get("overview")
                                           or {}).get("scene"),
-                        "verdict": v})
+                        "verdict": v, "ensemble": ens_info})
         _add_corr(issues)
         _add_corr(c_issues)
         ok = v.get("ok")
@@ -559,6 +735,8 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
         rank = (1 if ok is True else 0, 0 if ok is None else 1, -len(issues))
         res_i = {"name": ifc_path.name, "warnings": warnings,
                  "structural": structural}
+        if ens_info is not None:
+            res_i["ensemble"] = ens_info
         if scenario == "scene":
             res_i["camHint"] = dict(scene["camera"])
             # фокус: центроид людей/мебели НА ВЫСОТЕ (балконный мотив фото) —
@@ -636,6 +814,7 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
     dump = {"ts": datetime.now().isoformat(), "scenario": scenario, "prompt": prompt,
             "model": model, "warnings": res["warnings"], "name": ifc_path.name,
             "stages": stage_models,
+            "ensemble": res.get("ensemble"),
             "image": {"bytes": img_bytes, "sha1": img_sha1,
                       "w": image.width, "h": image.height},
             "vlm_head": raw_head, "usage": usage_sum, "verify": dump_verify,

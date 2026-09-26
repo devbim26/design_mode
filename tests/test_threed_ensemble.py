@@ -115,10 +115,212 @@ def test_referee_prompt_shape():
     print("test_referee_prompt_shape OK")
 
 
+# ===================== роутерная часть (Task 8: изолятор + интеграция) =====================
+
+TMP = ROOT / "tests" / "_threed_tmp"
+
+_ENS_ENV_KEYS = ("THREED_ENSEMBLE", "THREED_ENSEMBLE_MODEL",
+                 "THREED_REFEREE_MODEL", "THREED_MAX_CALLS_PER_ATTEMPT")
+
+
+class _Env:
+    """THREED*-рульки на блок: ensemble-ключи + собственные kwargs снимает/
+    ставит, на выходе восстанавливает ВСЁ, что трогал (паттерн
+    test_threed_tiered._Env, расширен на ensemble-рульки)."""
+
+    def __init__(self, **kw):
+        self.kw, self.saved = kw, {}
+
+    def __enter__(self):
+        for k in dict.fromkeys((*_ENS_ENV_KEYS, *self.kw)):
+            self.saved[k] = os.environ.get(k)
+            os.environ.pop(k, None)
+        for k, v in self.kw.items():
+            os.environ[k] = v
+        return self
+
+    def __exit__(self, *a):
+        for k, v in self.saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def _router():
+    """Роутер дерева с модулями дерева: threed_router импортирует
+    build/scenarios/verify/ground/ensemble/regular из venv, где копии
+    деплоя могут отставать (грабля п.45-3 / п.58а)."""
+    import threed.threed_router as R
+    from threed import (threed_build, threed_scenarios, threed_verify,
+                        threed_ground, threed_ensemble, threed_regular)
+    R.threed_build, R.threed_scenarios, R.threed_verify = (
+        threed_build, threed_scenarios, threed_verify)
+    R.threed_ground, R.threed_ensemble, R.threed_regular = (
+        threed_ground, threed_ensemble, threed_regular)
+    return R
+
+
+def _facade_json():
+    return json.dumps(_facade(), ensure_ascii=False)
+
+
+def test_router_ensemble_happy_path():
+    """Порядок стадий: analysis -> B(grounding) -> merge (полное согласие) ->
+    verify(2 картинки). Тег ensemble в usage, дамп, pset EnsembleAgreement.
+    Геометрия B подобрана под A ( порог согласия): дверь 84px -> масштаб
+    0.025; контур 780x550 px -> 19.5м x этаж 2.75 (дельты 2.5%/8.3% < порогов);
+    2 строки x 4 столбца окон; нижняя дверь -> entrance."""
+    R = _router()
+    from PIL import Image
+    img = Image.new("RGB", (800, 600), "white")
+    calls = []
+
+    def fake_vlm(system, prompt, image_url, model):
+        calls.append({"system": system, "images": image_url, "model": model,
+                      "stage": R._usage_stage[0]})
+        if "facade grounding model" in system:
+            boxes = [{"label": "building", "x1": 10, "y1": 40,
+                      "x2": 790, "y2": 590},
+                     {"label": "door", "x1": 370, "y1": 506,
+                      "x2": 430, "y2": 590}]
+            for cy in (180, 420):          # 2 строки (зазор 240 > 0.6*80)
+                for cx in (190, 370, 550, 730):  # 4 столбца (зазор 180)
+                    boxes.append({"label": "window", "x1": cx - 30,
+                                  "y1": cy - 40, "x2": cx + 30,
+                                  "y2": cy + 40})
+            return json.dumps({"boxes": boxes,
+                               "meta": {"floors": 5, "roof": "flat"}},
+                              ensure_ascii=False)
+        if "QA verifier" in system:
+            assert isinstance(image_url, list) and len(image_url) == 2, \
+                "verify: [оригинал, оверлей] (з.5)"
+            return '{"ok": true, "issues": []}'
+        return _facade_json()
+
+    R._call_vlm = fake_vlm
+    R._vlm_list_cached = lambda: []  # каталог не запрашиваем: тесты без сети
+    with _Env(THREED_ENSEMBLE="1", THREED_ENSEMBLE_MODEL="fake/qwen",
+              THREED_VERIFY="1", THREED_VERIFY_ITERS="0",
+              THREED_MODEL="fake/one"):
+        res = R._generate_impl("facade", "t", img, TMP)
+    stages = [c["stage"] for c in calls]
+    assert stages[0] == "analysis" and "ensemble" in stages, stages
+    assert calls[1]["model"] == "fake/qwen", "прогон B на ENSEMBLE-модели"
+    dump = json.loads((TMP / "_threed_last.json").read_text(encoding="utf-8"))
+    ens = dump["ensemble"]
+    assert ens["mode"] == "grounding" and ens["agree_rate"] == 1.0, ens
+    assert res["ensemble"]["agree_rate"] == 1.0
+    # pset EnsembleAgreement в IFC победителя
+    import ifcopenshell
+    model = ifcopenshell.open(str(TMP / res["name"]))
+    rels = [r for r in model.by_type("IfcRelDefinesByProperties")
+            if r.RelatingPropertyDefinition.Name == "DevBIM"]
+    props = {}
+    for q in rels[0].RelatingPropertyDefinition.HasProperties:
+        props[q.Name] = getattr(q.NominalValue, "wrappedValue", None)
+    assert "EnsembleAgreement" in props and props["EnsembleAgreement"], props
+    # usage: моки заменяют _call_vlm целиком -> usage пуст (учёт живых вызовов
+    # в _record_usage); проверяем тег косвенно — stages выше уже содержит
+    # "ensemble" в момент вызова B
+    print("test_router_ensemble_happy_path OK")
+
+
+def test_router_b_failure_falls_back():
+    """Сбой прогона B (не JSON) — warning, генерация на A."""
+    R = _router()
+    from PIL import Image
+    img = Image.new("RGB", (64, 64), "white")
+
+    def fake_vlm(system, prompt, image_url, model):
+        if "grounding" in system:
+            return "I cannot answer in JSON, sorry"
+        if "QA verifier" in system:
+            return '{"ok": true, "issues": []}'
+        return _facade_json()
+
+    R._call_vlm = fake_vlm
+    R._vlm_list_cached = lambda: []  # каталог не запрашиваем: тесты без сети
+    with _Env(THREED_ENSEMBLE="1", THREED_ENSEMBLE_MODEL="fake/qwen",
+              THREED_VERIFY="1", THREED_VERIFY_ITERS="0",
+              THREED_MODEL="fake/one"):
+        res = R._generate_impl("facade", "t", img, TMP)
+    assert any("B" in w for w in res["warnings"]), res["warnings"]
+    assert (res.get("ensemble") or {}).get("agree_rate") is None
+    print("test_router_b_failure_falls_back OK")
+
+
+def test_router_ensemble_disabled():
+    """THREED_ENSEMBLE=0 — ровно один analysis-вызов, поведение до п.60."""
+    R = _router()
+    from PIL import Image
+    img = Image.new("RGB", (64, 64), "white")
+    seen = []
+
+    def fake_vlm(system, prompt, image_url, model):
+        seen.append(system[:20])
+        if "QA verifier" in system:
+            return '{"ok": true, "issues": []}'
+        return _facade_json()
+
+    R._call_vlm = fake_vlm
+    R._vlm_list_cached = lambda: []  # каталог не запрашиваем: тесты без сети
+    with _Env(THREED_ENSEMBLE="0", THREED_VERIFY="1",
+              THREED_VERIFY_ITERS="0", THREED_MODEL="fake/one"):
+        R._generate_impl("facade", "t", img, TMP)
+    assert len(seen) == 2, seen  # analysis + verify, без B
+    print("test_router_ensemble_disabled OK")
+
+
+def test_router_budget_and_referee():
+    """Бюджет THREED_MAX_CALLS_PER_ATTEMPT=3: analysis(1) + B(1) + реферти(1)
+    исчерпали -> verify пропущен (ok=None), генерация жива. Рефери вызывается
+    РОВНО один раз; мусорный ответ реферти -> вариант A + warning."""
+    R = _router()
+    from PIL import Image
+    img = Image.new("RGB", (64, 64), "white")
+    b_calls, r_calls = [], []
+
+    def fake_vlm(system, prompt, image_url, model):
+        if "facade grounding model" in system:
+            b_calls.append(1)
+            # B: этажей 2 против A=5 -> споры storeys/rows/cols/skip/width/
+            # entrance (floor_height совпадёт 3.0)
+            return json.dumps({"boxes": [
+                {"label": "building", "x1": 0, "y1": 0, "x2": 60, "y2": 60},
+                {"label": "window", "x1": 10, "y1": 10, "x2": 30, "y2": 30}],
+                "meta": {"floors": 2}}, ensure_ascii=False)
+        if "geometry referee" in system:
+            r_calls.append(prompt)
+            return "garbage not json"
+        if "QA verifier" in system:
+            return '{"ok": true, "issues": []}'
+        return _facade_json()
+
+    R._call_vlm = fake_vlm
+    R._vlm_list_cached = lambda: []  # каталог не запрашиваем: тесты без сети
+    with _Env(THREED_ENSEMBLE="1", THREED_ENSEMBLE_MODEL="fake/qwen",
+              THREED_MAX_CALLS_PER_ATTEMPT="3", THREED_VERIFY="1",
+              THREED_VERIFY_ITERS="0", THREED_MODEL="fake/one"):
+        res = R._generate_impl("facade", "t", img, TMP)
+    assert len(b_calls) == 1
+    assert len(r_calls) == 1, "реферти <=1 вызова на попытку"
+    v = res["verify"]["verdict"]
+    assert v["ok"] is None, "verify за бюджетом -> ok=None (не крах)"
+    assert res["ensemble"]["agree_rate"] < 1.0
+    dump = json.loads((TMP / "_threed_last.json").read_text(encoding="utf-8"))
+    assert dump["ensemble"]["disputed_fields"], dump["ensemble"]
+    print("test_router_budget_and_referee OK")
+
+
 if __name__ == "__main__":
     test_compare_full_agreement()
     test_compare_disputes()
     test_skip_dispute_two_cells()
     test_merge_average_and_referee()
     test_referee_prompt_shape()
+    test_router_ensemble_happy_path()
+    test_router_b_failure_falls_back()
+    test_router_ensemble_disabled()
+    test_router_budget_and_referee()
     print("ALL OK")

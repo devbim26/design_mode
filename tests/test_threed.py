@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT))
 import os
 os.environ["THREED_VERIFY"] = "0"  # ретро-тесты: без второй VLM-генерации
 # (самопроверка — tests/test_threed_verify.py; тут моки считают вызовы)
+os.environ["THREED_ENSEMBLE"] = "0"  # ретро-тесты: без прогона B (п.60)
 
 TMP = ROOT / "tests" / "_threed_tmp"
 

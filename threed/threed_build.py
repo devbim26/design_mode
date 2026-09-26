@@ -83,6 +83,7 @@ def build_genplan(scene, image, ifc_path, preview_path, meta):
         "Source": meta.get("Source", "3D Design"), "Scenario": meta.get("Scenario", "plan"),
         "Prompt": (meta.get("Prompt") or "")[:1024], "Model": meta.get("Model", ""),
         "ApproximateGeometry": True, "Notes": ASSUMPTION,
+        "EnsembleAgreement": (meta.get("EnsembleAgreement") or ""),
     })
     _properties(model, site, "SourceAndAssumptions", {
         "SourceImage": meta.get("SourceImage", "canvas/viewer"),
@@ -375,6 +376,7 @@ def build_facade(scene, ifc_path, preview_path, meta):
         "Source": meta.get("Source", "3D Design"), "Scenario": meta.get("Scenario", "facade"),
         "Prompt": (meta.get("Prompt") or "")[:1024], "Model": meta.get("Model", ""),
         "ApproximateGeometry": True, "Notes": ASSUMPTION_FACADE,
+        "EnsembleAgreement": (meta.get("EnsembleAgreement") or ""),
     })
     building = _api("root.create_entity", file=model, ifc_class="IfcBuilding",
                     name=data.get("building_name", "Здание по фасаду"))
@@ -857,6 +859,7 @@ def build_interior(scene, ifc_path, preview_path, meta):
         "Source": meta.get("Source", "3D Design"), "Scenario": "interior",
         "Prompt": (meta.get("Prompt") or "")[:1024], "Model": meta.get("Model", ""),
         "ApproximateGeometry": True, "Notes": ASSUMPTION_INTERIOR,
+        "EnsembleAgreement": (meta.get("EnsembleAgreement") or ""),
     })
     fstyles = {}
     for key, color in colors.items():
@@ -1234,6 +1237,7 @@ def build_scene(scene, ifc_path, preview_path, meta):
         "Source": meta.get("Source", "3D Design"), "Scenario": meta.get("Scenario", "scene"),
         "Prompt": (meta.get("Prompt") or "")[:1024], "Model": meta.get("Model", ""),
         "ApproximateGeometry": True, "Notes": ASSUMPTION_SCENE,
+        "EnsembleAgreement": (meta.get("EnsembleAgreement") or ""),
     })
     building = _api("root.create_entity", file=model, ifc_class="IfcBuilding",
                     name="Сцена по фото")
