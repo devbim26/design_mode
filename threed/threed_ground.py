@@ -122,3 +122,102 @@ def validate_gt(entries):
     if not any(seen["facade"]) or not any(seen["plan"]) or not any(seen["interior"]):
         errors.append("нужна хотя бы одна запись каждой темы (facade/plan/interior)")
     return not errors, errors
+
+
+# ===================== зонд (з.1b): метрики и выбор модели =====================
+
+def probe_metrics(pred_boxes, gt_boxes, iou_thresh=0.5):
+    """pred/gt списки боксов -> {iou_mean, iou_median, recall, precision}.
+    Сопоставление жадное по лучшему IoU (один pred закрывает один gt)."""
+    pairs = []
+    for g in gt_boxes:
+        best_iou, best_j = 0.0, -1
+        for j, p in enumerate(pred_boxes):
+            iou = _compute_iou(p, g)
+            if iou > best_iou:
+                best_iou, best_j = iou, j
+        pairs.append((best_iou, best_j))
+    ious = [iou for iou, _ in pairs]
+    matched = [j for iou, j in pairs if iou >= iou_thresh and j >= 0]
+    used, hits = set(), 0
+    for j in matched:  # один pred не закрывает два gt
+        if j not in used:
+            used.add(j)
+            hits += 1
+    return {"iou_mean": round(sum(ious) / len(ious), 4) if ious else 0.0,
+            "iou_median": round(sorted(ious)[len(ious) // 2], 4) if ious else 0.0,
+            "recall": round(hits / len(gt_boxes), 4) if gt_boxes else 0.0,
+            "precision": round(hits / len(pred_boxes), 4) if pred_boxes else 0.0}
+
+
+def probe_candidates(vlm_ids):
+    """Каталог id -> кандидаты зонда: qwen-vl семейство + sol; контроль —
+    astra (модель анализа A). Порядок стабилен."""
+    ids = list(vlm_ids)
+    qwen = sorted(i for i in ids if "qwen" in i.lower() and "vl" in i.lower())
+    out = []
+    if qwen:
+        out.append(qwen[0])  # первый qwen-vl каталога (обычно базовый)
+    for m in ("openai/gpt-6-sol", "openai/gpt-6-astra"):
+        if m in ids:
+            out.append(m)
+    return out
+
+
+def pick_model(results):
+    """Таблица зонда -> (model, mode). Гейт спеки з.1b: best mean IoU >= 0.5
+    И json_valid >= 0.5, иначе text-fallback ("" — модель выберет роутер)."""
+    ok = [r for r in results
+          if r.get("iou_mean", 0) >= 0.5 and r.get("json_valid", 0) >= 0.5]
+    if not ok:
+        return "", "text"
+    best = max(ok, key=lambda r: r["iou_mean"])
+    return best["model"], "grounding"
+
+
+# ===================== промпты прогона B (з.2) =====================
+
+SYSTEM_GROUND_FACADE = """You are a facade grounding model. Look at the attached
+image of a building facade (photo/render/elevation). Detect objects and output
+their boxes in ABSOLUTE IMAGE PIXELS. Reply with STRICT JSON ONLY - no markdown
+fences, no comments, no extra keys:
+{"boxes": [{"label": "window" | "door" | "building",
+            "x1": <int>, "y1": <int>, "x2": <int>, "y2": <int>}, ...],
+ "meta": {"floors": <int storeys>, "roof": "flat"|"gable"|"hip"|"mansard"}}
+
+Rules:
+- "building" = exactly ONE box tightly around the whole main facade volume.
+- One box per visible window (a pane group counts as one window); include
+  dormer windows in the roof.
+- One box per ground-floor entrance door.
+- x1 < x2, y1 < y2; coordinates of the ATTACHED image, y axis down.
+- Count storeys carefully; meta carries no descriptions.
+"""
+
+SYSTEM_GROUND_PLAN = """You are a site-plan grounding model. Look at the attached
+top-down master plan / aerial scheme. Detect objects and output their boxes in
+ABSOLUTE IMAGE PIXELS. Reply with STRICT JSON ONLY:
+{"boxes": [{"label": "building" | "parking" | "sport",
+            "x1": <int>, "y1": <int>, "x2": <int>, "y2": <int>}, ...],
+ "meta": {"sections": [{"use": "Residential"|"School"|"Kindergarten",
+                        "floors": <int>}, ...], "scale_hint": <float m/px>}}
+
+Rules:
+- One "building" box per building volume (same order as meta.sections).
+- "parking" = ONE single parking stall box; "sport" = one sport ground box
+  (they anchor the metric scale).
+- x1 < x2, y1 < y2; coordinates of the ATTACHED image, y axis down.
+"""
+
+SYSTEM_GROUND_INTERIOR = """You are a floor-plan grounding model. Look at the
+attached 2D floor plan drawing. Detect objects and output their boxes in
+ABSOLUTE IMAGE PIXELS. Reply with STRICT JSON ONLY:
+{"boxes": [{"label": "room" | "door" | "window",
+            "x1": <int>, "y1": <int>, "x2": <int>, "y2": <int>}, ...],
+ "meta": {"scale_hint": <float m/px>, "wall_height": 2.7}}
+
+Rules:
+- One "room" box per enclosed room (inner surface of its walls).
+- "door"/"window" = the opening gap on a wall (small elongated box).
+- x1 < x2, y1 < y2; coordinates of the ATTACHED image, y axis down.
+"""

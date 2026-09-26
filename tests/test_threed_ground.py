@@ -68,8 +68,43 @@ def test_validate_gt():
     print("test_validate_gt OK")
 
 
+def test_probe_metrics():
+    gt = [{"x1": 0, "y1": 0, "x2": 10, "y2": 10},
+          {"x1": 20, "y1": 20, "x2": 30, "y2": 30}]
+    perfect = [dict(b) for b in gt]
+    m = G.probe_metrics(perfect, gt)
+    assert m["iou_mean"] == 1.0 and m["iou_median"] == 1.0
+    assert m["recall"] == 1.0 and m["precision"] == 1.0
+    # один точный pred + один мусор: recall 0.5, precision 0.5
+    m2 = G.probe_metrics([gt[0], {"x1": 90, "y1": 90, "x2": 99, "y2": 99}], gt)
+    assert m2["recall"] == 0.5 and m2["precision"] == 0.5
+    # пустые pred: нули, не исключение
+    m3 = G.probe_metrics([], gt)
+    assert m3["iou_mean"] == 0.0 and m3["recall"] == 0.0
+    print("test_probe_metrics OK")
+
+
+def test_pick_model():
+    good = {"model": "qwen/vl-x", "iou_mean": 0.62, "json_valid": 0.9,
+            "results": []}
+    assert G.pick_model([good]) == ("qwen/vl-x", "grounding")
+    bad = {"model": "openai/gpt-6-sol", "iou_mean": 0.3, "json_valid": 0.9,
+           "results": []}
+    assert G.pick_model([bad]) == ("", "text"), "IoU<0.5 -> text fallback"
+    nojson = {"model": "m", "iou_mean": 0.9, "json_valid": 0.4, "results": []}
+    assert G.pick_model([nojson]) == ("", "text")
+    assert G.pick_model([]) == ("", "text")
+    # лучший по mean IoU среди прошедших гейт
+    both = [good, {"model": "m2", "iou_mean": 0.7, "json_valid": 1.0,
+                   "results": []}]
+    assert G.pick_model(both)[0] == "m2"
+    print("test_pick_model OK")
+
+
 if __name__ == "__main__":
     test_compute_iou()
     test_normalize_boxes()
     test_validate_gt()
+    test_probe_metrics()
+    test_pick_model()
     print("ALL OK")
