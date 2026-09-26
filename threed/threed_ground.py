@@ -221,3 +221,125 @@ Rules:
 - "door"/"window" = the opening gap on a wall (small elongated box).
 - x1 < x2, y1 < y2; coordinates of the ATTACHED image, y axis down.
 """
+
+
+# ===================== конвертеры боксы -> сцена (з.2) =====================
+
+def _clusters(values, gap):
+    """Значения -> список групп индексов: соседние ближе gap в одну группу
+    (кластеризация строк/столбцов окон по центрам)."""
+    order = sorted(range(len(values)), key=lambda i: values[i])
+    groups, last = [], None
+    for i in order:
+        if last is None or values[i] - values[last] > gap:
+            groups.append([i])
+        else:
+            groups[-1].append(i)
+        last = i
+    return groups
+
+
+def _med(vals):
+    import statistics
+    return statistics.median(vals) if vals else 0.0
+
+
+def facade_boxes_to_scene(payload, img_w, img_h):
+    """Боксы фасада -> raw-сцена validate_facade (только голосующие поля).
+    Геометрию считает код: сетка = кластеры центров окон, масштаб = якорь
+    двери (2.1 м) -> этажа (3.0 м) -> окна (1.5 м)."""
+    boxes, meta, warnings = normalize_boxes(payload, img_w, img_h, "facade")
+    wins = [b for b in boxes if b["label"] == "window"]
+    doors = [b for b in boxes if b["label"] == "door"]
+    bld = next((b for b in boxes if b["label"] == "building"), None)
+    if not wins or bld is None:
+        return {}, ["facade B: нет боксов окон/контура — сцена B пустая"]
+    med_w = _med([b["x2"] - b["x1"] for b in wins])
+    med_h = _med([b["y2"] - b["y1"] for b in wins])
+    rows_g = _clusters([(b["y1"] + b["y2"]) / 2 for b in wins], 0.6 * med_h)
+    cols_g = _clusters([(b["x1"] + b["x2"]) / 2 for b in wins], 0.6 * med_w)
+    rows, cols = len(rows_g), len(cols_g)
+    row_of, col_of = {}, {}
+    for gi, grp in enumerate(rows_g):
+        for i in grp:
+            row_of[i] = gi
+    for gi, grp in enumerate(cols_g):
+        for i in grp:
+            col_of[i] = gi
+    skip = [[True] * cols for _ in range(rows)]
+    for i in range(len(wins)):
+        skip[row_of[i]][col_of[i]] = False
+    try:
+        floors = int(meta.get("floors") or 0)
+    except (TypeError, ValueError):
+        floors = 0
+    floors = max(1, min(30, floors or max(rows, 1)))
+    b_w, b_h = bld["x2"] - bld["x1"], bld["y2"] - bld["y1"]
+    scale = None
+    if doors:
+        dh = _med([b["y2"] - b["y1"] for b in doors])
+        if dh > 2:
+            scale = ANCHOR_DOOR_H / dh
+    if not scale and b_h > 2:
+        scale = (floors * ANCHOR_STOREY) / b_h
+    if not scale and med_h > 2:
+        scale = ANCHOR_WINDOW_H / med_h
+    leftmost = min(b["x1"] for b in wins)
+    topmost = min(b["y1"] for b in wins)
+    entrance = None
+    if doors:
+        d0 = min(doors, key=lambda b: b["y2"])  # самая нижняя дверь
+        entrance = {"x_m": round(((d0["x1"] + d0["x2"]) / 2 - bld["x1"]) * scale, 2),
+                    "w_m": round((d0["x2"] - d0["x1"]) * scale, 2),
+                    "style": "porch"}
+    roof = meta.get("roof")
+    scene = {"storeys": floors,
+             "floor_height": round(b_h * scale / floors, 2),
+             "width_m": round(b_w * scale, 2), "depth_m": 12.0,
+             "roof": roof if roof in ("flat", "gable", "hip", "mansard") else "flat",
+             "roof_height": 2.5,
+             "windows": {"rows": rows, "cols": cols,
+                         "w_m": round(med_w * scale, 2),
+                         "h_m": round(med_h * scale, 2),
+                         "margin_x_m": round(max((leftmost - bld["x1"]) * scale, 0.05), 2),
+                         "margin_y_m": round(max((topmost - bld["y1"]) * scale, 0.05), 2),
+                         "skip": skip, "shape": "rect"},
+             "entrance": entrance}
+    return scene, warnings
+
+
+def facade_pixel_hint(payload, img_w, img_h):
+    """Бокс building -> (x1, y1, x2, y2) пикселей (якорь оверлея фасада)."""
+    boxes, _, _ = normalize_boxes(payload, img_w, img_h, "facade")
+    b = next((x for x in boxes if x["label"] == "building"), None)
+    return (b["x1"], b["y1"], b["x2"], b["y2"]) if b else None
+
+
+# ===================== рантайм прогона B (вызов VLM) =====================
+
+def run_ground_pass(scenario, image_url, model, call_vlm):
+    """Grounding-вызов: SYSTEM_GROUND_* -> strict JSON боксов. (payload |
+    None, warnings); None = невалидный ответ (вызывающий работает с A).
+    call_vlm передаётся роутером (модуль чистый, invokeai.* не трогает)."""
+    system = {"facade": SYSTEM_GROUND_FACADE, "plan": SYSTEM_GROUND_PLAN,
+              "interior": SYSTEM_GROUND_INTERIOR}[scenario]
+    raw = call_vlm(system, "Detect all objects. STRICT JSON only.",
+                   image_url, model)
+    payload = threed_scenarios.extract_json(raw)
+    if payload is None:
+        return None, [f"grounding B: ответ не JSON ({raw[:80]!r})"]
+    return payload, []
+
+
+def run_text_pass(scenario, user_prompt, image_url, model, call_vlm):
+    """Text-fallback B (зонд провалился): тот же параметрический промпт, что
+    у A, но ДРУГАЯ модель — двухканальность ловит галлюцинации и без
+    grounding. Возвращает (raw_scene | None, warnings)."""
+    system = {"facade": threed_scenarios.SYSTEM_FACADE,
+              "plan": threed_scenarios.SYSTEM_GENPLAN,
+              "interior": threed_scenarios.SYSTEM_INTERIOR}[scenario]
+    raw = call_vlm(system, user_prompt, image_url, model)
+    scene = threed_scenarios.extract_json(raw)
+    if scene is None:
+        return None, [f"text B: ответ не JSON ({raw[:80]!r})"]
+    return scene, []

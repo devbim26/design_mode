@@ -101,10 +101,64 @@ def test_pick_model():
     print("test_pick_model OK")
 
 
+def _synth_facade_payload():
+    """800x600: контур (100,50)-(700,590) = 600x540 px; окна 3 строки x 4
+    столбца (w=60,h=80), дверь 60x120 px (якорь 2.1 м -> scale 0.0175)."""
+    boxes = [{"label": "building", "x1": 100, "y1": 50, "x2": 700, "y2": 590}]
+    for j in range(3):    # строки: y центры 130 / 300 / 470
+        for i in range(4):  # столбцы: x центры 190 / 330 / 470 / 610
+            cx, cy = 190 + i * 140, 130 + j * 170
+            boxes.append({"label": "window", "x1": cx - 30, "y1": cy - 40,
+                          "x2": cx + 30, "y2": cy + 40})
+    boxes.append({"label": "door", "x1": 370, "y1": 470, "x2": 430, "y2": 590})
+    return {"boxes": boxes, "meta": {"floors": 3, "roof": "gable"}}
+
+
+def test_facade_boxes_to_scene():
+    scene, wns = G.facade_boxes_to_scene(_synth_facade_payload(), 800, 600)
+    assert not wns, wns
+    assert scene["storeys"] == 3 and scene["roof"] == "gable"
+    # дверь 120 px * (2.1/120) = масштаб 0.0175; ширина 600 px -> 10.5 м
+    assert abs(scene["width_m"] - 10.5) < 0.15, scene["width_m"]
+    assert abs(scene["floor_height"] - 540 * 0.0175 / 3) < 0.15
+    w = scene["windows"]
+    assert (w["rows"], w["cols"]) == (3, 4)
+    assert abs(w["w_m"] - 60 * 0.0175) < 0.1 and abs(w["h_m"] - 80 * 0.0175) < 0.1
+    assert not any(any(row) for row in w["skip"]), "все окна остеклены"
+    e = scene["entrance"]
+    assert e and abs(e["x_m"] - (400 - 100) * 0.0175) < 0.1  # центр 400 px
+    # сцена проходит штатный валидатор (сравнение идёт по клампнутым полям)
+    from threed import threed_scenarios
+    fixed, warns = threed_scenarios.validate_facade(dict(scene))
+    assert fixed["storeys"] == 3 and fixed["windows"]["rows"] == 3
+    print("test_facade_boxes_to_scene OK")
+
+
+def test_facade_converter_edges():
+    # нет окон -> пустая сцена + warning (B выпадает, работаем с A)
+    bad = {"boxes": [{"label": "building", "x1": 0, "y1": 0,
+                      "x2": 100, "y2": 100}], "meta": {}}
+    scene, wns = G.facade_boxes_to_scene(bad, 800, 600)
+    assert scene == {} and any("окон" in w for w in wns)
+    # пропуск окна: клетка сетки без бокса -> skip=True (строка j=2: cy=470)
+    p = _synth_facade_payload()
+    p["boxes"] = [b for b in p["boxes"]
+                  if not (b["label"] == "window" and b["x1"] == 160
+                          and b["y1"] == 430)]  # (3-я строка, 1-й столбец)
+    scene2, _ = G.facade_boxes_to_scene(p, 800, 600)
+    assert scene2["windows"]["skip"][2][0] is True
+    # пиксельный хинт
+    hint = G.facade_pixel_hint(_synth_facade_payload(), 800, 600)
+    assert hint == (100, 50, 700, 590)
+    print("test_facade_converter_edges OK")
+
+
 if __name__ == "__main__":
     test_compute_iou()
     test_normalize_boxes()
     test_validate_gt()
     test_probe_metrics()
     test_pick_model()
+    test_facade_boxes_to_scene()
+    test_facade_converter_edges()
     print("ALL OK")
