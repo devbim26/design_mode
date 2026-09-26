@@ -244,8 +244,9 @@ def _call_vlm(system: str, prompt: str, image_url: str | None, model: str) -> st
     if not key:
         raise ValueError("API-ключ ImageRouter не задан (.env: IMAGEROUTER_API_KEY)")
     content = [{"type": "text", "text": prompt or "No user prompt; analyze the image."}]
-    if image_url:
-        content.append({"type": "image_url", "image_url": {"url": image_url}})
+    urls = image_url if isinstance(image_url, list) else ([image_url] if image_url else [])
+    for u in urls:
+        content.append({"type": "image_url", "image_url": {"url": u}})
     resp = requests.post(
         CHAT_COMPLETIONS_URL,
         headers={"Authorization": f"Bearer {key}"},

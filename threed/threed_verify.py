@@ -11,6 +11,7 @@ get_ifc_scene_overview — Show2Instruct/ifc-bonsai-mcp, MIT).
 Выключатель — env THREED_VERIFY (0/false/no/off) в роутере.
 """
 import json
+import math
 
 try:  # задеплоено в venv
     from invokeai.app.api.routers import threed_scenarios
@@ -214,6 +215,95 @@ def structural_report(ifc_path):
     return report
 
 
+# ===================== оверлей извлечённой геометрии (п.60, з.5) =====================
+
+OVERLAY_COLOR = (255, 59, 48)   # красный DevBIM-оверлей
+OVERLAY_DOOR_COLOR = (0, 122, 255)
+
+
+def facade_grid_boxes(scene, pixel_hint, img_w, img_h):
+    """Пиксельные боксы окон сетки фасада (метрика «IoU оверлея по GT» з.7
+    и геометрия оверлея — один источник). pixel_hint=None -> фитовое
+    размещение (80% ширины, по центру), как в render_overlay."""
+    st = max(1, int(scene.get("storeys") or 1))
+    w_m = max(0.1, float(scene.get("width_m") or 10))
+    fh = float(scene.get("floor_height") or 3)
+    if pixel_hint:
+        x1, y1, x2, y2 = pixel_hint
+    else:
+        bw = int(img_w * 0.8)
+        bh = int(min(img_h * 0.9, bw * (st * fh) / w_m))
+        x1, y1 = (img_w - bw) // 2, (img_h - bh) // 2
+        x2, y2 = x1 + bw, y1 + bh
+    win = scene.get("windows") or {}
+    rows = max(1, int(win.get("rows") or 1))
+    cols = max(1, int(win.get("cols") or 1))
+    sx = (x2 - x1) / w_m  # px на метр по фасаду
+    mx = float(win.get("margin_x_m") or 0) * sx
+    ww = min(float(win.get("w_m") or 1.5) * sx, (x2 - x1) / cols)
+    wh = min(float(win.get("h_m") or 1.5) * sx, (y2 - y1) / st)
+    span = (x2 - x1) - 2 * mx - ww
+    step = span / max(cols - 1, 1) if cols > 1 else 0
+    skip = win.get("skip") or []
+    storey_h = (y2 - y1) / st
+    boxes = []
+    for j in range(rows):
+        cy = y1 + j * storey_h + (storey_h - wh) / 2
+        for i in range(cols):
+            if j < len(skip) and i < len(skip[j]) and skip[j][i]:
+                continue
+            cx = x1 + mx + i * step
+            boxes.append([cx, cy, cx + ww, cy + wh])
+    return boxes
+
+
+def render_overlay(scenario, scene, image, pixel_hint=None):
+    """Сцена-победитель ДО сборки поверх исходной картинки (PIL, паттерн
+    draw_overlay скилла tools/image-to-ifc). Ловит ошибки АНАЛИЗА (сборку
+    проверяет structural_report п.58). facade: сцена метрическая — пиксельный
+    якорь = бокс building прогона B (pixel_hint), без него пропорциональный
+    фит. Возвращает НОВУЮ картинку (копию)."""
+    from PIL import ImageDraw
+    im = image.convert("RGB").copy()
+    d = ImageDraw.Draw(im)
+    if scenario == "facade":
+        st = max(1, int(scene.get("storeys") or 1))
+        w_m = max(0.1, float(scene.get("width_m") or 10))
+        fh = float(scene.get("floor_height") or 3)
+        if pixel_hint:
+            x1, y1, x2, y2 = pixel_hint
+        else:
+            bw = int(im.width * 0.8)
+            bh = int(min(im.height * 0.9, bw * (st * fh) / w_m))
+            x1, y1 = (im.width - bw) // 2, (im.height - bh) // 2
+            x2, y2 = x1 + bw, y1 + bh
+        d.rectangle([x1, y1, x2, y2], outline=OVERLAY_COLOR, width=3)
+        for b in facade_grid_boxes(scene, pixel_hint, im.width, im.height):
+            d.rectangle(b, outline=OVERLAY_COLOR, width=2)
+    elif scenario == "plan":
+        for sec in scene.get("sections") or []:
+            pts = [tuple(p) for p in sec.get("points_px") or []]
+            if len(pts) >= 3:
+                d.line(pts + [pts[0]], fill=OVERLAY_COLOR, width=3)
+    elif scenario == "interior":
+        walls = scene.get("walls") or []
+        for wall in walls:
+            (ax, ay), (bx, by) = wall["points_px"]
+            d.line([(ax, ay), (bx, by)], fill=OVERLAY_COLOR, width=3)
+        for op in scene.get("openings") or []:
+            widx = op.get("wall_idx")
+            if not isinstance(widx, int) or not (0 <= widx < len(walls)):
+                continue
+            (ax, ay), (bx, by) = walls[widx]["points_px"]
+            L = math.hypot(bx - ax, by - ay)
+            t = min(max(float(op.get("x_px") or 0) / max(L, 1.0), 0.0), 1.0)
+            cx, cy = ax + (bx - ax) * t, ay + (by - ay) * t
+            r = 6
+            d.ellipse([cx - r, cy - r, cx + r, cy + r],
+                      outline=OVERLAY_DOOR_COLOR, width=2)
+    return im
+
+
 def _normalize_verdict(data, raw):
     """Ответ VLM -> {"ok": bool, "issues": [str]} | {"ok": None, "error": ...}."""
     if not isinstance(data, dict) or "ok" not in data:
@@ -235,8 +325,9 @@ def _normalize_verdict(data, raw):
     return {"ok": ok, "issues": issues}
 
 
-def verify(image_url, overview, call_vlm, model):
-    """Второй VLM-запрос: картинка + обзор -> вердикт. Отказоустойчиво."""
+def verify(image_url, overview, call_vlm, model, overlay_url=None):
+    """Второй VLM-запрос: картинка (+опционально оверлей з.5) + обзор ->
+    вердикт. Отказоустойчиво."""
     prompt = ("An earlier pass analyzed the attached image and built a parametric "
               "3D model. Verify it.\n\n(A) final scene specification:\n"
               + json.dumps(overview.get("scene"), ensure_ascii=False)
@@ -250,8 +341,15 @@ def verify(image_url, overview, call_vlm, model):
         prompt += ("\n\n(C) machine-detected IFC build defects (deterministic "
                    "ground truth, not guesses — report them as issues):\n- "
                    + "\n- ".join(structural))
+    if overlay_url:
+        prompt += ("\n\nImage 1 = the source. Image 2 = the SAME source with the "
+                   "extracted geometry overlaid in red (contours, window grid, "
+                   "walls; blue dots = openings). Check ALIGNMENT of the red "
+                   "overlay with the source: shifted grids, wrong counts, "
+                   "misplaced contours are issues.")
+    images = [image_url, overlay_url] if overlay_url else image_url
     try:
-        raw = call_vlm(SYSTEM_VERIFY, prompt, image_url, model)
+        raw = call_vlm(SYSTEM_VERIFY, prompt, images, model)
     except Exception as e:  # сеть/ключ/таймаут — верификация не роняет генерацию
         return {"ok": None, "error": f"VLM verify error: {e}"}
     return _normalize_verdict(threed_scenarios.extract_json(raw), raw)

@@ -370,6 +370,80 @@ def test_verify_prompt_structural_block():
     print("test_verify_prompt_structural_block OK")
 
 
+def test_render_overlay_facade():
+    import sys as _sys
+    from pathlib import Path as _P
+    _sys.path.insert(0, str(_P(__file__).resolve().parents[1]))
+    from threed import threed_verify as V
+    from PIL import Image
+    scene = {"storeys": 2, "width_m": 10.0, "floor_height": 3.0,
+             "windows": {"rows": 2, "cols": 4, "w_m": 1.5, "h_m": 1.5,
+                         "margin_x_m": 1.0, "margin_y_m": 0.5,
+                         "skip": [[False] * 4, [True] + [False] * 3],
+                         "shape": "rect"}}
+    im = Image.new("RGB", (800, 600), "white")
+    ov = V.render_overlay("facade", scene, im, pixel_hint=(100, 50, 700, 590))
+    assert ov.size == (800, 600)
+    assert ov.getpixel((0, 0)) == (255, 255, 255), "копия, не исходник"
+    px = ov.load()
+    assert any(px[x, 50] != (255, 255, 255) for x in range(100, 701)), \
+        "контур по верхней грани хинта"
+    # без хинта — фит по центру, тоже рисует
+    ov2 = V.render_overlay("facade", scene, im)
+    assert ov2.size == (800, 600)
+    # боксы сетки — та же геометрия, что на оверлее (метрика IoU з.7)
+    boxes = V.facade_grid_boxes(scene, (100, 50, 700, 590), 800, 600)
+    assert len(boxes) == 2 * 4 - 1, "8 окон - 1 skip"  # rows*cols - skip
+    assert all(b[0] >= 100 and b[2] <= 700 for b in boxes)
+    # skip-клетки (2-я строка, 1-я колонка) среди боксов нет
+    xs = {round(b[0]) for b in boxes}
+    assert len(xs) == 4, "4 столбца"
+    print("test_render_overlay_facade OK")
+
+
+def test_render_overlay_plan_interior():
+    import sys as _sys
+    from pathlib import Path as _P
+    _sys.path.insert(0, str(_P(__file__).resolve().parents[1]))
+    from threed import threed_verify as V
+    from PIL import Image
+    plan = {"sections": [{"id": "A", "points_px":
+                          [[100, 100], [400, 100], [400, 300], [100, 300]]}]}
+    ov = V.render_overlay("plan", plan, Image.new("RGB", (500, 400), "white"))
+    assert ov.getpixel((250, 100)) != (255, 255, 255), "верхнее ребро полигона"
+    interior = {"walls": [{"points_px": [[60, 60], [460, 60]]}],
+                "openings": [{"wall_idx": 0, "x_px": 100, "kind": "door"}]}
+    ov2 = V.render_overlay("interior", interior,
+                           Image.new("RGB", (500, 400), "white"))
+    assert ov2.getpixel((300, 60)) != (255, 255, 255), "стена по горизонтали"
+    print("test_render_overlay_plan_interior OK")
+
+
+def test_verify_two_images():
+    import sys as _sys
+    from pathlib import Path as _P
+    _sys.path.insert(0, str(_P(__file__).resolve().parents[1]))
+    from threed import threed_verify as V
+    seen = {}
+
+    def call_vlm(system, prompt, image_url, model):
+        seen["system"], seen["prompt"] = system, prompt
+        seen["images"] = image_url
+        return '{"ok": true, "issues": []}'
+
+    v = V.verify("data:image/png;base64,AAA", {"scene": {}, "built": {}},
+                 call_vlm, "m", overlay_url="data:image/png;base64,BBB")
+    assert v["ok"] is True
+    assert seen["images"] == ["data:image/png;base64,AAA",
+                              "data:image/png;base64,BBB"], seen["images"]
+    assert "ALIGNMENT" in seen["prompt"]
+    # без оверлея — прежнее поведение (одна картинка)
+    V.verify("data:image/png;base64,AAA", {"scene": {}, "built": {}},
+             call_vlm, "m")
+    assert seen["images"] == "data:image/png;base64,AAA"
+    print("test_verify_two_images OK")
+
+
 if __name__ == "__main__":
     test_scene_overview()
     test_built_overview()
@@ -380,4 +454,7 @@ if __name__ == "__main__":
     test_generate_impl_with_verify()
     test_generate_impl_scene_loop()
     test_verify_never_breaks()
+    test_render_overlay_facade()
+    test_render_overlay_plan_interior()
+    test_verify_two_images()
     print("ALL OK")
