@@ -2660,6 +2660,113 @@ invokeai==6.2.0` их нужно запускать повторно в поря
       картинку во вьювере → «Редактировать» → холст: рамка 3:2 locked,
       слой вписан, масок 0, кисть не включена.
 
+60. **Двухканальный ансамбль извлечения геометрии image→IFC (п.60)** (26.09,
+    ветка `3d_analysys`; спека/план `docs/superpowers/2026-09-26-threed-
+    geometry-ensemble*`; SDD Tasks 1–9 выполнены и отревьюены, финальное
+    ревью ветки — Approved после фикс-батча 4798c6c. LIVE-хвост ждёт
+    пополнения ImageRouter — см. «Живой хвост» ниже). Идея: «VLM выбирает
+    семантику, код считает геометрию» — два независимых извлечения
+    (A: параметрический JSON; B: grounding-боксы в пикселях / text-fallback
+    на другой модели) → детерминированное compare → merge (согласованные
+    float — среднее; спорные — ОДИН реферти-вызов; план/интерьер —
+    компонентно, секции/комнаты целиком из A|B) → регуляризация по гейту
+    согласия → прежние контракт/сборка/verify, где судья получает
+    [оригинал, оверлей геометрии].
+    - Модули (чистые: без invokeai.* вне try/except, без future-
+      annotations): `threed/threed_ground.py` (IoU/normalize_boxes/
+      validate_gt, probe_metrics/pick_model, SYSTEM_GROUND_*, конвертеры
+      боксы→сцена facade/plan/interior — кластеры окон по центрам, якоря
+      масштаба дверь 2.1 м/этаж 3 м/окно 1.5 м, МНК lsq_scale по parking
+      2.5×5 + sport 17×34, стены интерьера = поглощение коллинеарных рёбер
+      комнат + shapely-union outline, CONVERTERS), `threed/threed_ensemble.py`
+      (compare/merge: фасад 7 полей — storeys Δ≥1, width 15%, floor_height
+      10%, rows/cols Δ≥1, skip Δ≥2 клетки, entrance 0/1; plan 5 / interior 5;
+      SYSTEM_REFEREE), `threed/threed_regular.py` (REGULAR_GATE=0.7, снап
+      0.05 м, симметрия skip-строк ≤10%, RDP, orthogonalize — снап
+      АБСОЛЮТНЫХ направлений + while-коллапс антипараллельных огрызков,
+      снятие пересечений футпринтов shapely-difference, замыкание комнат
+      buffer(0), кламп толщин 0.3–0.4 наружные / 0.1–0.15 перегородки).
+    - Роутер: `_ensemble_pass` ПОСЛЕ валидаторов A, ДО контракта/ремонта;
+      порядок стадий analysis → B → реферти (≤1) → регуляризация (гейт) →
+      контракт/ремонт (interior) → сборка → verify[оригинал+оверлей].
+      Бюджет THREED_MAX_CALLS_PER_ATTEMPT=6: счётчик в обёртке
+      `_vlm_counted` (ВСЕ вызовы через неё; моки тестов заменяют _call_vlm
+      целиком — счётчик в теле функции не считал бы), сброс в _run_attempt
+      (эскалация = свой бюджет); при исчерпании пропускается verify
+      (ok=None), НЕ анализ. Сбой любой части ансамбля — warning + работа
+      с A. pset EnsembleAgreement в DevBIM (4 билдера), ключи
+      dump/history/res["ensemble"], тег `ensemble` в _usage_stage (cost-
+      дампы; фронт-стадии НЕ тронуты, JS не патчились).
+    - env: THREED_ENSEMBLE (0/1, дефолт 1), THREED_ENSEMBLE_MODEL (дефолт
+      DEFAULT_ENSEMBLE_MODEL="" → text-fallback на ремонт-модели; winner
+      live-зонда впишется после прогона), THREED_REFEREE_MODEL (дефолт sol,
+      полным override THREED_MODEL НЕ глушится — судья споров выше ярусом),
+      THREED_MAX_CALLS_PER_ATTEMPT (6).
+    - Оверлей verify (з.5): `render_overlay` (фасад — контур+сетка окон от
+      pixel_hint бокса building прогона B, без B — фит 80% ширины по центру;
+      план — полигоны секций; интерьер — стены + голубые точки проёмов);
+      `facade_grid_boxes` — единый источник геометрии сетки и метрики
+      «IoU оверлея по GT».
+    - GT: фасад — ручная разметка (`data/probe/_gt_mark.py` — tkinter, или
+      визуально с evidence `_gt_check.png`; 10 окон(вкл. белфри/нишу)+
+      дверь+контур ДО НИЗА ДВЕРИ y2=460); plan/interior —
+      детерминированный генератор `data/probe/_make_gt_images.py`
+      (спортплощадка 68×136 px = 17×34 м — якорь МНК; перегенерация =
+      точные боксы).
+    - Грабли: (а) изолятор `_router()` в новых роутер-тестах ОБЯЗАТЕЛЕН
+      (п.45-3/п.58а — связывает 6 модулей дерева в роутер дерева), деплой
+      `setup_threed.py` ДО venv-импортирующих тестов; (б) ретро-тесты
+      (test_threed/facade_v2/tiered/verify) гасят THREED_ENSEMBLE=0 НА
+      ИМПОРТЕ — иначе моки _call_vlm ломаются лишним B-вызовом; (в) merge
+      фасада: в disputed хранится нормализованный entrance (0,1), в сцену
+      пишется ТОЛЬКО оригинал `_get(B,f)` (dict|None) — int ронял
+      build_facade (Critical финального ревью); (г) orthogonalize: коллапс
+      антипараллельных рёбер — while по накопленной сумме + откат секции к
+      исходным точкам при невалидном полигоне (самопересечение роняло
+      _metric_polygon); (д) ens_hint сбрасывается в начале _ensemble_pass
+      (иначе устаревший bbox портил оверлей следующих попыток); (е)
+      THREED_ENSEMBLE=0 выключает B/compare/merge/регуляризацию, НО
+      оверлей-verify (2 картинки судье) и бюджет-гейты остаются — откат
+      «в один клик» в смысле конвейера извлечения, не побайтово; (ж)
+      ImageRouter отдаёт ошибки и с HTTP 200 (п.19) — статусу не верить;
+      (з) `data/*` в gitignore — data/probe только через `git add -f`.
+    - Тесты (после деплоя, ALL OK): test_threed_ground (9) /
+      test_threed_ensemble (13) / test_threed_regular (8) / test_threed_ab
+      (2) + ретро test_threed (28) / facade_v2 (11) / tiered (5) / verify
+      (12); node-чек бандла — только рантайм-ошибка.
+    - **Живой хвост (ждёт кредитов ~$4.75, ПОРЯДОК ОБЯЗАТЕЛЕН)**:
+      1) baseline ДО любого рестарта (running server сейчас на pre-ensemble
+         коде — это валидность baseline): `git checkout baseline-3d`
+         (ветка на 3d8f6ce, вход-артефакты синхронизированы с рабочей
+         веткой) → 3 серии `venv\Scripts\python.exe tests\_e2e_3d_roundtrip.py
+         --runs 3 --label baseline --scenario {facade|plan|interior}
+         --image {data\probe\vlm_test_house.png|gt_plan_synthetic.png|
+         gt_interior_synthetic.png} --save data\probe\_ab_baseline*.json`
+         (~$1.5) → merge в `_ab_baseline.json` (ключи facade/plan/interior;
+         проверять summary.n==3 и incomplete==false) → commit на
+         baseline-3d → `git checkout 3d_analysys`. КОНТРОЛЬ: в дампах
+         baseline ключа ensemble быть НЕ должно (если сервер успел
+         перезапуститься с новым кодом — серии переделать);
+      2) live-зонд (~$0.30): `venv\Scripts\python.exe setup_threed.py` →
+         `venv\Scripts\python.exe data\probe\_probe_threed_ground.py` →
+         winner/mode в спеку (раздел 5, з.1b) и в DEFAULT_ENSEMBLE_MODEL
+         (`threed/threed_router.py`; mode=text → константа остаётся "");
+      3) рестарт `launch\_restart_server.ps1` + health-check (кука
+         devbim_auth, /api/v1/threed/model → 200) + фасадный смоук
+         `--runs 1 --label smoke` (~$0.3): в `data/ifc/_threed_last.json`
+         ключ ensemble (mode/agree_rate), в ir_server.log тег ensemble;
+      4) смоуки plan/interior `--runs 1` (~$0.35, опционально);
+      5) A/B ensemble-серии ×3 темы (~$2.3) → таблица приёмки спеки
+         (раздел 11): median judge-score facade ≥51 (baseline 43),
+         plan/interior ≥ baseline+5, agree_rate ≥0.7/0.6, structural ≥
+         baseline, contract_issues −30%, cost ≤2× baseline; + IoU оверлея
+         по GT ≥0.6 (grounding-режим); тюнинг при недоборе БЕЗ отката
+         архитектуры: пороги споров → REGULAR_GATE ниже → кандидат-2 зонда
+         → THREED_ENSEMBLE=0 только для проблемной темы;
+      6) вписать сюда фактические метрики A/B (baseline vs ensemble).
+    - Откат: THREED_ENSEMBLE=0 одним ключом (грабля (е)); модули
+      threed_ground/ensemble/regular остаются задеплоенными (не мешают).
+
 
 
 ```powershell
@@ -2672,6 +2779,9 @@ cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
 .\venv\Scripts\python.exe .\tests\test_designcode.py    # код доступа/URL + патчи
 .\venv\Scripts\python.exe .\tests\test_threed.py        # 3D Design: сценарий/сборщик/роутер
 .\venv\Scripts\python.exe .\tests\test_threed_verify.py # 3D Design: VLM-верификация + структурные проверки (п.58)
+.\venv\Scripts\python.exe .\tests\test_threed_ground.py    # 3D Design: прогон B/IoU/конвертеры (п.60)
+.\venv\Scripts\python.exe .\tests\test_threed_ensemble.py  # 3D Design: ансамбль compare/merge/роутер (п.60)
+.\venv\Scripts\python.exe .\tests\test_threed_regular.py   # 3D Design: регуляризация снапы/симметрия/RDP (п.60)
 .\venv\Scripts\python.exe .\tests\test_topright_buttons.py # кнопки Prompt Assistant / 3D Design
 .\venv\Scripts\python.exe .\tests\test_mask_toggle.py   # тумблер Маска/Слой
 .\venv\Scripts\python.exe .\tests\test_cut_tool.py      # ✂ вырезание по контуру
