@@ -2625,6 +2625,41 @@ invokeai==6.2.0` их нужно запускать повторно в поря
       п.56, строка выше); (б) curl по API без куки гейта — пустой ответ/
       303, не «сервер лежит».
 
+59. **«Редактировать» (Edit) в Image Viewer → холст: поведение V3** (26.09,
+    ветка `3d_analysys`; продолжение п.57 — вьюверы IFC/PDF/Design Code
+    перевели на V3, а переход из вьювера картинок остался нативным: слой
+    «Маска перерисовки» + кисть + рамка «Free»). Кнопка «Редактировать» —
+    хук `Ize` в App-бандле (компонент `ote`, экшн-бар просмотрщика):
+    нативно `await _c({withInpaintMask:!0})` + `tool.$tool.set("brush")`.
+    - Патч `patch_imageviewer_edit()` в `setup_ifcviewer.py`
+      (`JS_EDIT_HOOK_OLD` → `JS_EDIT_HOOK_V3`, идемпотентно по точной
+      строке): та же последовательность, что мост V3, но САМОСТОЯТЕЛЬНАЯ —
+      store хук берёт сам (`Je()`), менеджер через `ru.get()` (`ru=De(null)`
+      на верхнем уровне модуля, вызов в рантайме — TDZ нет), БЕЗ
+      `__devbimIfcCtx` (кнопка доступна с любой вкладки, IFE/IFCV могут
+      быть не смонтированы — мост при этом кидал бы «canvas context
+      unavailable»). Порядок: focusPanel → `_c(withResize:!1,
+      withInpaintMask:!1)` → экшен 3:2 → ожидание менеджера (до 2 с) и
+      адаптера raster_layer с ненулевым `$pixelRect` (до 4 с) →
+      `fitToBboxContain` + `applyTransform` → тост SENT_TO_CANVAS. Если
+      менеджер не поднялся — fit МОЛЧА пропускается (картинка уже на
+      холсте, тост честный); в отличие от моста, который кидает throw.
+    - НЕ тронуты (сознательно): пункты «New Canvas From Image» в меню ⋮
+      просмотрщика (4 варианта raster/control layer × resize,
+      `withInpaintMask:!0`, хук `OU`) и дроп/аплоад на Launchpad (`Qte`) —
+      это явные варианты с собственной семантикой, не «переход».
+    - **Проверка**: `tests/test_canvas_bridge_v3.py` +3 теста (содержимое
+      NEW/OLD, порядок focus→_c→3:2→fit, миграция+идемпотентность,
+      node --check) — ВСЕ OK; смоук на стабах (полный async-путь,
+      порядок вызовов focus,_c,dispatch,startTransform,fit,apply,toast,
+      withInpaintMask=!1) — OK; test_ifc_sections / test_ifc_ai_render /
+      test_mask_toggle — OK; повторный `setup_ifcviewer.py` — «уже V3,
+      пропуск»; парсинг App-бандла `node -e import(...)` — только рантайм
+      «document is not defined»; рестарт `launch/_restart_server.ps1`,
+      сервер отвечает 303 (гейт). Живая проверка в браузере: открыть
+      картинку во вьювере → «Редактировать» → холст: рамка 3:2 locked,
+      слой вписан, масок 0, кисть не включена.
+
 
 
 ```powershell

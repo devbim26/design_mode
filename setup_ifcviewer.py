@@ -18,6 +18,9 @@
        кладётся на холст подложкой (sentImageToCanvas) БЕЗ слоя маски,
        рамка ставится в 3:2 и слой вписывается в неё (fitToBbox), при
        generate сразу запускается генерация холста (enqueue);
+     - App-бандл: кнопка «Редактировать» (Edit) в Image Viewer переводится
+       на то же поведение V3: снимок на холст без слоя маски и кисти,
+       рамка 3:2, слой вписывается (fitToBboxContain);
      - index-бандл: 'ifc' добавляется в zod-enum activeTab, чтобы сохранённая
        вкладка пережила перезагрузку страницы.
 
@@ -212,6 +215,48 @@ JS_V3_R2_WAIT_NEW = (
     'if(!d)await new Promise(k=>setTimeout(k,100))}'
 )
 
+# --- App-бандл: кнопка «Редактировать» (Edit) в Image Viewer -> поведение V3
+#     (п.59). Нативный хук Ize клал картинку с withInpaintMask:!0 и включал
+#     кисть («как раньше» — жалоба пользователя). Патч повторяет мост V3:
+#     БЕЗ слоя маски и кисти, focusPanel -> sentImageToCanvas -> экшен
+#     3:2 -> ожидание менеджера/адаптера с ненулевым $pixelRect ->
+#     fitToBboxContain + applyTransform -> тост. Самодостаточен (store из
+#     Je(), менеджер через ru.get()) — в отличие от моста не зависит от
+#     __devbimIfcCtx. Пункты «New Canvas From Image» в меню ⋮ (raster/
+#     control layer, с/без resize) и дроп на Launchpad НЕ тронуты — это
+#     явные варианты с собственной семантикой.
+JS_EDIT_HOOK_OLD = (
+    'Ize=e=>{const{t}=M(),{getState:n,dispatch:s}=Je(),i=$p(),a=u.useMemo(()=>!!e,[e]);'
+    'return{edit:u.useCallback(async()=>{e&&a&&('
+    'await _c({imageDTO:e,type:"raster_layer",withInpaintMask:!0,getState:n,dispatch:s}),'
+    'Fe.focusPanel("canvas",On),i&&i.tool.$tool.set("brush"),'
+    'fe({id:"SENT_TO_CANVAS",title:t("toast.sentToCanvas"),status:"success"}))},'
+    '[e,a,n,s,i,t]),isEnabled:a}}'
+)
+JS_EDIT_HOOK_V3 = (
+    'Ize=e=>{const{t}=M(),{getState:n,dispatch:s}=Je(),i=$p(),a=u.useMemo(()=>!!e,[e]);'
+    'return{edit:u.useCallback(async()=>{'
+    'if(!e||!a)return;'
+    'await Fe.focusPanel("canvas",On),'
+    'await _c({imageDTO:e,type:"raster_layer",withResize:!1,withInpaintMask:!1,getState:n,dispatch:s});'
+    's({type:"canvas/bboxAspectRatioIdChanged",payload:{id:"3:2"}});'
+    'let m=ru.get();'
+    'for(let d=0;d<20&&!m;d++)await new Promise(k=>setTimeout(k,100)),m=ru.get();'
+    'if(m){'
+    'const cs=()=>{const c=n().canvas;return c&&c.present?c.present:c};'
+    'let g=null;'
+    'for(let d=0;d<40&&!g;d++){'
+    'const sel=cs().selectedEntityIdentifier;'
+    'if(sel&&sel.type==="raster_layer"){const ad=m.getAdapter(sel),p=ad&&ad.transformer&&ad.transformer.$pixelRect&&ad.transformer.$pixelRect.get();'
+    'p&&p.width>0&&p.height>0&&(g=ad)}'
+    'if(!g)await new Promise(k=>setTimeout(k,100))}'
+    'if(g)try{await g.transformer.startTransform({silent:!0}),'
+    'g.transformer.fitToBboxContain(),await g.transformer.applyTransform()}'
+    'catch(y){console.warn("devbim fitToBbox:",y)}}'
+    'fe({id:"SENT_TO_CANVAS",title:t("toast.sentToCanvas"),status:"success"})},'
+    '[e,a,n,s,i,t]),isEnabled:a}}'
+)
+
 
 def deploy_files() -> None:
     shutil.copy2(SRC / "ifc_router.py", ROUTER_DST)
@@ -256,14 +301,19 @@ def _backup(f: Path) -> Path:
     return bak
 
 
-def patch_app_bundle() -> bool:
-    """Кнопка в рейке + панель в TabContent + компонент панели; панель
-    «IFC Viewer» в dockview холста + мост iframe -> холст."""
+def _app_bundle() -> Path:
+    """App-бандл (единственный с displayName="TabContent")."""
     targets = [f for f in DIST.glob("assets/*.js") if 'displayName="TabContent"' in f.read_text(encoding="utf-8")]
     if len(targets) != 1:
         print(f"ОШИБКА: бандл с TabContent найден {len(targets)} раз (ожидался 1)")
         sys.exit(1)
-    f = targets[0]
+    return targets[0]
+
+
+def patch_app_bundle() -> bool:
+    """Кнопка в рейке + панель в TabContent + компонент панели; панель
+    «IFC Viewer» в dockview холста + мост iframe -> холст."""
+    f = _app_bundle()
     s = f.read_text(encoding="utf-8")
     orig = s
 
@@ -331,6 +381,24 @@ def patch_app_bundle() -> bool:
     return True
 
 
+def patch_imageviewer_edit() -> bool:
+    """Кнопка «Редактировать» (Edit) в Image Viewer: поведение V3 —
+    без слоя «Маска перерисовки» и кисти, рамка 3:2 + fit (п.59)."""
+    f = _app_bundle()
+    s = f.read_text(encoding="utf-8")
+    if JS_EDIT_HOOK_V3 in s:
+        print("App-бандл: Edit в Image Viewer уже V3, пропуск")
+        return False
+    if s.count(JS_EDIT_HOOK_OLD) != 1:
+        print(f"ОШИБКА: хук Ize (Edit) найден {s.count(JS_EDIT_HOOK_OLD)} раз (ожидался 1) — патч не применён")
+        sys.exit(1)
+    s = s.replace(JS_EDIT_HOOK_OLD, JS_EDIT_HOOK_V3, 1)
+    bak = _backup(f)
+    f.write_text(s, encoding="utf-8")
+    print(f"App-бандл: Edit в Image Viewer переведён на V3 (без маски, рамка 3:2 + fitToBbox): {f.name} (бэкап: {bak.name})")
+    return True
+
+
 def patch_index_bundle() -> bool:
     """'ifc' в zod-enum activeTab — иначе перезагрузка со вкладкой IFC
     сбрасывает настройки UI (parse storage падает)."""
@@ -374,6 +442,7 @@ def main() -> None:
     deploy_files()
     patch_api_app()
     patch_app_bundle()
+    patch_imageviewer_edit()
     patch_index_bundle()
     print("Готово. Перезапустите сервер, затем вкладка «IFC» в левой рейке.")
 
