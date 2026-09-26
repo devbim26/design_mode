@@ -34,7 +34,11 @@ def deploy_files(venv: Path) -> bool:
     plan = [(SRC / "threed_router.py", routers / "threed.py"),
             (SRC / "threed_scenarios.py", routers / "threed_scenarios.py"),
             (SRC / "threed_build.py", routers / "threed_build.py"),
-            (SRC / "threed_verify.py", routers / "threed_verify.py")]
+            (SRC / "threed_verify.py", routers / "threed_verify.py"),
+            (SRC / "threed_ground.py", routers / "threed_ground.py"),
+            (SRC / "threed_ensemble.py", routers / "threed_ensemble.py"),
+            (SRC / "threed_regular.py", routers / "threed_regular.py")]
+    plan = [(src, dst) for src, dst in plan if src.is_file()]
     if all(dst.is_file() and dst.read_bytes() == src.read_bytes() for src, dst in plan):
         print("Файлы threed уже развернуты, пропуск")
         return False
