@@ -284,7 +284,8 @@ def test_router_ensemble_happy_path():
     verify(2 картинки). Тег ensemble в usage, дамп, pset EnsembleAgreement.
     Геометрия B подобрана под A ( порог согласия): дверь 84px -> масштаб
     0.025; контур 780x550 px -> 19.5м x этаж 2.75 (дельты 2.5%/8.3% < порогов);
-    2 строки x 4 столбца окон; нижняя дверь -> entrance."""
+    10 полос окон (2 ряда В ЭТАЖЕ x 5 этажей, шаг 50 > 0.6*80 допуска
+    кластеров) x 4 столбца; нижняя дверь -> entrance."""
     R = _router()
     from PIL import Image
     img = Image.new("RGB", (800, 600), "white")
@@ -298,7 +299,8 @@ def test_router_ensemble_happy_path():
                       "x2": 790, "y2": 590},
                      {"label": "door", "x1": 370, "y1": 506,
                       "x2": 430, "y2": 590}]
-            for cy in (180, 420):          # 2 строки (зазор 240 > 0.6*80)
+            # rows = ceil(полос/этажей) = ceil(10/5) = 2 = A (live-хвост п.60)
+            for cy in (96 + j * 50 for j in range(10)):
                 for cx in (190, 370, 550, 730):  # 4 столбца (зазор 180)
                     boxes.append({"label": "window", "x1": cx - 30,
                                   "y1": cy - 40, "x2": cx + 30,

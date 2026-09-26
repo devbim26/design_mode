@@ -1,0 +1,109 @@
+{
+ "ts": "2026-09-26 20:08:33",
+ "winner": "openai/gpt-6-sol",
+ "mode": "grounding",
+ "table": [
+  {
+   "model": "alibaba/qwen3-vl-235b-a22b-instruct",
+   "iou_mean": 0.2561,
+   "recall": 0.2666,
+   "json_valid": 0.6667,
+   "rows": [
+    {
+     "image": "vlm_test_house.png",
+     "ok": false,
+     "error": "not json",
+     "secs": 48.5
+    },
+    {
+     "image": "gt_plan_synthetic.png",
+     "ok": true,
+     "secs": 47.5,
+     "iou_mean": 0.2421,
+     "iou_median": 0.1527,
+     "recall": 0.2,
+     "precision": 0.2
+    },
+    {
+     "image": "gt_interior_synthetic.png",
+     "ok": true,
+     "secs": 58.6,
+     "iou_mean": 0.2701,
+     "iou_median": 0.3831,
+     "recall": 0.3333,
+     "precision": 0.6667
+    }
+   ]
+  },
+  {
+   "model": "openai/gpt-6-sol",
+   "iou_mean": 0.7884,
+   "recall": 0.9333,
+   "json_valid": 1.0,
+   "rows": [
+    {
+     "image": "vlm_test_house.png",
+     "ok": true,
+     "secs": 33.3,
+     "iou_mean": 0.5392,
+     "iou_median": 0.6571,
+     "recall": 0.8,
+     "precision": 1.0
+    },
+    {
+     "image": "gt_plan_synthetic.png",
+     "ok": true,
+     "secs": 27.3,
+     "iou_mean": 0.9613,
+     "iou_median": 0.9847,
+     "recall": 1.0,
+     "precision": 1.0
+    },
+    {
+     "image": "gt_interior_synthetic.png",
+     "ok": true,
+     "secs": 37.4,
+     "iou_mean": 0.8647,
+     "iou_median": 0.9127,
+     "recall": 1.0,
+     "precision": 1.0
+    }
+   ]
+  },
+  {
+   "model": "openai/gpt-6-astra",
+   "iou_mean": 0.7645,
+   "recall": 0.8667,
+   "json_valid": 1.0,
+   "rows": [
+    {
+     "image": "vlm_test_house.png",
+     "ok": true,
+     "secs": 42.4,
+     "iou_mean": 0.479,
+     "iou_median": 0.5979,
+     "recall": 0.6,
+     "precision": 0.75
+    },
+    {
+     "image": "gt_plan_synthetic.png",
+     "ok": true,
+     "secs": 33.3,
+     "iou_mean": 0.9635,
+     "iou_median": 0.9898,
+     "recall": 1.0,
+     "precision": 1.0
+    },
+    {
+     "image": "gt_interior_synthetic.png",
+     "ok": true,
+     "secs": 30.3,
+     "iou_mean": 0.851,
+     "iou_median": 0.9127,
+     "recall": 1.0,
+     "precision": 1.0
+    }
+   ]
+  }
+ ]
+}

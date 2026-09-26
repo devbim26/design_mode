@@ -187,7 +187,7 @@ def _verify_iters() -> int:
 
 
 # --- двухканальный ансамбль (п.60): прогон B + compare/merge + реферти ---
-DEFAULT_ENSEMBLE_MODEL = ""  # winner зонда з.1b (Task 3 шаг 7); "" -> text-B
+DEFAULT_ENSEMBLE_MODEL = "openai/gpt-6-sol"  # winner live-зонда з.1b (26.09: IoU 0.79, json 100%)
 REFEREE_MODEL_DEFAULT = REPAIR_RETRY_MODEL  # sol — ярус выше luna-ремонта
 
 
@@ -527,6 +527,9 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
                 wns.append(f"ансамбль: сцена B невалидна ({e}) — работаем с A")
                 return scene, None, wns
             cmp = threed_ensemble.compare_scenes(scenario, scene, b_scene)
+            info["disputed"] = {f: [a, b]
+                                for f, (a, b) in cmp["disputed"].items()}
+            referee_says = []  # диагностика дампа: вердикты реферти
 
             def referee(fields):
                 body = {f: {"A": cmp["disputed"][f][0],
@@ -538,7 +541,9 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
                     + json.dumps(body, ensure_ascii=False)
                     + "\nFor EACH field pick the value better matching the "
                       "image. STRICT JSON only.", image_url, _referee_model())
-                return threed_scenarios.extract_json(raw)
+                verdict = threed_scenarios.extract_json(raw)
+                referee_says.append(verdict)
+                return verdict
 
             _usage_stage[0] = "ensemble"
             # I2 (финальное ревью): решение о реферти фиксируем ДО merge —
@@ -553,6 +558,8 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
                 wns.append("ансамбль: реферти за бюджетом — спорные из A")
             info["agree_rate"] = confidence["agree_rate"]
             info["disputed_fields"] = confidence["disputed_fields"]
+            if referee_says:  # диагностика: что реферти выбрал по спорам
+                info["referee"] = referee_says
             if confidence["agree_rate"] >= threed_regular.REGULAR_GATE:
                 scene = threed_regular.regularize(scenario, scene,
                                                   confidence, wns)

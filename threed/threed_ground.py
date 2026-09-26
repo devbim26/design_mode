@@ -259,26 +259,38 @@ def facade_boxes_to_scene(payload, img_w, img_h):
     bld = next((b for b in boxes if b["label"] == "building"), None)
     if not wins or bld is None:
         return {}, ["facade B: нет боксов окон/контура — сцена B пустая"]
+    # «главная сетка» = окна сопоставимой площади (live-хвост п.60): мелкие
+    # (< 45% медианной площади — башенка/ниша/чердачные) в сетке не
+    # участвуют, иначе раздувают rows/cols/skip (башенные окна давали 3x4
+    # c 6 skip); конфигурации towers/dormers остаются за VLM-A (п.45)
+    areas = [(b["x2"] - b["x1"]) * (b["y2"] - b["y1"]) for b in wins]
+    grid_wins = [b for b, a in zip(wins, areas) if a >= 0.45 * _med(areas)]
+    if len(grid_wins) >= 2:
+        wins = grid_wins
     med_w = _med([b["x2"] - b["x1"] for b in wins])
     med_h = _med([b["y2"] - b["y1"] for b in wins])
     rows_g = _clusters([(b["y1"] + b["y2"]) / 2 for b in wins], 0.6 * med_h)
     cols_g = _clusters([(b["x1"] + b["x2"]) / 2 for b in wins], 0.6 * med_w)
-    rows, cols = len(rows_g), len(cols_g)
-    row_of, col_of = {}, {}
+    bands, cols = len(rows_g), len(cols_g)
+    try:
+        floors = int(meta.get("floors") or 0)
+    except (TypeError, ValueError):
+        floors = 0
+    floors = max(1, min(30, floors or bands))
+    # rows в схеме фасада = рядов окон ВНУТРИ одного этажа (валидатор FIT
+    # втискивает сетку в floor_height): полосы по всему фасаду делим на
+    # этажи; полоса j сверху относится к ряду j%rows своего этажа
+    rows = max(1, min(4, -(-bands // floors)))
+    band_of, col_of = {}, {}
     for gi, grp in enumerate(rows_g):
         for i in grp:
-            row_of[i] = gi
+            band_of[i] = gi
     for gi, grp in enumerate(cols_g):
         for i in grp:
             col_of[i] = gi
     skip = [[True] * cols for _ in range(rows)]
     for i in range(len(wins)):
-        skip[row_of[i]][col_of[i]] = False
-    try:
-        floors = int(meta.get("floors") or 0)
-    except (TypeError, ValueError):
-        floors = 0
-    floors = max(1, min(30, floors or max(rows, 1)))
+        skip[band_of[i] % rows][col_of[i]] = False
     b_w, b_h = bld["x2"] - bld["x1"], bld["y2"] - bld["y1"]
     scale = None
     if doors:
@@ -301,8 +313,14 @@ def facade_boxes_to_scene(payload, img_w, img_h):
                     "w_m": round((d0["x2"] - d0["x1"]) * scale, 2),
                     "style": "porch"}
     roof = meta.get("roof")
+    floor_h_m = round(b_h * scale / floors, 2)
+    # margin_y — от верха КОНТУРА (с крышей) до первой полосы сетки:
+    # на доме с чердаком/башенкой почти в весь этаж, а валидаторный FIT
+    # требует 2*margin_y + rows*h_m <= floor_height — режем до 35% этажа
+    margin_y_m = round(min(max((topmost - bld["y1"]) * scale, 0.05),
+                           0.35 * floor_h_m), 2)
     scene = {"storeys": floors,
-             "floor_height": round(b_h * scale / floors, 2),
+             "floor_height": floor_h_m,
              "width_m": round(b_w * scale, 2), "depth_m": 12.0,
              "roof": roof if roof in ("flat", "gable", "hip", "mansard") else "flat",
              "roof_height": 2.5,
@@ -310,7 +328,7 @@ def facade_boxes_to_scene(payload, img_w, img_h):
                          "w_m": round(med_w * scale, 2),
                          "h_m": round(med_h * scale, 2),
                          "margin_x_m": round(max((leftmost - bld["x1"]) * scale, 0.05), 2),
-                         "margin_y_m": round(max((topmost - bld["y1"]) * scale, 0.05), 2),
+                         "margin_y_m": margin_y_m,
                          "skip": skip, "shape": "rect"},
              "entrance": entrance}
     return scene, warnings
@@ -405,6 +423,28 @@ def _collinear_contained(a, b):
     return within(ax1, ay1) and within(ax2, ay2)
 
 
+def _snap_room_coords(rooms, img_w, img_h):
+    """Снап x1/x2/y1/y2 комнатных боксов к кластерным медианам (допуск
+    ~1.2% большой стороны, минимум 4 px): смежные комнаты получают
+    ТОЧНО общие рёбра -> поглощение стен и цельный outline."""
+    tol = max(4.0, 0.012 * max(img_w, img_h))
+    for axis in ("x", "y"):
+        vals = sorted({v for r in rooms for v in (r[f"{axis}1"], r[f"{axis}2"])})
+        snap, cluster = {}, [vals[0]]
+        for v in vals[1:]:
+            if v - cluster[-1] <= tol:
+                cluster.append(v)
+                continue
+            m = cluster[len(cluster) // 2]
+            snap.update({c: m for c in cluster})
+            cluster = [v]
+        m = cluster[len(cluster) // 2]
+        snap.update({c: m for c in cluster})
+        for r in rooms:
+            a, b = snap[r[f"{axis}1"]], snap[r[f"{axis}2"]]
+            r[f"{axis}1"], r[f"{axis}2"] = (a, b) if a < b else (b, a)
+
+
 def interior_boxes_to_scene(payload, img_w, img_h):
     """Боксы плана этажа -> raw-сцена validate_interior: outline = union
     комнат, стены = рёбра комнат (общие/поглощённые рёбра схлопываются,
@@ -429,14 +469,34 @@ def interior_boxes_to_scene(payload, img_w, img_h):
         hint = 0.0
     if not (0.001 <= scale <= 0.5):
         scale = hint or 0.01
-    # outline: union прямоугольников комнат
+    # снап координат комнат (live-хвост п.60): grounding-боксы смежных комнат
+    # расходятся на толщину стены + джиттер — без снапа общие рёбра не
+    # совпадают, поглощение не срабатывает (двойные стены), union расщеплен
+    # (MultiPolygon). Кластеризуем 1D-координаты с допуском ~1.2% габарита
+    # и приравниваем к медиане кластера.
+    _snap_room_coords(rooms, img_w, img_h)
+    rooms = [r for r in rooms
+             if r["x2"] - r["x1"] >= 8 and r["y2"] - r["y1"] >= 8]
+    if not rooms:
+        return {}, ["interior B: комнаты выродились после снапа"]
+    # outline: union прямоугольников комнат. Расщеплённый план (боксы комнат
+    # не пересекаются) даёт MultiPolygon — а контракт схемы одно кольцо;
+    # берём экстерьер КРУПНЕЙШЕГО полигона (комнаты/стены ниже строятся из
+    # боксов независимо, мелкие части не теряются)
     uni = None
     for r in rooms:
         p = Polygon([(r["x1"], r["y1"]), (r["x2"], r["y1"]),
                      (r["x2"], r["y2"]), (r["x1"], r["y2"])])
         uni = p if uni is None else uni.union(p)
-    outline = [[round(x), round(y)] for x, y in
-               list(uni.exterior.coords)[:-1]] if uni and uni.is_valid else []
+    if uni is None or not uni.is_valid:
+        outline = []
+    elif uni.geom_type == "MultiPolygon":
+        biggest = max(uni.geoms, key=lambda g: g.area)
+        outline = [[round(x), round(y)] for x, y in
+                   list(biggest.exterior.coords)[:-1]]
+    else:
+        outline = [[round(x), round(y)] for x, y in
+                   list(uni.exterior.coords)[:-1]]
 
     def edges(r):
         x1, y1, x2, y2 = r["x1"], r["y1"], r["x2"], r["y2"]

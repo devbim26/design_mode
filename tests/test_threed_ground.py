@@ -122,7 +122,9 @@ def test_facade_boxes_to_scene():
     assert abs(scene["width_m"] - 10.5) < 0.15, scene["width_m"]
     assert abs(scene["floor_height"] - 540 * 0.0175 / 3) < 0.15
     w = scene["windows"]
-    assert (w["rows"], w["cols"]) == (3, 4)
+    # live-хвост п.60: rows = рядов В ЭТАЖЕ (полосы 3 / этажей 3 = 1),
+    # а не полосы по всему фасаду (валидаторный FIT — сетка в floor_height)
+    assert (w["rows"], w["cols"]) == (1, 4)
     assert abs(w["w_m"] - 60 * 0.0175) < 0.1 and abs(w["h_m"] - 80 * 0.0175) < 0.1
     assert not any(any(row) for row in w["skip"]), "все окна остеклены"
     e = scene["entrance"]
@@ -130,7 +132,20 @@ def test_facade_boxes_to_scene():
     # сцена проходит штатный валидатор (сравнение идёт по клампнутым полям)
     from threed import threed_scenarios
     fixed, warns = threed_scenarios.validate_facade(dict(scene))
-    assert fixed["storeys"] == 3 and fixed["windows"]["rows"] == 3
+    assert fixed["storeys"] == 3 and fixed["windows"]["rows"] == 1
+    # несколько рядов В ОДНОМ этаже: 1 этаж, 2 полосы x 3 столбца -> rows=2
+    p1 = {"boxes": [{"label": "building", "x1": 50, "y1": 20,
+                     "x2": 750, "y2": 580}],
+          "meta": {"floors": 1, "roof": "flat"}}
+    for j in range(2):
+        for i in range(3):
+            cx, cy = 200 + i * 200, 150 + j * 220
+            p1["boxes"].append({"label": "window", "x1": cx - 30,
+                                "y1": cy - 40, "x2": cx + 30, "y2": cy + 40})
+    p1["boxes"].append({"label": "door", "x1": 470, "y1": 460,
+                        "x2": 530, "y2": 580})
+    s1, _ = G.facade_boxes_to_scene(p1, 800, 600)
+    assert (s1["windows"]["rows"], s1["windows"]["cols"]) == (2, 3)
     print("test_facade_boxes_to_scene OK")
 
 
@@ -140,13 +155,24 @@ def test_facade_converter_edges():
                       "x2": 100, "y2": 100}], "meta": {}}
     scene, wns = G.facade_boxes_to_scene(bad, 800, 600)
     assert scene == {} and any("окон" in w for w in wns)
-    # пропуск окна: клетка сетки без бокса -> skip=True (строка j=2: cy=470)
-    p = _synth_facade_payload()
-    p["boxes"] = [b for b in p["boxes"]
-                  if not (b["label"] == "window" and b["x1"] == 160
-                          and b["y1"] == 430)]  # (3-я строка, 1-й столбец)
-    scene2, _ = G.facade_boxes_to_scene(p, 800, 600)
-    assert scene2["windows"]["skip"][2][0] is True
+    # пропуск окна: клетка сетки без бокса -> skip=True. При rows=1 дырка
+    # одной полосы закрывается окнами других — кейс с 2 рядами в этаже
+    p1 = {"boxes": [{"label": "building", "x1": 50, "y1": 20,
+                     "x2": 750, "y2": 580}],
+          "meta": {"floors": 1, "roof": "flat"}}
+    for j in range(2):
+        for i in range(3):
+            cx, cy = 200 + i * 200, 150 + j * 220
+            p1["boxes"].append({"label": "window", "x1": cx - 30,
+                                "y1": cy - 40, "x2": cx + 30, "y2": cy + 40})
+    p1["boxes"].append({"label": "door", "x1": 470, "y1": 460,
+                        "x2": 530, "y2": 580})
+    p1["boxes"] = [b for b in p1["boxes"]
+                   if not (b["label"] == "window" and b["x1"] == 170
+                           and b["y1"] == 110)]  # (ряд 0, столбец 0)
+    scene2, _ = G.facade_boxes_to_scene(p1, 800, 600)
+    assert scene2["windows"]["skip"][0][0] is True
+    assert scene2["windows"]["skip"][0][1] is False
     # пиксельный хинт
     hint = G.facade_pixel_hint(_synth_facade_payload(), 800, 600)
     assert hint == (100, 50, 700, 590)
@@ -216,6 +242,23 @@ def test_plan_and_interior_converters():
     assert all(isinstance(o["wall_idx"], int) for o in scene2["openings"])
     f2, w2, i2 = threed_scenarios.validate_interior(dict(scene2), 900, 700)
     assert len(f2["rooms"]) == 3
+
+    # регрессия live-хвоста п.60: РАСЩЕПЛЁННЫЙ план — union комнат =
+    # MultiPolygon ('MultiPolygon' object has no attribute 'exterior'
+    # ронял прогон B интерьера, 3/3 прогонов A/B-серии без ансамбля)
+    payload3 = {"boxes": [
+        {"label": "room", "x1": 60, "y1": 60, "x2": 400, "y2": 360},
+        {"label": "room", "x1": 500, "y1": 200, "x2": 840, "y2": 600},
+        {"label": "door", "x1": 395, "y1": 150, "x2": 405, "y2": 240}],
+        "meta": {"scale_hint": 0.01}}
+    scene3, wns3 = G.interior_boxes_to_scene(payload3, 900, 700)
+    assert scene3["outline"], "MultiPolygon -> outline крупнейшей части"
+    xs = [p[0] for p in scene3["outline"]]
+    ys = [p[1] for p in scene3["outline"]]
+    # крупнейшая часть 340x400 (вторая 340x300) — проверяем высоту контура
+    assert (max(xs) - min(xs)) == 340 and (max(ys) - min(ys)) == 400, \
+        (max(xs) - min(xs), max(ys) - min(ys))
+    assert len(scene3["rooms"]) == 2  # комнаты не потерялись
     print("test_plan_and_interior_converters OK")
 
 

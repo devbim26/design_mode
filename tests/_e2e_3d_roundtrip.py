@@ -188,7 +188,9 @@ def _content_fraction(im: Image.Image) -> float:
 
 
 def _judge(src_path: Path, render_path: Path) -> dict:
-    """Судья-VLM: исходник + рендер -> {score, match, issues}. Строгий JSON."""
+    """Судья-VLM: исходник + рендер -> {score, match, issues}. Строгий JSON.
+    До 3 попыток с паузой: ImageRouter флапает 503/upstream_error (п.19) —
+    без ретрая теряется ОПЛАЧЕННАЯ генерация прогона."""
     def url(path: Path) -> str:
         return "data:image/png;base64," + base64.b64encode(path.read_bytes()).decode("ascii")
     key = _load_key()
@@ -201,15 +203,26 @@ def _judge(src_path: Path, render_path: Path) -> dict:
         {"type": "image_url", "image_url": {"url": url(src_path)}},
         {"type": "image_url", "image_url": {"url": url(render_path)}},
     ]
-    resp = requests.post(
-        CHAT_COMPLETIONS_URL, headers={"Authorization": f"Bearer {key}"},
-        json={"model": model,
-              "messages": [{"role": "system", "content": SYSTEM_JUDGE},
-                           {"role": "user", "content": content}],
-              "max_tokens": 8000, "temperature": 0.2}, timeout=180)
-    data = resp.json()
-    text = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
-    assert text.strip(), f"судья пуст: HTTP {resp.status_code} {str(data)[:200]}"
+    last_err = None
+    for attempt in range(3):
+        if attempt:
+            time.sleep(20)
+        try:
+            resp = requests.post(
+                CHAT_COMPLETIONS_URL, headers={"Authorization": f"Bearer {key}"},
+                json={"model": model,
+                      "messages": [{"role": "system", "content": SYSTEM_JUDGE},
+                                   {"role": "user", "content": content}],
+                      "max_tokens": 8000, "temperature": 0.2}, timeout=180)
+            data = resp.json()
+            text = ((data.get("choices") or [{}])[0].get("message") or {}).get("content") or ""
+            assert text.strip(), f"судья пуст: HTTP {resp.status_code} {str(data)[:200]}"
+        except (requests.RequestException, AssertionError, ValueError) as e:
+            last_err = e
+            continue
+        break
+    else:
+        raise AssertionError(f"судья: 3 попытки, последняя: {last_err}")
     verdict = threed_scenarios.extract_json(text)
     assert isinstance(verdict, dict) and "score" in verdict, f"не JSON: {text[:200]}"
     verdict.setdefault("match", verdict["score"] >= 60)

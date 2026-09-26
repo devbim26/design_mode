@@ -2663,8 +2663,8 @@ invokeai==6.2.0` их нужно запускать повторно в поря
 60. **Двухканальный ансамбль извлечения геометрии image→IFC (п.60)** (26.09,
     ветка `3d_analysys`; спека/план `docs/superpowers/2026-09-26-threed-
     geometry-ensemble*`; SDD Tasks 1–9 выполнены и отревьюены, финальное
-    ревью ветки — Approved после фикс-батча 4798c6c. LIVE-хвост ждёт
-    пополнения ImageRouter — см. «Живой хвост» ниже). Идея: «VLM выбирает
+    ревью ветки — Approved после фикс-батча 4798c6c. LIVE-хвост выполнен
+    26.09 — итоговые метрики в «Живой хвост» ниже). Идея: «VLM выбирает
     семантику, код считает геометрию» — два независимых извлечения
     (A: параметрический JSON; B: grounding-боксы в пикселях / text-fallback
     на другой модели) → детерминированное compare → merge (согласованные
@@ -2734,36 +2734,60 @@ invokeai==6.2.0` их нужно запускать повторно в поря
       test_threed_ensemble (13) / test_threed_regular (8) / test_threed_ab
       (2) + ретро test_threed (28) / facade_v2 (11) / tiered (5) / verify
       (12); node-чек бандла — только рантайм-ошибка.
-    - **Живой хвост (ждёт кредитов ~$4.75, ПОРЯДОК ОБЯЗАТЕЛЕН)**:
-      1) baseline ДО любого рестарта (running server сейчас на pre-ensemble
-         коде — это валидность baseline): `git checkout baseline-3d`
-         (ветка на 3d8f6ce, вход-артефакты синхронизированы с рабочей
-         веткой) → 3 серии `venv\Scripts\python.exe tests\_e2e_3d_roundtrip.py
-         --runs 3 --label baseline --scenario {facade|plan|interior}
-         --image {data\probe\vlm_test_house.png|gt_plan_synthetic.png|
-         gt_interior_synthetic.png} --save data\probe\_ab_baseline*.json`
-         (~$1.5) → merge в `_ab_baseline.json` (ключи facade/plan/interior;
-         проверять summary.n==3 и incomplete==false) → commit на
-         baseline-3d → `git checkout 3d_analysys`. КОНТРОЛЬ: в дампах
-         baseline ключа ensemble быть НЕ должно (если сервер успел
-         перезапуститься с новым кодом — серии переделать);
-      2) live-зонд (~$0.30): `venv\Scripts\python.exe setup_threed.py` →
-         `venv\Scripts\python.exe data\probe\_probe_threed_ground.py` →
-         winner/mode в спеку (раздел 5, з.1b) и в DEFAULT_ENSEMBLE_MODEL
-         (`threed/threed_router.py`; mode=text → константа остаётся "");
-      3) рестарт `launch\_restart_server.ps1` + health-check (кука
-         devbim_auth, /api/v1/threed/model → 200) + фасадный смоук
-         `--runs 1 --label smoke` (~$0.3): в `data/ifc/_threed_last.json`
-         ключ ensemble (mode/agree_rate), в ir_server.log тег ensemble;
-      4) смоуки plan/interior `--runs 1` (~$0.35, опционально);
-      5) A/B ensemble-серии ×3 темы (~$2.3) → таблица приёмки спеки
-         (раздел 11): median judge-score facade ≥51 (baseline 43),
-         plan/interior ≥ baseline+5, agree_rate ≥0.7/0.6, structural ≥
-         baseline, contract_issues −30%, cost ≤2× baseline; + IoU оверлея
-         по GT ≥0.6 (grounding-режим); тюнинг при недоборе БЕЗ отката
-         архитектуры: пороги споров → REGULAR_GATE ниже → кандидат-2 зонда
-         → THREED_ENSEMBLE=0 только для проблемной темы;
-      6) вписать сюда фактические метрики A/B (baseline vs ensemble).
+    - **Живой хвост — ВЫПОЛНЕН 26.09.2026 (кредиты пополнены; фактический
+      расход ~$5.6 вместе с двумя пересериями после live-фиксов)**:
+      1) baseline ДО любого рестарта: подтверждено дёшево ДО трат — порт
+         9090 держал процесс со старта 12:29 (деплой venv 18:37), т.е.
+         сервер в памяти pre-ensemble. 3 серии ×3 → merge
+         `data/probe/_ab_baseline.json` (коммит 2ab4c4d на baseline-3d):
+         facade median 38 (38/38/44), plan 90 (95/88/90), interior 96
+         (96/96/95); structural 100%, contract_issues 0, ключа ensemble
+         в дампах НЕТ (контроль пройден);
+      2) live-зонд: WINNER `openai/gpt-6-sol`, mode=grounding (mean IoU
+         0.788, recall 0.933, json_valid 1.0; astra 0.765 — кандидат-2;
+         qwen3-vl 0.256/0.667 — провал) → вписан в спеку з.1b и
+         `DEFAULT_ENSEMBLE_MODEL` (threed_router.py);
+      3) рестарт + health (кука, /threed/model 200; первый вызов до 90 с —
+         каталог VLM) + смоуки: facade 35/$0.27, plan 96/$0.076, interior
+         96/$0.081; ensemble-ключ в дампе (mode/b_model/agree_rate),
+         тег `ensemble` — в usage.calls дампа (в ir_server.log НЕ пишется,
+         там только старт-баннер);
+      4) первый A/B вскрыл ДВА конвертерных дефекта прогона B (тюнинг без
+         отката архитектуры, все фиксы с регресс-тестами):
+         - интерьер: union комнат с джиттерными боксами = MultiPolygon →
+           `'MultiPolygon' object has no attribute 'exterior'` ронял ВЕСЬ
+           прогон B (3/3 прогонов серии молча работали на A) → фикс:
+           экстерьер крупнейшего полигона + снап координат комнат к
+           кластерам (допуск 1.2% габарита) — общие рёбра совпадают,
+           стены абсорбируются, outline цельный;
+         - фасад: башенные/нишевые окна мешались в «главную сетку»
+           (rows=3/cols=4/6 skip при истине 2×2) → фикс: фильтр окон
+           <45% медианной площади + rows=ceil(полос/этажей) (схемная
+           семантика «рядов В ЭТАЖЕ» — валидаторный FIT втискивает сетку
+           в floor_height, старое margin_y съедало h_m до клампа 0.3) +
+           кэп margin_y 35% этажа. Фасад 32 → 43;
+         + диагностика: в ensemble-ключ дампа добавлены `disputed`
+         (значения A/B) и `referee` (вердикты), в харнессе — ретрай
+         судьи ×3 (ImageRouter флапает 503/upstream, иначе терялись
+         оплаченные прогоны);
+      5) ИТОГ A/B (серии ×3, судья gpt-6-astra; merge
+         `data/probe/_ab_ensemble.json`): facade median **43** vs
+         baseline 38 (Δ+5; таргет ≥51 не достигнут — якоря B на этом
+         доме шумят: дверь с крыльцом −18% scale, контур с крышей
+         завышает этаж; реферти корректно резолвит споры в A, поэтому
+         agree_rate фасада честно низкий 0.429), plan **96** vs 90 (Δ+6 ✓,
+         agree 1.0), interior **96** vs 96 (паритет — потолок судьи на
+         синтетике: baseline уже 96/100, «baseline+5» недостижим),
+         structural 100% у всех, contract_issues 0 у всех (сокращать
+         нечего), cost ×baseline: 1.23×/1.44×/1.76× (≤2× ✓), бюджет ≤6
+         вызовов 100%. Таблица — спека раздел 11 «Итог live-прогона»;
+         candidates след. итерации: astra кандидат-2, REGULAR_GATE 0.4,
+         якорь двери по верхней кромке. ОТКАТ НЕ ТРЕБУЕТСЯ: ансамбль
+         включён по всем трём темам, фасад строго лучше baseline.
+      Тесты после всех фиксов: ground 9 / ensemble 13 / regular 8 /
+      ab 2 / ретро threed 28 / facade_v2 11 / tiered 5 / verify 12 —
+      ALL OK (обновлены: rows-семантика в happy-path моке, скип-кейс,
+      MultiPolygon-регрессия).
     - Откат: THREED_ENSEMBLE=0 одним ключом (грабля (е)); модули
       threed_ground/ensemble/regular остаются задеплоенными (не мешают).
 

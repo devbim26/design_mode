@@ -1,0 +1,46 @@
+{
+ "label": "ensemble",
+ "scenario": "plan",
+ "image": "data\\probe\\gt_plan_synthetic.png",
+ "incomplete": false,
+ "runs": [
+  {
+   "name": "3D_plan_20260926-205316.ifc",
+   "score": 96,
+   "match": true,
+   "content_fraction": 0.415,
+   "cost_usd": 0.073,
+   "structural_ok": true,
+   "contract_issues": 0,
+   "agree_rate": 1.0
+  },
+  {
+   "name": "3D_plan_20260926-205536.ifc",
+   "score": 97,
+   "match": true,
+   "content_fraction": 0.4151,
+   "cost_usd": 0.0621,
+   "structural_ok": true,
+   "contract_issues": 0,
+   "agree_rate": 1.0
+  },
+  {
+   "name": "3D_plan_20260926-205812.ifc",
+   "score": 95,
+   "match": true,
+   "content_fraction": 0.4151,
+   "cost_usd": 0.0349,
+   "structural_ok": true,
+   "contract_issues": 0,
+   "agree_rate": 1.0
+  }
+ ],
+ "summary": {
+  "n": 3,
+  "median_score": 96,
+  "median_cost_usd": 0.0621,
+  "structural_clean_rate": 1.0,
+  "median_contract_issues": 0,
+  "agree_rate": 1.0
+ }
+}
