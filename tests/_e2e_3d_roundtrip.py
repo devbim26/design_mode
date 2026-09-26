@@ -2,16 +2,23 @@
 """E2E полный круг 3D Design: ВХОД-картинка -> генерация IFC -> рендер модели
 во 3D-вьювере (Playwright) -> СРАВНЕНИЕ входа и выхода (судья-VLM + пиксели).
 
+A/B-харнесс (п.60 з.7): серия прогонов одной конфигурации -> медианы.
+
 Запуск (сервер поднят, ключ ImageRouter в .env):
     venv\\Scripts\\python.exe tests\\_e2e_3d_roundtrip.py
+        (по умолчанию: 1 прогон, scenario=facade, DEFAULT_IMG)
+    venv\\Scripts\\python.exe tests\\_e2e_3d_roundtrip.py \\
+        --runs 3 --label baseline --scenario plan \\
+        --image data\\probe\\gt_plan_synthetic.png \\
+        --save data\\probe\\_ab_baseline_plan.json
     venv\\Scripts\\python.exe tests\\_e2e_3d_roundtrip.py --ifc 3D_facade_xxx.ifc
         (--ifc: не генерировать заново, а открыть готовую модель — без траты
-         на анализ; скриншот и судья-VLM всё равно живые)
+         на анализ; скриншот и судья-VLM всё равно живые; 1 прогон)
 
-Артефакты: data/ifc/_roundtrip_view.png (рендер вьювера),
-data/ifc/_roundtrip_last.json (вход, IFC, пиксели, вердикт судьи).
-Уроки HANDOFF: пиксельным проверкам верить БОЛЬШЕ, чем VLM-анализу
-скриншотов (п.38) — судья-VLM тут только Semant-оценка, гейт — пиксельный.
+Артефакты: data/ifc/_roundtrip_view.png (рендер вьювера последнего прогона),
+файл --save (runs + summary). Уроки HANDOFF: пиксельным проверкам верить
+БОЛЬШЕ, чем VLM-анализу скриншотов (п.38) — судья-VLM тут только Semant-оценка,
+гейт — пиксельный.
 """
 import base64
 import io
@@ -59,6 +66,33 @@ Rules:
 """
 
 
+def _median(vals):
+    """Медиана списка чисел; None для пустого (A/B-сводки, спека з.7)."""
+    v = sorted(x for x in vals if x is not None)
+    n = len(v)
+    if not n:
+        return None
+    return v[n // 2] if n % 2 else (v[n // 2 - 1] + v[n // 2]) / 2
+
+
+def _summarize(runs):
+    """N прогонов одной конфигурации -> медианы/доли для таблицы приёмки
+    (спека, раздел 11). Прогон = dict из main()-цикла."""
+    scores = [r.get("score") for r in runs]
+    costs = [r.get("cost_usd") for r in runs]
+    agrees = [r.get("agree_rate") for r in runs if r.get("agree_rate") is not None]
+    ci = [r.get("contract_issues") for r in runs]
+    st = [bool(r.get("structural_ok")) for r in runs]
+    return {"n": len(runs),
+            "median_score": _median(scores),
+            "median_cost_usd": _median(costs),
+            "structural_clean_rate": (round(sum(st) / len(st), 3)
+                                      if st else None),
+            "median_contract_issues": _median(ci),
+            "agree_rate": (round(sum(agrees) / len(agrees), 3)
+                           if agrees else None)}
+
+
 def _site_password() -> str:
     m = re.search(r"^SITE_PASSWORD=(.+)$",
                   (ROOT / ".env").read_text(encoding="utf-8"), re.M)
@@ -75,15 +109,29 @@ def _login_session() -> requests.Session:
 
 def _generate(scenario: str, prompt: str, img_path: Path) -> dict:
     """Живая генерация POST /api/v1/threed/generate (2 VLM-вызова: анализ +
-    верификация п.44). Возвращает JSON ответа."""
+    верификация п.44). Роутер — фоновая задача: ответ {jobId}, результат
+    ждём поллингом GET /jobs/{id} (result = прежний синхронный JSON:
+    name/camHint/verify/usage/structural)."""
     dataurl = "data:image/png;base64," + base64.b64encode(img_path.read_bytes()).decode("ascii")
+    cookies = {"devbim_auth": _login_session().cookies.get("devbim_auth")}
     t0 = time.time()
     r = requests.post(f"{BASE}/api/v1/threed/generate",
-                      cookies={"devbim_auth": _login_session().cookies.get("devbim_auth")},
+                      cookies=cookies,
                       json={"scenario": scenario, "prompt": prompt, "image": dataurl},
-                      timeout=300)
+                      timeout=60)
     assert r.status_code == 200, f"generate {r.status_code}: {r.text[:300]}"
-    res = r.json()
+    job = r.json()["jobId"]
+    while time.time() - t0 < 1800:  # очередь Semaphore(1) + минуты конвейера
+        j = requests.get(f"{BASE}/api/v1/threed/jobs/{job}",
+                         cookies=cookies, timeout=30).json()
+        if j["status"] == "done":
+            res = j["result"]
+            break
+        if j["status"] == "error":
+            raise AssertionError(f"job error: {j.get('error')}")
+        time.sleep(3)
+    else:
+        raise AssertionError("job не завершился за 30 минут")
     print(f"generate: {res['name']} за {time.time() - t0:.0f} s, "
           f"warnings={len(res.get('warnings') or [])}")
     v = (res.get("verify") or {}).get("verdict") or {}
@@ -169,35 +217,69 @@ def _judge(src_path: Path, render_path: Path) -> dict:
 def main() -> None:
     args = sys.argv[1:]
     ifc_arg = args[args.index("--ifc") + 1] if "--ifc" in args else None
+    runs_n = int(args[args.index("--runs") + 1]) if "--runs" in args else 1
+    label = args[args.index("--label") + 1] if "--label" in args else "adhoc"
+    save = Path(args[args.index("--save") + 1]) if "--save" in args else None
+    scenario = args[args.index("--scenario") + 1] if "--scenario" in args else "facade"
+    img_arg = args[args.index("--image") + 1] if "--image" in args else None
+    src_img = Path(img_arg) if img_arg else DEFAULT_IMG
     src = ROOT / "data" / "ifc" / "_roundtrip_src.png"
-    Image.open(DEFAULT_IMG).convert("RGB").save(src)
+    Image.open(src_img).convert("RGB").save(src)
 
-    if ifc_arg:
-        res = {"name": ifc_arg, "camHint": None, "verify": None}
-    else:
-        res = _generate("facade", "roundtrip e2e", DEFAULT_IMG)
+    runs = []
 
-    render = _viewer_render(res["name"], res.get("camHint"))
-    view_path = ROOT / "data" / "ifc" / "_roundtrip_view.png"
-    render.convert("RGB").save(view_path)
+    def _flush() -> None:
+        """Пишем файл --save после КАЖДОГО прогона: живой сбой в середине
+        серии (сеть/модель) не теряет уже оплаченные прогоны."""
+        save.parent.mkdir(parents=True, exist_ok=True)
+        save.write_text(json.dumps(
+            {"label": label, "scenario": scenario, "image": str(src_img),
+             "runs": runs, "summary": _summarize(runs)},
+            ensure_ascii=False, indent=1), encoding="utf-8")
 
-    frac = _content_fraction(render)
-    print(f"content fraction рендера: {frac:.1%}")
-    assert frac > MIN_CONTENT_FRACTION, "рендер вьювера пуст (модель не видна)"
+    for i in range(runs_n if not ifc_arg else 1):
+        if ifc_arg:
+            res = {"name": ifc_arg, "camHint": None, "verify": None}
+        else:
+            res = _generate(scenario, "ab harness run", src_img)
+        # contract_issues/agree_rate живут в дампе сервера (history только
+        # там; Semaphore(1) = дамп соответствует этому прогону)
+        dump = {}
+        try:
+            dump = json.loads(
+                (ROOT / "data" / "ifc" / "_threed_last.json")
+                .read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        hist = (dump.get("verify") or {}).get("history") or []
+        render = _viewer_render(res["name"], res.get("camHint"))
+        view_path = ROOT / "data" / "ifc" / "_roundtrip_view.png"
+        render.convert("RGB").save(view_path)
+        frac = _content_fraction(render)
+        assert frac > MIN_CONTENT_FRACTION, "рендер вьювера пуст"
+        verdict = _judge(src, view_path)
+        ens = res.get("ensemble") or dump.get("ensemble") or {}
+        usage = res.get("usage") or {}
+        runs.append({"name": res["name"], "score": int(verdict["score"]),
+                     "match": bool(verdict["match"]),
+                     "content_fraction": round(frac, 4),
+                     "cost_usd": usage.get("cost_usd"),
+                     "structural_ok": ((res.get("structural") or {})
+                                       .get("ok")),
+                     "contract_issues": (len(hist[-1].get("contract_issues")
+                                             or []) if hist else 0),
+                     "agree_rate": ens.get("agree_rate")})
+        print(f"run {i + 1}/{runs_n}: score={verdict['score']} "
+              f"cost={usage.get('cost_usd')}")
+        if save:
+            _flush()
 
-    verdict = _judge(src, view_path)
-    print(f"судья-VLM [{verdict['model']}]: score={verdict['score']} "
-          f"match={verdict['match']} issues={verdict['issues']}")
-    assert 0 <= int(verdict["score"]) <= 100
-    assert int(verdict["score"]) >= MIN_VLM_SCORE, \
-        f"score {verdict['score']} < {MIN_VLM_SCORE}: модель не похожа на вход"
-
-    (ROOT / "data" / "ifc" / "_roundtrip_last.json").write_text(
-        json.dumps({"src": str(DEFAULT_IMG), "ifc": res["name"],
-                    "content_fraction": round(frac, 4), "judge": verdict},
-                   ensure_ascii=False, indent=1), encoding="utf-8")
-    print(f"ROUNDTRIP OK: {src.name} -> {res['name']} -> {view_path.name} "
-          f"(score {verdict['score']})")
+    summary = _summarize(runs)
+    print(f"[{label}] {scenario} {src_img.name}: median score "
+          f"{summary['median_score']}, cost {summary['median_cost_usd']}")
+    if save:
+        _flush()
+        print("сохранено:", save)
 
 
 if __name__ == "__main__":

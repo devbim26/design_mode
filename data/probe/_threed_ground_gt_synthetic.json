@@ -1,0 +1,136 @@
+[
+ {
+  "image": "gt_plan_synthetic.png",
+  "scenario": "plan",
+  "metres_per_pixel": 0.25,
+  "boxes": [
+   {
+    "label": "building",
+    "box": [
+     120,
+     120,
+     420,
+     320
+    ],
+    "meta": {
+     "use": "Residential",
+     "floors": 5
+    }
+   },
+   {
+    "label": "building",
+    "box": [
+     520,
+     120,
+     888,
+     296
+    ],
+    "meta": {
+     "use": "School",
+     "floors": 3
+    }
+   },
+   {
+    "label": "building",
+    "box": [
+     160,
+     470,
+     360,
+     660
+    ],
+    "meta": {
+     "use": "Kindergarten",
+     "floors": 2
+    }
+   },
+   {
+    "label": "sport",
+    "box": [
+     440,
+     420,
+     576,
+     556
+    ]
+   },
+   {
+    "label": "parking",
+    "box": [
+     700,
+     470,
+     710,
+     490
+    ]
+   }
+  ]
+ },
+ {
+  "image": "gt_interior_synthetic.png",
+  "scenario": "interior",
+  "metres_per_pixel": 0.01,
+  "boxes": [
+   {
+    "label": "room",
+    "box": [
+     60,
+     60,
+     460,
+     350
+    ],
+    "meta": {
+     "name": "Living"
+    }
+   },
+   {
+    "label": "room",
+    "box": [
+     60,
+     350,
+     460,
+     640
+    ],
+    "meta": {
+     "name": "Bedroom"
+    }
+   },
+   {
+    "label": "room",
+    "box": [
+     460,
+     60,
+     840,
+     640
+    ],
+    "meta": {
+     "name": "Kitchen"
+    }
+   },
+   {
+    "label": "door",
+    "box": [
+     455,
+     190,
+     465,
+     280
+    ]
+   },
+   {
+    "label": "door",
+    "box": [
+     160,
+     345,
+     250,
+     355
+    ]
+   },
+   {
+    "label": "window",
+    "box": [
+     835,
+     200,
+     845,
+     320
+    ]
+   }
+  ]
+ }
+]
