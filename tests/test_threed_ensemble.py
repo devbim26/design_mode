@@ -106,6 +106,39 @@ def test_merge_average_and_referee():
     print("test_merge_average_and_referee OK")
 
 
+def test_merge_flag_field_types():
+    """C1 (финальное ревью): flag-поля (entrance) в merge берут ИСХОДНОЕ
+    значение B (dict | None), а не нормализованное 0/1 из compare — иначе
+    build_facade падает на e["x_m"], роняя генерацию (инвариант «сбой части
+    ансамбля — warning + работа с A»)."""
+    # (a) A без входа, B со входом, реферти выбрал B -> merged = DICT из B
+    A = _facade(entrance=False)
+    B = _facade(entrance=True)
+    cmp = E.compare_scenes("facade", A, B)
+    assert cmp["disputed"] == {"entrance": (0, 1)}, cmp["disputed"]
+    scene, _, wns = E.merge_scenes(
+        "facade", A, B, cmp, referee=lambda f: {"choices": {"entrance": "B"}})
+    assert isinstance(scene["entrance"], dict), \
+        f"entrance должен быть dict из B, а не {scene['entrance']!r}"
+    assert scene["entrance"] == B["entrance"]
+    # доступ в стиле threed_build.build_facade не падает
+    e = scene["entrance"]
+    _ = e["x_m"] - 10.0, e["w_m"] / 2, e["style"]
+
+    # (b) A со входом, B без, реферти выбрал B -> merged = None («входа нет»)
+    A2, B2 = _facade(entrance=True), _facade(entrance=False)
+    cmp2 = E.compare_scenes("facade", A2, B2)
+    scene2, _, _ = E.merge_scenes(
+        "facade", A2, B2, cmp2, referee=lambda f: {"choices": {"entrance": "B"}})
+    assert scene2["entrance"] is None, repr(scene2["entrance"])
+
+    # (c) реферти выбрал A -> dict из A остаётся как был
+    scene3, _, _ = E.merge_scenes(
+        "facade", A, B, cmp, referee=lambda f: {"choices": {"entrance": "A"}})
+    assert scene3["entrance"] is None
+    print("test_merge_flag_field_types OK")
+
+
 def test_referee_prompt_shape():
     assert "A" in E.SYSTEM_REFEREE and "B" in E.SYSTEM_REFEREE
     s = {"windows": {"rows": 2}}
@@ -399,6 +432,7 @@ if __name__ == "__main__":
     test_compare_disputes()
     test_skip_dispute_two_cells()
     test_merge_average_and_referee()
+    test_merge_flag_field_types()
     test_referee_prompt_shape()
     test_compare_plan()
     test_merge_plan_component()

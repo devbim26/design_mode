@@ -122,8 +122,12 @@ def _generate(scenario: str, prompt: str, img_path: Path) -> dict:
     assert r.status_code == 200, f"generate {r.status_code}: {r.text[:300]}"
     job = r.json()["jobId"]
     while time.time() - t0 < 1800:  # очередь Semaphore(1) + минуты конвейера
-        j = requests.get(f"{BASE}/api/v1/threed/jobs/{job}",
-                         cookies=cookies, timeout=30).json()
+        r = requests.get(f"{BASE}/api/v1/threed/jobs/{job}",
+                         cookies=cookies, timeout=30)
+        if r.status_code != 200:  # гейт/авторизация посреди серии — сразу
+            raise RuntimeError(
+                f"jobs GET {job} -> HTTP {r.status_code}: {r.text[:200]}")
+        j = r.json()
         if j["status"] == "done":
             res = j["result"]
             break
@@ -230,10 +234,12 @@ def main() -> None:
 
     def _flush() -> None:
         """Пишем файл --save после КАЖДОГО прогона: живой сбой в середине
-        серии (сеть/модель) не теряет уже оплаченные прогоны."""
+        серии (сеть/модель) не теряет уже оплаченные прогоны. incomplete —
+        маркер неполноты для шага merge (финальный флэш даёт False)."""
         save.parent.mkdir(parents=True, exist_ok=True)
         save.write_text(json.dumps(
             {"label": label, "scenario": scenario, "image": str(src_img),
+             "incomplete": len(runs) < runs_n,
              "runs": runs, "summary": _summarize(runs)},
             ensure_ascii=False, indent=1), encoding="utf-8")
 

@@ -232,7 +232,8 @@ def _budget_left() -> bool:
     return _attempt_calls[0] < _max_calls()
 
 
-def _vlm_counted(system: str, prompt: str, image_url: str | None, model: str) -> str:
+def _vlm_counted(system: str, prompt: str, image_url: "str | list[str] | None",
+                 model: str) -> str:
     """_call_vlm под бюджетом попытки (п.60 з.6). Счётчик живёт ЗДЕСЬ, а не
     в теле _call_vlm: роутерные тесты подменяют R._call_vlm целиком —
     замоканные вызовы тоже обязаны платить бюджет (иначе лимит не видит B/
@@ -294,7 +295,8 @@ def _to_dataurl(pil) -> str:
     return "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-def _call_vlm(system: str, prompt: str, image_url: str | None, model: str) -> str:
+def _call_vlm(system: str, prompt: str, image_url: "str | list[str] | None",
+              model: str) -> str:
     """Запрос в ImageRouter chat completions (паттерн prompt_enhancer.call_vlm).
     image_url=None — text-only вызов (ремонт JSON п.56: числовая/семантическая
     правка, зрение не нужно). Возвращает СЫРОЙ ответ (разбор — на вызывающем).
@@ -475,6 +477,10 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
         """Двухканальный режим (п.60): B (grounding|text) -> compare ->
         merge (реферти по спорам, <=1 вызов) -> регуляризация по гейту.
         ЛЮБОЙ сбой — warning + исходная A (не хуже текущего поведения)."""
+        # I1 (финальное ревью): якорь попытки N не должен переживать попытку
+        # N+1 — оверлей verify следующей попытки не заякоривается на бокс B
+        # предыдущей (и не остаётся после B без building)
+        ens_hint[0] = None
         if not _ensemble_enabled():
             return scene, None, []
         wns = []
@@ -535,11 +541,15 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
                 return threed_scenarios.extract_json(raw)
 
             _usage_stage[0] = "ensemble"
+            # I2 (финальное ревью): решение о реферти фиксируем ДО merge —
+            # успешно отработавший реферти, занявший последний слот бюджета,
+            # не должен рождать ложный «реферти за бюджетом»
+            referee_pass = bool(cmp["disputed"]) and _budget_left()
             scene, confidence, m_wns = threed_ensemble.merge_scenes(
                 scenario, scene, b_scene, cmp,
-                referee=referee if cmp["disputed"] and _budget_left() else None)
+                referee=referee if referee_pass else None)
             wns += m_wns
-            if cmp["disputed"] and not _budget_left():
+            if cmp["disputed"] and not referee_pass:
                 wns.append("ансамбль: реферти за бюджетом — спорные из A")
             info["agree_rate"] = confidence["agree_rate"]
             info["disputed_fields"] = confidence["disputed_fields"]
@@ -698,7 +708,8 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
                             "contract_issues": [],
                             "scene_summary": None,
                             "verdict": {"ok": None,
-                                        "error": f"attempt failed: {e}"}})
+                                        "error": f"attempt failed: {e}"},
+                            "ensemble": None})  # ключ есть и у сбойных попыток
             return None
         attempt_files.append((ifc_path, preview_path))
         # п.58: структурные проверки собранного IFC — всегда (бесплатные,

@@ -9,7 +9,6 @@ floor_height d>10%; windows.rows / windows.cols — несовпадение;
 windows.skip — d>=2 клеток; entrance — 0/1 (d>=1)."""
 
 import copy
-import math
 
 SYSTEM_REFEREE = """You are a geometry referee. The attached image was analyzed
 by two independent extraction passes (A and B); they disagree on a few fields.
@@ -275,8 +274,13 @@ def merge_scenes(scenario, A, B, cmp, referee=None):
                     _set(scene, f, round((a + b) / 2, 3))
         for f, (a, b) in disputed.items():
             pick = choices.get(f)
-            if pick == "B" and b is not None:
-                _set(scene, f, copy.deepcopy(b))
+            if pick == "B":
+                # ИСХОДНОЕ значение B: flag-поля (entrance) попадают в
+                # disputed нормализованными 0/1, а реальное значение —
+                # dict|None; int ломал build_facade (e["x_m"]) и ронял
+                # генерацию (C1 финального ревью). B=None при вердикте B
+                # легитимен: сцена получает «входа нет»
+                _set(scene, f, copy.deepcopy(_get(B, f)))
             elif f not in choices:
                 warnings.append(f"ансамбль: спор {f} не решён — вариант A")
     elif scenario == "plan":

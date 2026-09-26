@@ -289,6 +289,9 @@ def facade_boxes_to_scene(payload, img_w, img_h):
         scale = (floors * ANCHOR_STOREY) / b_h
     if not scale and med_h > 2:
         scale = ANCHOR_WINDOW_H / med_h
+    if not scale:
+        # все якоря вырождены (боксы <2 px) — метрики считать нечем
+        return {}, ["facade B: масштаб не определён — сцена B пустая"]
     leftmost = min(b["x1"] for b in wins)
     topmost = min(b["y1"] for b in wins)
     entrance = None
@@ -510,7 +513,7 @@ def run_ground_pass(scenario, image_url, model, call_vlm):
                    image_url, model)
     payload = threed_scenarios.extract_json(raw)
     if payload is None:
-        return None, [f"grounding B: ответ не JSON ({raw[:80]!r})"]
+        return None, [f"grounding B: ответ не JSON ({str(raw)[:80]!r})"]
     return payload, []
 
 
@@ -524,5 +527,5 @@ def run_text_pass(scenario, user_prompt, image_url, model, call_vlm):
     raw = call_vlm(system, user_prompt, image_url, model)
     scene = threed_scenarios.extract_json(raw)
     if scene is None:
-        return None, [f"text B: ответ не JSON ({raw[:80]!r})"]
+        return None, [f"text B: ответ не JSON ({str(raw)[:80]!r})"]
     return scene, []

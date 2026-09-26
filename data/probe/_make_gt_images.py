@@ -12,7 +12,6 @@
 Запуск: venv\\Scripts\\python.exe data\\probe\\_make_gt_images.py
 """
 import json
-import sys
 from pathlib import Path
 
 from PIL import Image, ImageDraw
@@ -85,7 +84,8 @@ def draw_interior() -> dict:
 def main() -> None:
     gt = [draw_plan(), draw_interior()]
     (OUT / "_threed_ground_gt_synthetic.json").write_text(
-        json.dumps(gt, ensure_ascii=False, indent=1), encoding="utf-8")
+        json.dumps(gt, ensure_ascii=False, indent=1) + "\n",
+        encoding="utf-8")
     print("OK:", ", ".join(e["image"] for e in gt),
           "+ _threed_ground_gt_synthetic.json")
 

@@ -68,15 +68,53 @@ def test_rdp_orthogonalize():
     # RDP: коллинеарная точка выбрасывается
     pts = [[0, 0], [5, 0], [10, 0], [10, 10]]
     assert RG.rdp(pts, eps=0.5) == [[0, 0], [10, 0], [10, 10]]
-    # ортогонализация: ребро 88° снапится к 90°, эркер 67.5° не трогается
+    # ортогонализация: огрызок 3 px против хода снапится к ребру и глотается
+    # вместе с продолжением — чистое вертикальное ребро, БЕЗ дубля вершины
+    # (C2: маркер дубля убран; до фикса тут был [100,0],[100,0])
     nearly = [[0, 0], [100, 0], [100, -3], [100, 100]]  # ребро ~88.3°
     fixed = RG.orthogonalize(nearly, tol_deg=15.0, step_deg=90.0)
-    assert fixed[2] == [100, 0], fixed  # снап к горизонтальному ребру
+    assert fixed == [[0.0, 0.0], [100.0, 0.0], [100.0, 100.0]], fixed
     bay = [[0, 0], [38, 0], [52, -16], [66, 0], [104, 0], [104, 50],
            [0, 50]]  # рёбра эркера ~66-68°
     same = RG.orthogonalize(bay, tol_deg=15.0, step_deg=90.0)
     assert same == bay, "эркер вне допуска 15° — не трогаем"
     print("test_rdp_orthogonalize OK")
+
+
+def test_orthogonalize_zigzag_stays_valid():
+    """C2 (финальное ревью): 3-рёберный зигзаг-шум на ребре (вход ревьюера —
+    валидный контур) не должен превращаться в шип/самопересечение после
+    схлопывания разворота; дублей вершин тоже нет (нулевой длины рёбер)."""
+    from shapely.geometry import Polygon
+    pts = [[100, 100], [300, 100], [310, 101], [295, 99],
+           [420, 100], [420, 300], [100, 300]]
+    assert Polygon(pts).is_valid, "вход ревьюера обязан быть валидным"
+    out = RG.orthogonalize(pts, tol_deg=15.0, step_deg=90.0)
+    assert Polygon(out).is_valid, f"выход самопересекается: {out}"
+    assert all(out[i] != out[i - 1] for i in range(1, len(out))), \
+        f"дубли подряд идущих вершин: {out}"
+    print("test_orthogonalize_zigzag_stays_valid OK")
+
+
+def test_regularize_plan_reverts_invalid():
+    """C2-b (финальное ревью): страховочная сеть — секция, чей контур после
+    ортоснапа+RDP стал невалидным, откатывается к ИСХОДНЫМ точкам + warning
+    (регуляризация не роняет и не ломает план)."""
+    orig_pts = [[0, 0], [100, 0], [100, 100], [0, 100]]
+    scene = {"sections": [{"id": "X", "floors": 2, "points_px":
+                           [list(p) for p in orig_pts]}]}
+    bad = [[0, 0], [100, 0], [100, 100], [100, 40], [40, 40]]  # шип
+    saved = RG.orthogonalize
+    RG.orthogonalize = lambda pts, **kw: [list(p) for p in bad]  # деградация
+    try:
+        wns = []
+        RG.regularize_plan(scene, wns)
+    finally:
+        RG.orthogonalize = saved
+    assert scene["sections"][0]["points_px"] == orig_pts, \
+        scene["sections"][0]["points_px"]
+    assert any("откат" in w for w in wns), wns
+    print("test_regularize_plan_reverts_invalid OK")
 
 
 def test_regularize_plan():
@@ -144,6 +182,8 @@ if __name__ == "__main__":
     test_snaps()
     test_symmetry_mirror()
     test_rdp_orthogonalize()
+    test_orthogonalize_zigzag_stays_valid()
+    test_regularize_plan_reverts_invalid()
     test_regularize_plan()
     test_regularize_interior()
     print("ALL OK")

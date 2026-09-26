@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from invokeai.app.api.routers.threed import (  # noqa: E402  (venv-копии)
-    _call_vlm, _prepare_png, _to_dataurl, _vlm_list_cached)
+    _call_vlm, _to_dataurl, _vlm_list_cached)
 from invokeai.app.api.routers import threed_scenarios  # noqa: E402
 from threed import threed_ground as G  # noqa: E402  (дерево — источник правды)
 
