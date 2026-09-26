@@ -94,7 +94,11 @@ def regularize(scenario, scene, confidence, warnings):
         return scene
     if scenario == "facade":
         return regularize_facade(scene)
-    return scene  # plan/interior — Task 9
+    if scenario == "plan":
+        return regularize_plan(scene)
+    if scenario == "interior":
+        return regularize_interior(scene)
+    return scene
 
 
 def regularize_facade(scene):
@@ -125,4 +129,73 @@ def regularize_facade(scene):
                     for i in range(half):
                         row[i] = row[cols - 1 - i]
                 # средний столбец (cols нечётное) не трогаем
+    return scene
+
+
+def regularize_plan(scene):
+    """Ортоснап рёбер (<15°), RDP при >8 вершинах, снятие взаимных
+    пересечений футпринтов (поздние минус ранние, порядок секций A)."""
+    for sec in scene.get("sections") or []:
+        pts = sec.get("points_px") or []
+        if len(pts) >= 3:
+            pts = orthogonalize(pts, tol_deg=15.0, step_deg=90.0)
+            if len(pts) > 8:
+                pts = rdp(pts, eps=2.0)
+            sec["points_px"] = pts
+    # пересечения: секция i+1 обрезается о секцию i (shapely difference)
+    try:
+        from shapely.geometry import Polygon
+        polys = []
+        for sec in scene.get("sections") or []:
+            p = Polygon(sec["points_px"])
+            for q in polys:
+                p = p.difference(q)
+            if not p.is_empty and p.area > 1.0:
+                if p.geom_type == "Polygon":
+                    sec["points_px"] = [[round(x), round(y)]
+                                        for x, y in p.exterior.coords[:-1]]
+                    polys.append(Polygon(sec["points_px"]))
+                else:  # развалилось на куски — берём крупнейший
+                    biggest = max(p.geoms, key=lambda g: g.area)
+                    sec["points_px"] = [[round(x), round(y)]
+                                        for x, y in biggest.exterior.coords[:-1]]
+                    polys.append(Polygon(sec["points_px"]))
+    except Exception:
+        pass  # shapely недоступен/контур битый — регуляризация не роняет
+    return scene
+
+
+def regularize_interior(scene):
+    """Снап рёбер стен к k*45° в допуске 15° (прямой угол и 45° — типовые;
+    эркер 67.5° не задевается: до 90° и 45° по 22.5°), кламп толщин в
+    диапазоны спеки (наружные 0.3-0.4, перегородки 0.1-0.15), замыкание
+    комнат buffer(0)."""
+    for wall in scene.get("walls") or []:
+        pts = wall.get("points_px")
+        if pts and len(pts) == 2:
+            ang = math.degrees(math.atan2(pts[1][1] - pts[0][1],
+                                          pts[1][0] - pts[0][0]))
+            sn = _snap_angle(ang, 15.0, 45.0)
+            if sn != ang:
+                L = math.hypot(pts[1][0] - pts[0][0], pts[1][1] - pts[0][1])
+                a = math.radians(sn)
+                pts[1] = [pts[0][0] + L * math.cos(a),
+                          pts[0][1] + L * math.sin(a)]
+        t = wall.get("thickness_m")
+        if isinstance(t, (int, float)):
+            if wall.get("exterior"):
+                wall["thickness_m"] = min(max(float(t), 0.3), 0.4)
+            else:
+                wall["thickness_m"] = min(max(float(t), 0.1), 0.15)
+    for room in scene.get("rooms") or []:
+        pts = room.get("points_px")
+        if pts and len(pts) >= 3:
+            try:
+                from shapely.geometry import Polygon
+                p = Polygon(pts).buffer(0)
+                if not p.is_empty and p.geom_type == "Polygon":
+                    room["points_px"] = [[round(x), round(y)]
+                                         for x, y in p.exterior.coords[:-1]]
+            except Exception:
+                pass
     return scene

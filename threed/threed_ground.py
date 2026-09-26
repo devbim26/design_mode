@@ -9,6 +9,11 @@ try:  # в venv threed_scenarios лежит рядом; в дереве — па
 except ImportError:
     from threed import threed_scenarios
 
+try:  # ортогонализация рёбер — общий хелпер regular (venv | дерево)
+    from invokeai.app.api.routers import threed_regular
+except ImportError:
+    from threed import threed_regular
+
 # какие метки принимает каждая тема (чужие — мусор, дроп с warning)
 GROUND_LABELS = {
     "facade": {"window", "door", "building"},
@@ -315,8 +320,182 @@ def facade_pixel_hint(payload, img_w, img_h):
     return (b["x1"], b["y1"], b["x2"], b["y2"]) if b else None
 
 
-# конвертеры по темам (plan/interior — Task 9); роутер зовёт через словарь
-CONVERTERS = {"facade": facade_boxes_to_scene}
+def lsq_scale(pairs):
+    """МНК-масштаб по якорям (px, м): scale = sum(px*m)/sum(px*px).
+    0.0 = якорей нет (вызывающий берёт scale_hint/дефолт)."""
+    if not pairs:
+        return 0.0
+    sx = sum(px * m for px, m in pairs)
+    sxx = sum(px * px for px, m in pairs)
+    return sx / sxx if sxx > 0 else 0.0
+
+
+def _scale_from_anchors(boxes, hint, lo=0.05, hi=10.0):
+    """Масштаб плана: parking (2.5x5) + sport (17x34) якоря -> МНК; иначе
+    hint; иначе дефолт генплана."""
+    anchors = []
+    for b in boxes:
+        w, h = b["x2"] - b["x1"], b["y2"] - b["y1"]
+        if b["label"] == "parking":
+            anchors += [(min(w, h), ANCHOR_PARKING[0]), (max(w, h), ANCHOR_PARKING[1])]
+        elif b["label"] == "sport":
+            anchors += [(min(w, h), ANCHOR_SPORT[0]), (max(w, h), ANCHOR_SPORT[1])]
+    scale = lsq_scale(anchors)
+    if not (lo <= scale <= hi):
+        try:
+            scale = float(hint or 0) or threed_scenarios.DEFAULT_SCALE
+        except (TypeError, ValueError):
+            scale = threed_scenarios.DEFAULT_SCALE
+    return scale
+
+
+def plan_boxes_to_scene(payload, img_w, img_h):
+    """Боксы генплана -> raw-сцена validate_genplan. Ортогонализация контуров
+    — в regularize_plan (з.4); тут прямоугольники боксов как есть.
+    threed_regular импортирован в шапке модуля (try/except venv|дерево)."""
+    boxes, meta, warnings = normalize_boxes(payload, img_w, img_h, "plan")
+    blds = [b for b in boxes if b["label"] == "building"]
+    if not blds:
+        return {}, ["plan B: нет боксов зданий — сцена B пустая"]
+    scale = _scale_from_anchors(boxes, meta.get("scale_hint"))
+    sections_meta = meta.get("sections") if isinstance(
+        meta.get("sections"), list) else []
+    sections = []
+    for i, b in enumerate(blds):
+        m = sections_meta[i] if i < len(sections_meta) and isinstance(
+            sections_meta[i], dict) else {}
+        use = m.get("use")
+        if use not in ("Residential", "School", "Kindergarten"):
+            use = "Residential"
+        try:
+            floors = int(m.get("floors") or 5)
+        except (TypeError, ValueError):
+            floors = 5
+        pts = threed_regular.orthogonalize(
+            [[b["x1"], b["y1"]], [b["x2"], b["y1"]],
+             [b["x2"], b["y2"]], [b["x1"], b["y2"]]])
+        sections.append({"id": f"B{i + 1}", "building": f"B{i + 1}",
+                         "use": use, "floors": max(1, min(30, floors)),
+                         "points_px": pts, "partial": False})
+    scene = {"trace_width": int(img_w), "trace_height": int(img_h),
+             "metres_per_trace_pixel": round(scale, 4),
+             "residential_storey_height": 3.1, "public_storey_height": 3.3,
+             "sections": sections,
+             "context": [{"kind": "Ground", "z": -0.45, "depth": 0.35,
+                          "points_px": [[0, 0], [img_w, 0],
+                                        [img_w, img_h], [0, img_h]]}]}
+    return scene, warnings
+
+
+def _collinear_contained(a, b):
+    """Отрезок a содержится в коллинеарном b (допуск 1 px)."""
+    (ax1, ay1), (ax2, ay2) = a
+    (bx1, by1), (bx2, by2) = b
+    cross = (ax2 - ax1) * (by2 - by1) - (ay2 - ay1) * (bx2 - bx1)
+    if abs(cross) > 1e-6 * (1 + abs(bx2 - bx1) + abs(by2 - by1)):
+        return False
+
+    def within(px, py):
+        return (min(bx1, bx2) - 1 <= px <= max(bx1, bx2) + 1
+                and min(by1, by2) - 1 <= py <= max(by1, by2) + 1)
+
+    return within(ax1, ay1) and within(ax2, ay2)
+
+
+def interior_boxes_to_scene(payload, img_w, img_h):
+    """Боксы плана этажа -> raw-сцена validate_interior: outline = union
+    комнат, стены = рёбра комнат (общие/поглощённые рёбра схлопываются,
+    выжившее ребро между комнатами = внутренняя стена), проёмы к ближайшей
+    стене. Толщины: все 0.35 (наружная), общие рёбра помечаются interior;
+    нормализация толщин — regularize_interior (з.4)."""
+    import math as _math
+    from shapely.geometry import Polygon
+    boxes, meta, warnings = normalize_boxes(payload, img_w, img_h, "interior")
+    rooms = [b for b in boxes if b["label"] == "room"]
+    ops = [b for b in boxes if b["label"] in ("door", "window")]
+    if not rooms:
+        return {}, ["interior B: нет боксов комнат — сцена B пустая"]
+    # якорь двери: ДЛИННАЯ сторона бокса = ширина проёма 0.9 м (короткая —
+    # толщина стены, не масштаб)
+    door_ws = [max(b["x2"] - b["x1"], b["y2"] - b["y1"]) for b in ops
+               if b["label"] == "door"]
+    scale = ANCHOR_DOOR_W / _med(door_ws) if door_ws else 0.0
+    try:
+        hint = float(meta.get("scale_hint") or 0)
+    except (TypeError, ValueError):
+        hint = 0.0
+    if not (0.001 <= scale <= 0.5):
+        scale = hint or 0.01
+    # outline: union прямоугольников комнат
+    uni = None
+    for r in rooms:
+        p = Polygon([(r["x1"], r["y1"]), (r["x2"], r["y1"]),
+                     (r["x2"], r["y2"]), (r["x1"], r["y2"])])
+        uni = p if uni is None else uni.union(p)
+    outline = [[round(x), round(y)] for x, y in
+               list(uni.exterior.coords)[:-1]] if uni and uni.is_valid else []
+
+    def edges(r):
+        x1, y1, x2, y2 = r["x1"], r["y1"], r["x2"], r["y2"]
+        return [[(x1, y1), (x2, y1)], [(x2, y1), (x2, y2)],
+                [(x2, y2), (x1, y2)], [(x1, y2), (x1, y1)]]
+
+    # стены: рёбра по убыванию длины; ребро, содержащееся в уже принятом
+    # коллинеарном, НЕ добавляется, а помечает то внутренним (граница комнат)
+    edges_all = [e for r in rooms for e in edges(r)]
+    edges_all.sort(key=lambda e: -_math.hypot(e[1][0] - e[0][0],
+                                              e[1][1] - e[0][1]))
+    walls = []
+    for e in edges_all:
+        hit = False
+        for w in walls:
+            if _collinear_contained(e, w["points_px"]):
+                w["exterior"] = False
+                hit = True
+        if not hit:
+            walls.append({"points_px": [list(e[0]), list(e[1])],
+                          "thickness_m": 0.35, "exterior": True})
+
+    openings = []
+    for b in ops:
+        cx, cy = (b["x1"] + b["x2"]) / 2, (b["y1"] + b["y2"]) / 2
+        best, best_d = None, 1e18
+        for wi, wl in enumerate(walls):
+            (ax, ay), (bx2, by2) = wl["points_px"]
+            dx, dy = bx2 - ax, by2 - ay
+            L2 = dx * dx + dy * dy or 1.0
+            t = max(0.0, min(1.0, ((cx - ax) * dx + (cy - ay) * dy) / L2))
+            px, py = ax + t * dx, ay + t * dy
+            d = (cx - px) ** 2 + (cy - py) ** 2
+            if d < best_d:
+                best, best_d = (wi, t), d
+        if best is None:
+            continue
+        wi, t = best
+        (ax, ay), (bx2, by2) = walls[wi]["points_px"]
+        L = _math.hypot(bx2 - ax, by2 - ay)
+        openings.append({
+            "wall_idx": wi,
+            "x_px": round(t * L, 1),
+            "width_m": round(max(b["x2"] - b["x1"], b["y2"] - b["y1"]) * scale, 2),
+            "height_m": 2.1 if b["label"] == "door" else 1.5,
+            "sill_m": 0.0 if b["label"] == "door" else 0.9,
+            "kind": b["label"]})
+    scene = {"trace_width": int(img_w), "trace_height": int(img_h),
+             "metres_per_trace_pixel": round(scale, 4), "wall_height": 2.7,
+             "outline": outline, "walls": walls, "openings": openings,
+             "rooms": [{"name": f"Room {i + 1}", "type": "other",
+                        "points_px": [[r["x1"], r["y1"]], [r["x2"], r["y1"]],
+                                      [r["x2"], r["y2"]], [r["x1"], r["y2"]]]}
+                       for i, r in enumerate(rooms)],
+             "furniture": []}
+    return scene, warnings
+
+
+# конвертеры по темам (роутер зовёт через словарь)
+CONVERTERS = {"facade": facade_boxes_to_scene,
+              "plan": plan_boxes_to_scene,
+              "interior": interior_boxes_to_scene}
 
 
 # ===================== рантайм прогона B (вызов VLM) =====================

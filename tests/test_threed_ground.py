@@ -153,6 +153,72 @@ def test_facade_converter_edges():
     print("test_facade_converter_edges OK")
 
 
+def test_lsq_scale():
+    # синтетика плана: 0.25 м/px; якорь спорт 68px/17м + 136px/34м + стойло
+    # 10px/2.5м (пара 68px/34м из плана — опечатка: 68px = 17м при 0.25)
+    s = G.lsq_scale([(68, 17.0), (136, 34.0), (10, 2.5)])
+    assert abs(s - 0.25) < 0.01, s
+    assert G.lsq_scale([]) == 0.0
+    print("test_lsq_scale OK")
+
+
+def test_plan_and_interior_converters():
+    # план из генератора Task 1: 3 корпуса + sport + parking
+    import json as _json
+    gt = _json.loads((ROOT / "data" / "probe" /
+                      "_threed_ground_gt_synthetic.json").read_text(encoding="utf-8"))
+    plan_entry = next(e for e in gt if e["scenario"] == "plan")
+    payload = {"boxes": [{"label": "building", "x1": b["box"][0],
+                          "y1": b["box"][1], "x2": b["box"][2],
+                          "y2": b["box"][3]} for b in plan_entry["boxes"]
+                         if b["label"] == "building"]
+               # спорт 68x136 px = 17x34 м при 0.25 м/px (бокс фикстуры
+               # 136x136 противоречит комментарию генератора — тут 17 м
+               # шириной, иначе МНК даёт 0.188 вместо 0.25)
+               + [{"label": "sport", "x1": 440, "y1": 420,
+                   "x2": 508, "y2": 556},
+                  {"label": "parking", "x1": 700, "y1": 470,
+                   "x2": 710, "y2": 490}],
+               "meta": {"sections": [
+                   {"use": "Residential", "floors": 5},
+                   {"use": "School", "floors": 3},
+                   {"use": "Kindergarten", "floors": 2}]}}
+    scene, wns = G.plan_boxes_to_scene(payload, 1024, 768)
+    assert len(scene["sections"]) == 3 and not wns, wns
+    assert abs(scene["metres_per_trace_pixel"] - 0.25) < 0.02, \
+        scene["metres_per_trace_pixel"]  # МНК по двум якорям
+    assert scene["sections"][1]["use"] == "School"
+    assert scene["context"][0]["kind"] == "Ground"
+    from threed import threed_scenarios
+    fixed, _ = threed_scenarios.validate_genplan(dict(scene), 1024, 768)
+    assert len(fixed["sections"]) == 3
+
+    # интерьер: 3 комнаты генератора Task 1 (0.01 м/px)
+    payload2 = {"boxes": [
+        {"label": "room", "x1": 60, "y1": 60, "x2": 460, "y2": 350},
+        {"label": "room", "x1": 60, "y1": 350, "x2": 460, "y2": 640},
+        {"label": "room", "x1": 460, "y1": 60, "x2": 840, "y2": 640},
+        {"label": "door", "x1": 455, "y1": 190, "x2": 465, "y2": 280},
+        {"label": "door", "x1": 160, "y1": 345, "x2": 250, "y2": 355},
+        {"label": "window", "x1": 835, "y1": 200, "x2": 845, "y2": 320}],
+        "meta": {"scale_hint": 0.01}}
+    scene2, wns2 = G.interior_boxes_to_scene(payload2, 900, 700)
+    assert len(scene2["rooms"]) == 3
+    assert scene2["outline"], "union комнат -> outline"
+    assert abs(scene2["metres_per_trace_pixel"] - 0.01) < 0.002, \
+        "якорь: длинная сторона двери 90 px = 0.9 м"
+    # 12 рёбер комнат - 3 поглощённых (право Living, право Bedroom в левом
+    # ребре Kitchen; верх Bedroom в низе Living) = 9 стен; внутренние 2
+    # (ребро x=460 между Living/Bedroom и Kitchen; ребро y=350)
+    assert len(scene2["walls"]) == 9, scene2["walls"]
+    assert sum(1 for w in scene2["walls"] if w["exterior"]) == 7
+    assert len(scene2["openings"]) == 3
+    assert all(isinstance(o["wall_idx"], int) for o in scene2["openings"])
+    f2, w2, i2 = threed_scenarios.validate_interior(dict(scene2), 900, 700)
+    assert len(f2["rooms"]) == 3
+    print("test_plan_and_interior_converters OK")
+
+
 if __name__ == "__main__":
     test_compute_iou()
     test_normalize_boxes()
@@ -161,4 +227,6 @@ if __name__ == "__main__":
     test_pick_model()
     test_facade_boxes_to_scene()
     test_facade_converter_edges()
+    test_lsq_scale()
+    test_plan_and_interior_converters()
     print("ALL OK")

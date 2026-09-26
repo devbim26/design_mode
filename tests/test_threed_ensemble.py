@@ -115,6 +115,87 @@ def test_referee_prompt_shape():
     print("test_referee_prompt_shape OK")
 
 
+# ===================== plan + interior (Task 9) =====================
+
+def _plan_scene(n=3, floors=(5, 3, 2), scale=0.25):
+    def poly(i):
+        x = 100 + i * 250
+        return [[x, 100], [x + 200, 100], [x + 200, 300], [x, 300]]
+    return {"trace_width": 1024, "trace_height": 768,
+            "metres_per_trace_pixel": scale,
+            "residential_storey_height": 3.1, "public_storey_height": 3.3,
+            "sections": [{"id": f"B{i}", "building": f"B{i}",
+                          "use": "Residential", "floors": floors[i],
+                          "points_px": poly(i), "partial": False}
+                         for i in range(n)],
+            "context": [{"kind": "Ground", "z": -0.45, "depth": 0.35,
+                         "points_px": [[0, 0], [1024, 0], [1024, 768],
+                                       [0, 768]]}]}
+
+
+def test_compare_plan():
+    A = _plan_scene()
+    B = _plan_scene(floors=(5, 3, 5))          # спор floors (Δ=3 у 3-й)
+    cmp = E.compare_scenes("plan", A, B)
+    assert cmp["disputed"] == {"floors": (2, 5)}, cmp["disputed"]
+    B2 = _plan_scene(n=2)                      # спор числа секций
+    cmp2 = E.compare_scenes("plan", A, B2)
+    assert "sections_count" in cmp2["disputed"]
+    # IoU футпринтов: B сдвинул первую секцию на 150 px (>40% ширины)
+    B3 = _plan_scene()
+    B3["sections"][0]["points_px"] = [[400, 100], [600, 100],
+                                      [600, 300], [400, 300]]
+    cmp3 = E.compare_scenes("plan", A, B3)
+    assert "footprint_iou" in cmp3["disputed"], cmp3["disputed"]
+    print("test_compare_plan OK")
+
+
+def test_merge_plan_component():
+    A, B = _plan_scene(), _plan_scene(floors=(5, 3, 5))
+    cmp = E.compare_scenes("plan", A, B)
+    # реферти выбирает B по floors -> секции ЦЕЛИКОМ из B (компонентно)
+    scene, conf, wns = E.merge_scenes(
+        "plan", A, B, cmp, referee=lambda f: {"choices": {"floors": "B"}})
+    assert scene["sections"][2]["floors"] == 5
+    assert scene["metres_per_trace_pixel"] == 0.25  # scale не спорили
+    # большинство за A -> секции A
+    scene2, _, _ = E.merge_scenes(
+        "plan", A, B, cmp, referee=lambda f: {"choices": {}})
+    assert scene2["sections"][2]["floors"] == 2
+    print("test_merge_plan_component OK")
+
+
+def _interior_scene(rooms=3, doors=2, windows=1):
+    walls = [[(60, 60), (460, 60)], [(460, 60), (460, 640)],
+             [(460, 640), (60, 640)], [(60, 640), (60, 60)],
+             [(60, 350), (460, 350)]]
+    return {"trace_width": 900, "trace_height": 700,
+            "metres_per_trace_pixel": 0.01, "wall_height": 2.7,
+            "outline": [[60, 60], [460, 60], [460, 640], [60, 640]],
+            "walls": [{"points_px": list(w), "thickness_m": 0.35,
+                       "exterior": True} for w in walls],
+            "openings": ([{"wall_idx": 1, "x_px": 130.0, "width_m": 0.9,
+                           "height_m": 2.1, "sill_m": 0.0, "kind": "door"}]
+                         * doors
+                         + [{"wall_idx": 2, "x_px": 140.0, "width_m": 1.2,
+                             "height_m": 1.5, "sill_m": 0.9,
+                             "kind": "window"}] * windows),
+            "rooms": [{"name": f"R{i}", "type": "other",
+                       "points_px": [[60, 60], [300, 60], [300, 350],
+                                     [60, 350]]} for i in range(rooms)],
+            "furniture": []}
+
+
+def test_compare_interior():
+    A = _interior_scene()
+    B = _interior_scene(doors=4)
+    cmp = E.compare_scenes("interior", A, B)
+    assert cmp["disputed"] == {"doors_count": (2, 4)}, cmp["disputed"]
+    B2 = _interior_scene(rooms=5)
+    assert "rooms_count" in E.compare_scenes("interior", A, B2)["disputed"]
+    print("test_compare_interior OK")
+
+
 # ===================== роутерная часть (Task 8: изолятор + интеграция) =====================
 
 TMP = ROOT / "tests" / "_threed_tmp"
@@ -319,6 +400,9 @@ if __name__ == "__main__":
     test_skip_dispute_two_cells()
     test_merge_average_and_referee()
     test_referee_prompt_shape()
+    test_compare_plan()
+    test_merge_plan_component()
+    test_compare_interior()
     test_router_ensemble_happy_path()
     test_router_b_failure_falls_back()
     test_router_ensemble_disabled()
