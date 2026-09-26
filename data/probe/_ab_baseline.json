@@ -1,0 +1,137 @@
+{
+ "facade": {
+  "label": "baseline",
+  "scenario": "facade",
+  "image": "data\\probe\\vlm_test_house.png",
+  "runs": [
+   {
+    "name": "3D_facade_20260926-191444_r2.ifc",
+    "score": 38,
+    "match": false,
+    "content_fraction": 0.3643,
+    "cost_usd": 0.2271,
+    "structural_ok": true,
+    "contract_issues": 0,
+    "agree_rate": null
+   },
+   {
+    "name": "3D_facade_20260926-192109_r2.ifc",
+    "score": 38,
+    "match": false,
+    "content_fraction": 0.5232,
+    "cost_usd": 0.2376,
+    "structural_ok": true,
+    "contract_issues": 0,
+    "agree_rate": null
+   },
+   {
+    "name": "3D_facade_20260926-192702_r2.ifc",
+    "score": 44,
+    "match": false,
+    "content_fraction": 0.3588,
+    "cost_usd": 0.2622,
+    "structural_ok": true,
+    "contract_issues": 0,
+    "agree_rate": null
+   }
+  ],
+  "summary": {
+   "n": 3,
+   "median_score": 38,
+   "median_cost_usd": 0.2376,
+   "structural_clean_rate": 1.0,
+   "median_contract_issues": 0,
+   "agree_rate": null
+  }
+ },
+ "plan": {
+  "label": "baseline",
+  "scenario": "plan",
+  "image": "data\\probe\\gt_plan_synthetic.png",
+  "runs": [
+   {
+    "name": "3D_plan_20260926-193441.ifc",
+    "score": 95,
+    "match": true,
+    "content_fraction": 0.415,
+    "cost_usd": 0.0614,
+    "structural_ok": true,
+    "contract_issues": 0,
+    "agree_rate": null
+   },
+   {
+    "name": "3D_plan_20260926-193901.ifc",
+    "score": 88,
+    "match": true,
+    "content_fraction": 0.4155,
+    "cost_usd": 0.0432,
+    "structural_ok": true,
+    "contract_issues": 0,
+    "agree_rate": null
+   },
+   {
+    "name": "3D_plan_20260926-194242.ifc",
+    "score": 90,
+    "match": true,
+    "content_fraction": 0.4151,
+    "cost_usd": 0.0293,
+    "structural_ok": true,
+    "contract_issues": 0,
+    "agree_rate": null
+   }
+  ],
+  "summary": {
+   "n": 3,
+   "median_score": 90,
+   "median_cost_usd": 0.0432,
+   "structural_clean_rate": 1.0,
+   "median_contract_issues": 0,
+   "agree_rate": null
+  }
+ },
+ "interior": {
+  "label": "baseline",
+  "scenario": "interior",
+  "image": "data\\probe\\gt_interior_synthetic.png",
+  "runs": [
+   {
+    "name": "3D_interior_20260926-194955.ifc",
+    "score": 96,
+    "match": true,
+    "content_fraction": 0.62,
+    "cost_usd": 0.0743,
+    "structural_ok": true,
+    "contract_issues": 0,
+    "agree_rate": null
+   },
+   {
+    "name": "3D_interior_20260926-195234.ifc",
+    "score": 96,
+    "match": true,
+    "content_fraction": 0.62,
+    "cost_usd": 0.0426,
+    "structural_ok": true,
+    "contract_issues": 0,
+    "agree_rate": null
+   },
+   {
+    "name": "3D_interior_20260926-195500.ifc",
+    "score": 95,
+    "match": true,
+    "content_fraction": 0.62,
+    "cost_usd": 0.0464,
+    "structural_ok": true,
+    "contract_issues": 0,
+    "agree_rate": null
+   }
+  ],
+  "summary": {
+   "n": 3,
+   "median_score": 96,
+   "median_cost_usd": 0.0464,
+   "structural_clean_rate": 1.0,
+   "median_contract_issues": 0,
+   "agree_rate": null
+  }
+ }
+}
