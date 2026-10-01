@@ -17,11 +17,13 @@ sso (devbim.com) — обмен JWT-токена сайта на сессию с
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
-from urllib.parse import parse_qs, quote
+from urllib.parse import parse_qs, quote, unquote
 
 try:  # задеплоено в venv (пакет invokeai.app.api.routers)
     from invokeai.app.api.routers import studio_store
@@ -37,6 +39,16 @@ ME_PATH = "/api/v1/studio/me"
 TOKEN_SALT = "devbim-site-auth-v1:"
 LEGACY_MAX_AGE = 30 * 24 * 3600
 STUDIO_USER_HDR = b"x-studio-user"
+
+# --- маршруты изоляции владения (задача 3) ---
+_RE_BOARDS = re.compile(r"^/api/v1/boards/?$")
+_RE_BOARD_ID = re.compile(r"^/api/v1/boards/([^/]+)$")
+_RE_IMAGES = re.compile(r"^/api/v1/images/?$")
+_RE_IMAGE_ITEM = re.compile(r"^/api/v1/images/i/([^/]+)(?:/.*)?$")
+_RE_UPLOAD = re.compile(r"^/api/v1/images/upload/?$")
+_RE_IMAGES_BODY = re.compile(r"^/api/v1/images/(delete|download|star|unstar)/?$")
+_RE_QUEUE_LIST = re.compile(r"^/api/v1/session_queue/(?:|batches/?)$")
+_RE_WRITE_ADMIN = re.compile(r"^/api/v1/(style_presets|workflows)(?:/|$)")
 
 
 # ---------- .env / режимы ----------
@@ -291,8 +303,153 @@ class SiteAuthMiddleware:
         """Задача 7 заменяет на полную панель; здесь — заглушка-страница."""
         await _send_html(send, 200, _page("Админ", "<p>Админ-панель студии.</p>"))
 
-    # --- хук фильтрации (заполняет задача 3) ---
+    # ---------- изоляция владения (sso, role != admin) ----------
+    @staticmethod
+    def _visible(uid: str, owner_or_none: str | None) -> bool:
+        return owner_or_none == uid  # легаси без владельца видно только админу (он не фильтруется)
+
+    async def _proxy_json(self, scope, receive, send, mutator) -> None:
+        """Проксирует ответ приложения и правит JSON-тело через mutator(data)->data."""
+        status_code, headers, chunks = 200, [], []
+
+        async def wrapped(message):
+            if message["type"] == "http.response.start":
+                nonlocal status_code, headers
+                status_code, headers = message["status"], list(message.get("headers", []))
+            elif message["type"] == "http.response.body":
+                chunks.append(message.get("body", b""))
+
+        await self.app(scope, receive, wrapped)
+        raw = b"".join(chunks)
+        try:
+            data = json.loads(raw or b"{}")
+            data = mutator(data)
+            raw = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        except Exception:
+            pass  # не-JSON ответ -> пропускаем как есть
+        headers = [(k, v) for k, v in headers if k.lower() != b"content-length"]
+        headers.append((b"content-length", str(len(raw)).encode("latin-1")))
+        await send({"type": "http.response.start", "status": status_code, "headers": headers})
+        await send({"type": "http.response.body", "body": raw})
+
+    def _filter_list(self, uid: str, data, kind: str, id_field: str):
+        """Фильтрует список (или items в словаре) по владению; поправляет total."""
+        if isinstance(data, list):
+            return [it for it in data
+                    if self._visible(uid, studio_store.owner(kind, str(it.get(id_field, ""))))]
+        if isinstance(data, dict) and isinstance(data.get("items"), list):
+            orig = data["items"]
+            data["items"] = [it for it in orig
+                             if self._visible(uid, studio_store.owner(kind, str(it.get(id_field, ""))))]
+            try:
+                data["total"] = max(0, int(data.get("total") or len(orig))
+                                    - (len(orig) - len(data["items"])))
+            except (TypeError, ValueError):
+                data["total"] = len(data["items"])
+        return data
+
     async def _apply_ownership(self, scope, receive, send, user: str, role: str) -> None:
+        path, method = scope.get("path", ""), scope.get("method", "GET").upper()
+        uid = user
+
+        # --- ролевой гейт записи (style presets / workflows) ---
+        if method in ("POST", "PUT", "PATCH", "DELETE") and _RE_WRITE_ADMIN.match(path) and role != "admin":
+            await _send_json(send, {"detail": "Administrator only"}, status=403)
+            return
+
+        if role == "admin":  # админ не фильтруется
+            await self.app(scope, receive, send)
+            return
+
+        # --- тегирование созданий (мутаторы — обычные функции, не async) ---
+        if method == "POST" and _RE_UPLOAD.match(path):
+            def tag_upload(data):
+                name = (data or {}).get("image_name")
+                if name:
+                    studio_store.tag("image", str(name), uid)
+                return data
+
+            await self._proxy_json(scope, receive, send, tag_upload)
+            return
+
+        if method == "POST" and _RE_BOARDS.match(path):
+            def tag_board(data):
+                bid = (data or {}).get("board_id")
+                if bid:
+                    studio_store.tag("board", str(bid), uid)
+                return data
+
+            await self._proxy_json(scope, receive, send, tag_board)
+            return
+
+        # --- фильтрация списков ---
+        if method == "GET" and _RE_BOARDS.match(path):
+            await self._proxy_json(scope, receive, send,
+                                   lambda d: self._filter_list(uid, d, "board", "board_id"))
+            return
+
+        if method == "GET" and _RE_IMAGES.match(path):
+            await self._proxy_json(scope, receive, send,
+                                   lambda d: self._filter_list(uid, d, "image", "image_name"))
+            return
+
+        if method == "GET" and _RE_QUEUE_LIST.match(path):
+            def filt(d):
+                if isinstance(d, dict) and isinstance(d.get("items"), list):
+                    orig = d["items"]
+                    d["items"] = [it for it in orig if self._visible(
+                        uid, studio_store.owner("batch", str((it or {}).get("batch_id", ""))))]
+                    try:
+                        d["total"] = max(0, int(d.get("total") or len(orig))
+                                         - (len(orig) - len(d["items"])))
+                    except (TypeError, ValueError):
+                        d["total"] = len(d["items"])
+                return d
+
+            await self._proxy_json(scope, receive, send, filt)
+            return
+
+        # --- единичный доступ: борды ---
+        m = _RE_BOARD_ID.match(path)
+        if m and method in ("GET", "DELETE", "PATCH", "PUT"):
+            if not self._visible(uid, studio_store.owner("board", unquote(m.group(1)))):
+                await _send_json(send, {"detail": "not found"}, status=404)
+                return
+
+        # --- единичный доступ: картинки (full/thumbnail/metadata/urls/…) ---
+        m = _RE_IMAGE_ITEM.match(path)
+        if m and method in ("GET", "DELETE", "PATCH", "PUT"):
+            if not self._visible(uid, studio_store.owner("image", unquote(m.group(1)))):
+                await _send_json(send, {"detail": "not found"}, status=404)
+                return
+
+        # --- body-эндпоинты (delete/download/star/unstar): все имена должны быть своими ---
+        if method == "POST" and _RE_IMAGES_BODY.match(path):
+            body = await _read_body(receive)
+            try:
+                names = (json.loads(body or b"{}") or {}).get("image_names") or []
+            except ValueError:
+                names = []
+            for n in names:
+                if not self._visible(uid, studio_store.owner("image", str(n))):
+                    await _send_json(send, {"detail": "Forbidden: foreign image in list"}, status=403)
+                    return
+
+            async def replay():
+                sent = False
+
+                async def rcv():
+                    nonlocal sent
+                    if sent:
+                        await asyncio.sleep(3600)
+                    sent = True
+                    return {"type": "http.request", "body": body, "more_body": False}
+
+                return rcv
+
+            await self.app(scope, await replay(), send)
+            return
+
         await self.app(scope, receive, send)
 
     def _inject_user_header(self, scope, user: str | None) -> None:
