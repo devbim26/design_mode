@@ -46,6 +46,11 @@
     '#devbim-banner .devbim-word .design{color:#f2f4f6;font-weight:600}' +
     '#devbim-banner .devbim-tagline{flex:1;min-width:0;font-size:12.5px;color:#aab3ba;' +
     'white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+    '#devbim-banner .devbim-user{display:flex;align-items:center;gap:10px;white-space:nowrap;' +
+    'font-size:12.5px;color:#E6EAF2}' +
+    '#devbim-banner .devbim-user button{background:#38BDF8;color:#06121C;border:0;border-radius:6px;' +
+    'padding:4px 10px;font-size:12px;font-weight:600;cursor:pointer}' +
+    '#devbim-banner .devbim-user button:hover{background:#5CC9FA}' +
     '@media (max-width:640px){#devbim-banner .devbim-tagline{display:none}}' +
     /* приложение занимает 100dvh — сдвигаем и ужимаем под баннер */
     '#root{height:calc(100dvh - var(--devbim-banner-h))}' +
@@ -91,6 +96,28 @@
     });
   }
 
+  // --- SSO: email пользователя + «Выйти» (только в sso-режиме) ---
+  function loadUser(banner) {
+    fetch('/api/v1/studio/me', { credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d || d.mode !== 'sso' || !d.user_id) return;
+        var chip = document.createElement('span');
+        chip.className = 'devbim-user';
+        var who = document.createElement('span');
+        who.textContent = d.email || d.name || d.user_id;
+        if (d.role === 'admin') who.textContent += ' · admin';
+        var out = document.createElement('button');
+        out.type = 'button';
+        out.textContent = 'Выйти';
+        out.onclick = function () { location.href = '/auth/logout'; };
+        chip.appendChild(who);
+        chip.appendChild(out);
+        banner.appendChild(chip);
+      })
+      .catch(function () { /* без панели — не страшно */ });
+  }
+
   function init() {
     var st = document.createElement('style');
     st.textContent = CSS;
@@ -113,6 +140,7 @@
 
     banner.appendChild(link);
     banner.appendChild(tagline);
+    loadUser(banner);
 
     var root = document.getElementById('root');
     root.parentNode.insertBefore(banner, root);

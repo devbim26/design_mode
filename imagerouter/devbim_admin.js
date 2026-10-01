@@ -24,6 +24,17 @@
   ];
 
   var AUTH_URL = '/api/v1/imagerouter/admin-auth';
+
+  // --- DevBIM studio SSO: роль из /api/v1/studio/me (mode==='sso') ---
+  var ssoRole = null;   // 'admin' | 'user' | null (password-режим или ошибка)
+
+  function warmRole() {
+    fetch('/api/v1/studio/me', { credentials: 'same-origin' })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) { ssoRole = (d && d.mode === 'sso') ? d.role : null; })
+      .catch(function () { ssoRole = null; });
+  }
+
   var unlocked = false;      // разблокировка действует до перезагрузки страницы
   var protectedCache = null; // настроен ли ADMIN_PASSWORD (кэш ответа сервера)
   var bypassClick = false;   // программный «повторный» клик после разблокировки
@@ -169,6 +180,8 @@
   }
 
   function ensureUnlocked(onSuccess) {
+    if (ssoRole === 'admin') { unlocked = true; window.__devbimUnlocked = true; onSuccess(); return; }
+    if (ssoRole === 'user') { alert('Доступно только администратору'); return; }
     isProtected(function (on) {
       if (!on || unlocked) { if (on) window.__devbimUnlocked = true; onSuccess(); return; }
       askPassword(onSuccess);
@@ -205,7 +218,7 @@
     if (!el) return;
     var txt = (el.textContent || '').replace(/\s+/g, ' ').trim();
     if (SETTINGS_LABELS.indexOf(txt) === -1) return;
-    if (protectedCache === false) return; // защиты нет — пропускаем исходный клик
+    if (protectedCache === false && ssoRole !== 'user') return; // защиты нет и юзер не sso — пропускаем
     // блокируем клик сразу (статус защиты узнаем асинхронно)
     ev.stopPropagation();
     ev.preventDefault();
@@ -234,4 +247,5 @@
 
   injectStyles();
   isProtected(function () {}); // прогрев кэша статуса защиты
+  warmRole(); // прогрев кэша роли студии
 })();
