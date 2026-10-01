@@ -25,6 +25,10 @@ API_APP = SP / "invokeai" / "app" / "api_app.py"
 def deploy_module() -> None:
     shutil.copy2(SRC, DST)
     print("Модуль развернут:", DST)
+    src2 = BASE / "siteauth" / "studio_store.py"
+    dst2 = SP / "invokeai" / "app" / "api" / "routers" / "studio_store.py"
+    shutil.copy2(src2, dst2)
+    print("Модуль развернут:", dst2)
 
 
 def patch_api_app() -> None:
@@ -54,15 +58,21 @@ def patch_api_app() -> None:
 def ensure_env_password() -> None:
     env = BASE / ".env"
     text = env.read_text(encoding="utf-8") if env.exists() else ""
-    for line in text.splitlines():
-        if line.strip().startswith("SITE_PASSWORD="):
-            print("SITE_PASSWORD уже задан в .env")
-            return
     if text and not text.endswith("\n"):
         text += "\n"
-    text += "SITE_PASSWORD=devbim\n"
+    defaults = {
+        "SITE_PASSWORD": "devbim",
+        "STUDIO_AUTH_MODE": "password",
+        # STUDIO_JWT_SECRET не добавляем: генерируется при включении sso (см. README)
+        "STUDIO_SESSION_TTL": "43200",
+        "STUDIO_FRAME_ANCESTORS": "https://devbim.com http://localhost:* http://127.0.0.1:*",
+    }
+    have = {ln.split("=", 1)[0].strip() for ln in text.splitlines() if "=" in ln}
+    for k, v in defaults.items():
+        if k not in have:
+            text += f"{k}={v}\n"
+            print(f"В .env добавлен {k}={v}")
     env.write_text(text, encoding="utf-8")
-    print("В .env добавлен SITE_PASSWORD=devbim (смените при необходимости)")
 
 
 if __name__ == "__main__":
