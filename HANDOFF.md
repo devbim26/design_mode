@@ -2791,7 +2791,47 @@ invokeai==6.2.0` их нужно запускать повторно в поря
     - Откат: THREED_ENSEMBLE=0 одним ключом (грабля (е)); модули
       threed_ground/ensemble/regular остаются задеплоенными (не мешают).
 
-
+61. **Многопользовательский режим SSO (devbim.com): вход через сайт, роли,
+    личные воркспейсы** (01.10, ветка `feature/studio-sso`; спека
+    `docs/superpowers/specs/2026-10-01-devbim-sso-workspaces-design.md`,
+    план `docs/superpowers/plans/2026-10-01-devbim-sso-workspaces.md`;
+    SDD-задачи 1–10). `STUDIO_AUTH_MODE=password|sso` — дефолт password,
+    локальные компании (прежний режим SITE_PASSWORD) не тронуты. Sso:
+    сайт devbim.com открывает студию в iframe `GET /auth/sso?t=<JWT HS256>`
+    (подпись `STUDIO_JWT_SECRET`, окно exp ≤600 с, jti-анти-replay) →
+    пользователь в overlay-БД `<root>/data/studio.sqlite` → кука
+    `devbim_session` (HMAC, HttpOnly, SameSite=Lax, TTL
+    `STUDIO_SESSION_TTL` 43200 c). Роли admin/user (email'ы devBIM →
+    admin; вход по SITE_PASSWORD — всегда admin): админ-панель `/admin`
+    (список, role-override, блокировка; экранирование email/имени против
+    XSS), `GET /api/v1/studio/me`, `/auth/login` (фолбэк) и `/auth/logout`;
+    роль/блокировка читаются из БД на каждом запросе — мгновенны.
+    Изоляция: теги владения (upload/борды + ImageRouter-прокси: batch при
+    enqueue, image после images.create), фильтрация списков
+    картинок/бордов/очереди, 404 чужого, запись style_presets/workflows —
+    403 не-админу; IFC/PDF/3D — списки и доступ по владельцу (мидлварь
+    инжектит `x-studio-user`), выбор модели 3D — админу; Model
+    Manager/Настройки — гейт по роли (баннер: email пользователя + выход);
+    сокеты — connect в комнату `user:<id>`, queue-события только
+    владельцу (патч sockets.py).
+    - Файлы: `siteauth/studio_store.py` (overlay-БД, env_or, JWT; деплой
+      в `invokeai/app/api/routers/`), `siteauth/site_auth.py` (мидлварь),
+      деплой — `setup_site_auth.py`; минт тестового JWT —
+      `tools/mint_test_token.py` (секрет из .env/--secret, печатает токен
+      и готовый URL `/auth/sso?t=`); Linux-лаунчер `launch/start_server.sh`
+      (зеркало start_devbim.bat для хостинга devbim.com); ТЗ для
+      разработчика сайта — `docs/INTEGRATION-devbim-com.md` (эндпоинт
+      токена, iframe, DNS, postMessage('studio:expired')).
+    - ГРАБЛИ: легаси-контент без владельца видит только админ (фильтр
+      owner==uid, админ не фильтруется); очередь default ОБЩАЯ —
+      изолируются только события, через сокет-комнаты `user:<id>`, а не
+      отдельная очередь; CSP frame-ancestors (`STUDIO_FRAME_ANCESTORS`,
+      дефолт devbim.com + localhost) — на другие домены студию не
+      встраивать; при истёкшей сессии студия шлёт родителю
+      `postMessage('studio:expired', '*')`.
+    - Тесты: `tests/test_studio_store.py`, `tests/test_studio_auth.py`,
+      `tests/test_studio_ownership.py`, `tests/test_studio_sockets.py` —
+      plain asserts, печать OK.
 
 ```powershell
 cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"

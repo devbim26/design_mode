@@ -1106,3 +1106,47 @@ shapely` (общий venv). API (Swagger `/docs`): POST
 роутер), `tests\test_threed_ground.py` / `test_threed_ensemble.py` /
 `test_threed_regular.py` / `test_threed_ab.py` — ансамбль. Детали и
 грабли — HANDOFF.md, п. 37–42, 52, 60.
+
+## Многопользовательский режим (devbim.com)
+
+Студия как сервис в кабинете сайта devbim.com: пользователь сайта входит в
+студию без второго логина (сайт обменивает свой JWT на сессию студии),
+роли `admin`/`user`, личные воркспейсы (картинки, борды, очереди, IFC/PDF/3D
+изолированы по владельцу). Режим переключается ключом в `.env` — мидлварь
+входа разворачивается тем же `setup_site_auth.py` (идемпотентен).
+
+| Переменная | Назначение |
+|---|---|
+| `STUDIO_AUTH_MODE` | `password` (по умолчанию — локальные компании, прежнее поведение) или `sso` (devbim.com) |
+| `STUDIO_JWT_SECRET` | общий секрет с бэкендом devbim.com (HS256, ≥32 символов) |
+| `STUDIO_SESSION_SECRET` | секрет куки сессии (опц.; по умолчанию — `STUDIO_JWT_SECRET`) |
+| `STUDIO_SESSION_TTL` | срок сессии в секундах (опц.; по умолчанию 43200 = 12 ч) |
+| `STUDIO_FRAME_ANCESTORS` | CSP `frame-ancestors` (опц.; по умолчанию `https://devbim.com http://localhost:* http://127.0.0.1:*`) |
+
+Включение `sso`: сгенерировать секрет, вписать в `.env` студии и передать
+разработчику сайта devbim.com вне канала (секрет общий, хранится с двух
+сторон):
+
+```powershell
+python -c "import secrets;print(secrets.token_urlsafe(32))"
+```
+
+Вход: сайт открывает студию в iframe как
+`https://studio.devbim.com/auth/sso?t=<JWT>` — требования к токену и
+интеграции со стороны сайта — `docs/INTEGRATION-devbim-com.md`. Админ
+дополнительно получает панель `/admin` (пользователи, смена роли,
+блокировка) и вход по `SITE_PASSWORD` (`/auth/login`, фолбэк).
+
+Локальная проверка без сайта — минт тестового JWT утилитой (секрет из
+`.env` или `--secret`), открыть напечатанный URL в браузере:
+
+```powershell
+.\venv\Scripts\python.exe tools\mint_test_token.py --email a@b.io --role admin
+```
+
+Запуск на Linux-хостинге devbim.com — `launch/start_server.sh` (зеркало
+`launch/start_devbim.bat`: `PYTHONUTF8=1`, `INVOKEAI_ROOT=<корень>/data`).
+
+Тесты: `tests\test_studio_store.py`, `test_studio_auth.py`,
+`test_studio_ownership.py`, `test_studio_sockets.py`. Детали и грабли —
+HANDOFF.md, п. 61.
