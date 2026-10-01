@@ -16,6 +16,10 @@ SECRET = "x" * 40
 
 tmp = Path(tempfile.mkdtemp(prefix="studio_store_test_"))
 os.environ["INVOKEAI_ROOT"] = str(tmp)
+# Герметичность: env_value() читает .env из cwd (после INVOKEAI_ROOT и его родителя);
+# без chdir репозиторный .env (после деплоя содержит STUDIO_AUTH_MODE=password)
+# перекрывает os.environ["STUDIO_AUTH_MODE"]="sso" ниже и ломает тест.
+os.chdir(tmp)
 studio_store.init_db()
 
 
