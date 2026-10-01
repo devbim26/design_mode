@@ -2808,8 +2808,12 @@ invokeai==6.2.0` их нужно запускать повторно в поря
     роль/блокировка читаются из БД на каждом запросе — мгновенны.
     Изоляция: теги владения (upload/борды + ImageRouter-прокси: batch при
     enqueue, image после images.create), фильтрация списков
-    картинок/бордов/очереди, 404 чужого, запись style_presets/workflows —
-    403 не-админу; IFC/PDF/3D — списки и доступ по владельцу (мидлварь
+    картинок/бордов/очереди (`/api/v1/queue/{id}/list` и `list_all`),
+    404 чужого, запись style_presets/workflows — 403 не-админу;
+    destructive-гейты: DELETE images/uncategorized и пункты очереди
+    (queue/{id}/i/{item}) — админу, board_images/batch — только свои
+    борд+картинки; ошибка мутатора списков — fail-closed 502; IFC/PDF/3D —
+    списки и доступ по владельцу (мидлварь
     инжектит `x-studio-user`), выбор модели 3D — админу; Model
     Manager/Настройки — гейт по роли (баннер: email пользователя + выход);
     сокеты — connect в комнату `user:<id>`, queue-события только
@@ -2823,15 +2827,20 @@ invokeai==6.2.0` их нужно запускать повторно в поря
       разработчика сайта — `docs/INTEGRATION-devbim-com.md` (эндпоинт
       токена, iframe, DNS, postMessage('studio:expired')).
     - ГРАБЛИ: легаси-контент без владельца видит только админ (фильтр
-      owner==uid, админ не фильтруется); очередь default ОБЩАЯ —
-      изолируются только события, через сокет-комнаты `user:<id>`, а не
-      отдельная очередь; CSP frame-ancestors (`STUDIO_FRAME_ANCESTORS`,
+      owner==uid, админ не фильтруется); списки очереди фильтруются по
+      владельцу batch (`/api/v1/queue/{id}/list` и `list_all`), события —
+      через комнаты `user:<id>`; нетегированные batch'и (локальные
+      модели — вне облачного прокси) видны всем/уходят в общий эмит —
+      допущение; в api_app.py SiteAuth добавляется ДО GZip (GZip
+      снаружи — иначе _proxy_json видит gzip-байты и списки уходят
+      нефильтрованными; порядок чинит сам setup_site_auth.py);
+      CSP frame-ancestors (`STUDIO_FRAME_ANCESTORS`,
       дефолт devbim.com + localhost) — на другие домены студию не
       встраивать; при истёкшей сессии студия шлёт родителю
       `postMessage('studio:expired', '*')`.
     - Тесты: `tests/test_studio_store.py`, `tests/test_studio_auth.py`,
-      `tests/test_studio_ownership.py`, `tests/test_studio_sockets.py` —
-      plain asserts, печать OK.
+      `tests/test_studio_ownership.py`, `tests/test_studio_gzip.py`,
+      `tests/test_studio_sockets.py` — plain asserts, печать OK.
 
 ```powershell
 cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"

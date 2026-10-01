@@ -162,9 +162,14 @@ try:
     run(mw(scope("/api/v1/style_presets/i/x", "PUT", cadm), idle(b"{}"), r))
     assert r.status == 200
 
-    # 7. очередь фильтруется по batch-владельцу
+    # 7. очередь фильтруется по batch-владельцу (реальные пути 6.2.0:
+    #    queue/{id}/list -> {items:[...]}, queue/{id}/list_all -> голый список)
     async def q_inner(scope, receive, send):
-        raw = json.dumps({"items": [{"batch_id": "b1"}, {"batch_id": "b2"}], "total": 2}).encode()
+        if scope["path"].endswith("list_all"):
+            payload = [{"batch_id": "b1"}, {"batch_id": "b2"}]
+        else:
+            payload = {"items": [{"batch_id": "b1"}, {"batch_id": "b2"}], "total": 2}
+        raw = json.dumps(payload).encode()
         await send({"type": "http.response.start", "status": 200,
                     "headers": [(b"content-type", b"application/json")]})
         await send({"type": "http.response.body", "body": raw})
@@ -173,9 +178,13 @@ try:
     studio_store.tag("batch", "b2", "u2")
     mwq = site_auth.SiteAuthMiddleware(q_inner)
     r = Rec()
-    run(mwq(scope("/api/v1/session_queue/", "GET", c1), idle(), r))
+    run(mwq(scope("/api/v1/queue/default/list", "GET", c1), idle(), r))
     d = r.json()
     assert [i["batch_id"] for i in d["items"]] == ["b1"] and d["total"] == 1, d
+    r = Rec()
+    run(mwq(scope("/api/v1/queue/default/list_all", "GET", c1), idle(), r))
+    d = r.json()
+    assert isinstance(d, list) and [i["batch_id"] for i in d] == ["b1"], d
 
     # 8. админ-панель: список пользователей и действия
     r = Rec()
@@ -193,6 +202,25 @@ try:
     r = Rec()
     run(mw(scope("/admin/api/users/u2/role", "POST", cadm), idle(b"not-json{"), r))
     assert r.status == 422, r.status  # кривой JSON не мутирует состояние
+
+    # 9. destructive-эндпоинты (финальное ревью I1)
+    r = Rec()
+    run(mw(scope("/api/v1/images/uncategorized", "DELETE", c1), idle(), r))
+    assert r.status == 403, r.status  # массовая чистка — админу
+    r = Rec()
+    run(mw(scope("/api/v1/images/uncategorized", "DELETE", cadm), idle(), r))
+    assert r.status == 200 and r.json() == {"upstream": True}
+    r = Rec()
+    body = json.dumps({"board_id": "new-board", "image_names": ["new-upload.png"]}).encode()
+    run(mw(scope("/api/v1/board_images/batch", "POST", c1), idle(body), r))
+    assert r.status == 200 and r.json() == {"upstream": True}  # всё своё -> проксируется
+    r = Rec()
+    body = json.dumps({"board_id": "new-board", "image_names": ["u2.png"]}).encode()
+    run(mw(scope("/api/v1/board_images/batch", "POST", c1), idle(body), r))
+    assert r.status == 403, r.status  # чужая картинка в списке
+    r = Rec()
+    run(mw(scope("/api/v1/queue/default/i/5", "DELETE", c1), idle(), r))
+    assert r.status == 403, r.status  # пункты очереди (id без карты владения) — админу
 
     print("OK")
 finally:

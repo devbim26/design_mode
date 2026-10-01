@@ -22,6 +22,8 @@ import hashlib
 import json
 import os
 import re
+import sys
+import traceback
 from pathlib import Path
 from urllib.parse import parse_qs, quote, unquote
 
@@ -47,7 +49,12 @@ _RE_IMAGES = re.compile(r"^/api/v1/images/?$")
 _RE_IMAGE_ITEM = re.compile(r"^/api/v1/images/i/([^/]+)(?:/.*)?$")
 _RE_UPLOAD = re.compile(r"^/api/v1/images/upload/?$")
 _RE_IMAGES_BODY = re.compile(r"^/api/v1/images/(delete|download|star|unstar)/?$")
-_RE_QUEUE_LIST = re.compile(r"^/api/v1/session_queue/(?:|batches/?)$")
+# очередь 6.2.0: /api/v1/queue/{id}/list -> {items:[...]}, list_all -> [...]
+_RE_QUEUE_LIST = re.compile(r"^/api/v1/queue/[^/]+/list(?:_all)?$")
+# destructive-эндпоинты без собственных гейтов (финальное ревью I1)
+_RE_IMAGES_UNCAT = re.compile(r"^/api/v1/images/uncategorized/?$")
+_RE_BOARD_IMAGES = re.compile(r"^/api/v1/board_images/(?:batch|batch/delete)/?$")
+_RE_QUEUE_ITEM = re.compile(r"^/api/v1/queue/[^/]+/i/[^/]+(?:/cancel)?/?$")
 _RE_WRITE_ADMIN = re.compile(r"^/api/v1/(style_presets|workflows)(?:/|$)")
 
 
@@ -220,6 +227,20 @@ async def _read_body(receive) -> bytes:
     return b"".join(chunks)
 
 
+def _replay_body(body: bytes):
+    """Фабрика ASGI-receive: отдаёт прочитанное тело один раз (для повтора)."""
+    sent = False
+
+    async def rcv():
+        nonlocal sent
+        if sent:
+            await asyncio.sleep(3600)
+        sent = True
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return rcv
+
+
 async def _send_html(send, status: int, body: bytes) -> None:
     headers = [(b"content-type", b"text/html; charset=utf-8"), (b"cache-control", b"no-store")]
     await send({"type": "http.response.start", "status": status, "headers": headers})
@@ -344,7 +365,12 @@ class SiteAuthMiddleware:
         return owner_or_none == uid  # легаси без владельца видно только админу (он не фильтруется)
 
     async def _proxy_json(self, scope, receive, send, mutator) -> None:
-        """Проксирует ответ приложения и правит JSON-тело через mutator(data)->data."""
+        """Проксирует ответ приложения и правит JSON-тело через mutator(data)->data.
+
+        Не-JSON тело (бинарный/уже сжатый ответ) проходит как есть, но с
+        громким предупреждением в stderr; ошибка мутатора — fail-closed:
+        502 studio filter error, нефильтрованное тело наружу не уходит.
+        """
         status_code, headers, chunks = 200, [], []
 
         async def wrapped(message):
@@ -358,10 +384,24 @@ class SiteAuthMiddleware:
         raw = b"".join(chunks)
         try:
             data = json.loads(raw or b"{}")
-            data = mutator(data)
-            raw = json.dumps(data, ensure_ascii=False).encode("utf-8")
-        except Exception:
-            pass  # не-JSON ответ -> пропускаем как есть
+        except ValueError:
+            print(f"[studio] proxy_json: non-JSON body ({len(raw)}b) passed through",
+                  file=sys.stderr)
+            data = None
+        if data is not None:
+            try:
+                raw = json.dumps(mutator(data), ensure_ascii=False).encode("utf-8")
+            except Exception:
+                print(f"[studio] proxy_json: mutator failed on "
+                      f"{scope.get('method', '?')} {scope.get('path', '?')} — fail closed (502)",
+                      file=sys.stderr)
+                traceback.print_exc()
+                body = b'{"detail": "studio filter error"}'
+                hdrs = [(k, v) for k, v in headers if k.lower() != b"content-length"]
+                hdrs.append((b"content-length", str(len(body)).encode("latin-1")))
+                await send({"type": "http.response.start", "status": 502, "headers": hdrs})
+                await send({"type": "http.response.body", "body": body})
+                return
         headers = [(k, v) for k, v in headers if k.lower() != b"content-length"]
         headers.append((b"content-length", str(len(raw)).encode("latin-1")))
         await send({"type": "http.response.start", "status": status_code, "headers": headers})
@@ -394,6 +434,33 @@ class SiteAuthMiddleware:
 
         if role == "admin":  # админ не фильтруется
             await self.app(scope, receive, send)
+            return
+
+        # --- destructive-эндпоинты без собственных гейтов (финальное ревью I1) ---
+        if method == "DELETE" and _RE_IMAGES_UNCAT.match(path):
+            await _send_json(send, {"detail": "Administrator only"}, status=403)
+            return
+
+        if method in ("POST", "DELETE") and _RE_BOARD_IMAGES.match(path):
+            body = await _read_body(receive)
+            try:
+                data = json.loads(body or b"{}") or {}
+            except ValueError:
+                data = {}
+            names = data.get("image_names") or []
+            ok = self._visible(uid, studio_store.owner("board", str(data.get("board_id")))) \
+                and all(self._visible(uid, studio_store.owner("image", str(n))) for n in names)
+            if not ok:
+                await _send_json(send, {"detail": "Forbidden: foreign board or images"}, status=403)
+                return
+            await self.app(scope, _replay_body(body), send)
+            return
+
+        if method in ("DELETE", "PUT") and _RE_QUEUE_ITEM.match(path):
+            # id пунктов — сквозные целые без карты владения в overlay: админ
+            print(f"[studio] queue item op denied (admin only): {method} {path}",
+                  file=sys.stderr)
+            await _send_json(send, {"detail": "Administrator only"}, status=403)
             return
 
         # --- тегирование созданий (мутаторы — обычные функции, не async) ---
@@ -429,19 +496,10 @@ class SiteAuthMiddleware:
             return
 
         if method == "GET" and _RE_QUEUE_LIST.match(path):
-            def filt(d):
-                if isinstance(d, dict) and isinstance(d.get("items"), list):
-                    orig = d["items"]
-                    d["items"] = [it for it in orig if self._visible(
-                        uid, studio_store.owner("batch", str((it or {}).get("batch_id", ""))))]
-                    try:
-                        d["total"] = max(0, int(d.get("total") or len(orig))
-                                         - (len(orig) - len(d["items"])))
-                    except (TypeError, ValueError):
-                        d["total"] = len(d["items"])
-                return d
-
-            await self._proxy_json(scope, receive, send, filt)
+            # list -> {items:[...]} (total поправится), list_all -> голый список;
+            # _filter_list умеет обе формы
+            await self._proxy_json(scope, receive, send,
+                                   lambda d: self._filter_list(uid, d, "batch", "batch_id"))
             return
 
         # --- единичный доступ: борды ---
@@ -469,20 +527,7 @@ class SiteAuthMiddleware:
                 if not self._visible(uid, studio_store.owner("image", str(n))):
                     await _send_json(send, {"detail": "Forbidden: foreign image in list"}, status=403)
                     return
-
-            async def replay():
-                sent = False
-
-                async def rcv():
-                    nonlocal sent
-                    if sent:
-                        await asyncio.sleep(3600)
-                    sent = True
-                    return {"type": "http.request", "body": body, "more_body": False}
-
-                return rcv
-
-            await self.app(scope, await replay(), send)
+            await self.app(scope, _replay_body(body), send)
             return
 
         await self.app(scope, receive, send)
