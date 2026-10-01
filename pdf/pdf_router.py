@@ -20,12 +20,27 @@ import re
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from invokeai.app.services.config.config_default import get_config
 
 pdf_router = APIRouter(prefix="/v1/pdf", tags=["pdf"])
+
+
+def _studio_user(request: Request) -> str | None:
+    u = request.headers.get("x-studio-user")
+    return u or None
+
+
+def _studio_visible(request: Request, kind: str, name: str) -> bool:
+    """Виден ли файл пользователю: свой; без владельца (легаси) — только админу."""
+    u = _studio_user(request)
+    if u is None:                     # password-режим — изоляции нет
+        return True
+    from invokeai.app.api.routers import studio_store
+    o = studio_store.owner(kind, name)
+    return o == u or (o is None and studio_store.effective_role(u) == "admin")
 
 # допустимые расширения и лимит размера загрузки
 ALLOWED_EXT = (".pdf",)
@@ -54,10 +69,12 @@ def _safe_path(name: str) -> Path:
 
 
 @pdf_router.get("/list")
-def list_docs() -> dict:
+def list_docs(request: Request) -> dict:
     items = []
     for p in sorted(_store_dir().iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
         if not p.is_file() or not p.name.lower().endswith(ALLOWED_EXT):
+            continue
+        if not _studio_visible(request, "pdf", p.name):
             continue
         st = p.stat()
         items.append({"name": p.name, "size": st.st_size, "modified": int(st.st_mtime)})
@@ -65,7 +82,7 @@ def list_docs() -> dict:
 
 
 @pdf_router.post("/upload")
-async def upload_doc(file: UploadFile = File(...)) -> dict:
+async def upload_doc(request: Request, file: UploadFile = File(...)) -> dict:
     name = file.filename or "document.pdf"
     path = _safe_path(name)
     size = 0
@@ -88,11 +105,20 @@ async def upload_doc(file: UploadFile = File(...)) -> dict:
         raise HTTPException(status_code=500, detail=f"Не удалось сохранить файл: {e}") from e
     finally:
         await file.close()
+    u = _studio_user(request)
+    if u:
+        try:
+            from invokeai.app.api.routers import studio_store
+            studio_store.tag("pdf", path.name, u)
+        except Exception:
+            pass
     return {"name": path.name, "size": size, "seconds": round(time.time() - t0, 1)}
 
 
 @pdf_router.get("/file/{name}")
-def get_doc(name: str) -> FileResponse:
+def get_doc(request: Request, name: str) -> FileResponse:
+    if not _studio_visible(request, "pdf", name):
+        raise HTTPException(status_code=404, detail="Файл не найден")
     path = _safe_path(name)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Документ не найден")
@@ -100,7 +126,9 @@ def get_doc(name: str) -> FileResponse:
 
 
 @pdf_router.delete("/file/{name}")
-def delete_doc(name: str) -> dict:
+def delete_doc(request: Request, name: str) -> dict:
+    if not _studio_visible(request, "pdf", name):
+        raise HTTPException(status_code=404, detail="Файл не найден")
     path = _safe_path(name)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Документ не найден")

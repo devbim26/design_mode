@@ -31,7 +31,7 @@ from datetime import datetime
 from pathlib import Path
 
 import requests
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 try:  # задеплоено в venv
@@ -46,6 +46,13 @@ except ImportError:  # дерево проекта (тесты)
 from invokeai.app.services.config.config_default import get_config
 
 threed_router = APIRouter(prefix="/v1/threed", tags=["threed"])
+
+
+def _studio_user(request: "Request | None") -> str | None:
+    """x-studio-user из заголовка; None — password-режим или прямой вызов
+    из тестов (без HTTP-запроса) -> прежнее поведение без изоляции."""
+    u = request.headers.get("x-studio-user") if request is not None else None
+    return u or None
 
 DEFAULT_MODEL = "openai/gpt-6-astra"
 # tiered-конвейер (п.56): дешёвые ярусы каталога; тарифы за 1M токенов
@@ -897,7 +904,7 @@ def _run_job(job: dict, prompt: str, image) -> None:
 
 
 @threed_router.post("/generate")
-def generate(body: GenerateBody) -> dict:
+def generate(body: GenerateBody, request: Request = None) -> dict:
     """Фоновый запуск: конвейер (VLM-анализ + сборка + самопроверка) длится
     минуты и не вписывается в ~100-секундный лимит Cloudflare-туннеля —
     ответ мгновенный {jobId}, результат фронт забирает поллингом
@@ -907,6 +914,13 @@ def generate(body: GenerateBody) -> dict:
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Некорректное изображение: {e}")
     job = _job_new(body.scenario)
+    u = _studio_user(request)
+    if u:
+        try:
+            from invokeai.app.api.routers import studio_store
+            studio_store.tag("threed", job["id"], u)
+        except Exception:
+            pass
     threading.Thread(target=_run_job, args=(job, body.prompt, image),
                      daemon=True, name=f"threed-{job['id']}").start()
     # статус фиксирован (не из job): поток мог уже перевести его в running
@@ -914,12 +928,18 @@ def generate(body: GenerateBody) -> dict:
 
 
 @threed_router.get("/jobs/{job_id}")
-def get_job(job_id: str) -> dict:
+def get_job(job_id: str, request: Request = None) -> dict:
     with _jobs_lock:
         job = _jobs.get(job_id)
     if job is None:
         raise HTTPException(
             status_code=404, detail="Задача не найдена (перезапуск сервера?)")
+    u = _studio_user(request)
+    if u is not None:
+        from invokeai.app.api.routers import studio_store
+        o = studio_store.owner("threed", job_id)
+        if not (o == u or (o is None and studio_store.effective_role(u) == "admin")):
+            raise HTTPException(status_code=404, detail="Job not found")
     return _job_public(job)
 
 
@@ -934,7 +954,12 @@ def get_model() -> dict:
 
 
 @threed_router.put("/model")
-def put_model(body: ModelBody) -> dict:
+def put_model(body: ModelBody, request: Request = None) -> dict:
+    u = _studio_user(request)
+    if u is not None:
+        from invokeai.app.api.routers import studio_store
+        if studio_store.effective_role(u) != "admin":
+            raise HTTPException(status_code=403, detail="Administrator only")
     try:
         _validate_model_in_list(body.model)
     except ValueError as e:

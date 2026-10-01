@@ -19,12 +19,27 @@ import re
 import time
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from invokeai.app.services.config.config_default import get_config
 
 ifc_router = APIRouter(prefix="/v1/ifc", tags=["ifc"])
+
+
+def _studio_user(request: Request) -> str | None:
+    u = request.headers.get("x-studio-user")
+    return u or None
+
+
+def _studio_visible(request: Request, kind: str, name: str) -> bool:
+    """Виден ли файл пользователю: свой; без владельца (легаси) — только админу."""
+    u = _studio_user(request)
+    if u is None:                     # password-режим — изоляции нет
+        return True
+    from invokeai.app.api.routers import studio_store
+    o = studio_store.owner(kind, name)
+    return o == u or (o is None and studio_store.effective_role(u) == "admin")
 
 # допустимые расширения и лимит размера загрузки
 ALLOWED_EXT = (".ifc", ".ifczip", ".ifcxml")
@@ -53,10 +68,12 @@ def _safe_path(name: str) -> Path:
 
 
 @ifc_router.get("/list")
-def list_models() -> dict:
+def list_models(request: Request) -> dict:
     items = []
     for p in sorted(_store_dir().iterdir(), key=lambda x: x.stat().st_mtime, reverse=True):
         if not p.is_file() or not p.name.lower().endswith(ALLOWED_EXT):
+            continue
+        if not _studio_visible(request, "ifc", p.name):
             continue
         st = p.stat()
         items.append({"name": p.name, "size": st.st_size, "modified": int(st.st_mtime)})
@@ -64,7 +81,7 @@ def list_models() -> dict:
 
 
 @ifc_router.post("/upload")
-async def upload_model(file: UploadFile = File(...)) -> dict:
+async def upload_model(request: Request, file: UploadFile = File(...)) -> dict:
     name = file.filename or "model.ifc"
     path = _safe_path(name)
     size = 0
@@ -87,11 +104,20 @@ async def upload_model(file: UploadFile = File(...)) -> dict:
         raise HTTPException(status_code=500, detail=f"Не удалось сохранить файл: {e}") from e
     finally:
         await file.close()
+    u = _studio_user(request)
+    if u:
+        try:
+            from invokeai.app.api.routers import studio_store
+            studio_store.tag("ifc", path.name, u)
+        except Exception:
+            pass
     return {"name": path.name, "size": size, "seconds": round(time.time() - t0, 1)}
 
 
 @ifc_router.get("/file/{name}")
-def get_model(name: str) -> FileResponse:
+def get_model(request: Request, name: str) -> FileResponse:
+    if not _studio_visible(request, "ifc", name):
+        raise HTTPException(status_code=404, detail="Файл не найден")
     path = _safe_path(name)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Модель не найдена")
@@ -101,7 +127,9 @@ def get_model(name: str) -> FileResponse:
 
 
 @ifc_router.delete("/file/{name}")
-def delete_model(name: str) -> dict:
+def delete_model(request: Request, name: str) -> dict:
+    if not _studio_visible(request, "ifc", name):
+        raise HTTPException(status_code=404, detail="Файл не найден")
     path = _safe_path(name)
     if not path.is_file():
         raise HTTPException(status_code=404, detail="Модель не найдена")
