@@ -2,7 +2,8 @@
  *
  * Подключается тегом <script src="/devbim-banner.js" defer> в index.html
  * (деплоит rebrand_devbim.py). Содержимое:
- *   - кликабельный логотип DevBIM -> страница регистрации (REG_URL, заглушка);
+ *   - кликабельная эмблема «devBIM - Design» -> страница регистрации
+ *     (REG_URL, заглушка);
  *   - слоган справа; язык слогана следует за языком интерфейса приложения
  *     (срез system персистится redux-remember в IndexedDB «invoke» /
  *     «invoke-store», ключ «@@invokeai-system», поле language).
@@ -36,12 +37,13 @@
     '#devbim-banner{display:flex;align-items:center;gap:12px;height:var(--devbim-banner-h);' +
     'padding:0 14px;background:#111111;border-bottom:1px solid #2b2f35;' +
     'font-family:Inter,\'Segoe UI\',system-ui,sans-serif;user-select:none}' +
-    '#devbim-banner a.devbim-logo{display:flex;align-items:center;gap:8px;' +
+    '#devbim-banner a.devbim-logo{display:flex;align-items:center;' +
     'text-decoration:none;white-space:nowrap;cursor:pointer}' +
     '#devbim-banner a.devbim-logo:hover{filter:brightness(1.15)}' +
     '#devbim-banner .devbim-word{font-size:15.5px;font-weight:700;letter-spacing:.3px}' +
     '#devbim-banner .devbim-word .dev{color:#f2f4f6}' +
     '#devbim-banner .devbim-word .bim{color:#38BDF8}' +
+    '#devbim-banner .devbim-word .design{color:#f2f4f6;font-weight:600}' +
     '#devbim-banner .devbim-tagline{flex:1;min-width:0;font-size:12.5px;color:#aab3ba;' +
     'white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
     '@media (max-width:640px){#devbim-banner .devbim-tagline{display:none}}' +
@@ -49,11 +51,7 @@
     '#root{height:calc(100dvh - var(--devbim-banner-h))}' +
     '#invoke-app-wrapper{height:calc(100dvh - var(--devbim-banner-h))!important}';
 
-  // --- разметка баннера ---
-  var LOGO_SVG =
-    '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
-    '<path d="M12 2 21 7v10l-9 5-9-5V7l9-5z" stroke="#38BDF8" stroke-width="1.7" stroke-linejoin="round"/>' +
-    '<path d="M12 12 21 7M12 12v10M12 12 3 7" stroke="#38BDF8" stroke-width="1.7" stroke-linejoin="round"/></svg>';
+  // --- эмблема «devBIM - Design» (без иконки: чистый текстовый вордмарк) ---
 
   var lang = 'ru';   // до первого чтения настроек — русский
   var els = {};
@@ -106,8 +104,9 @@
     link.href = REG_URL;
     link.target = '_blank';
     link.rel = 'noopener';
-    link.innerHTML = LOGO_SVG +
-      '<span class="devbim-word"><span class="dev">Dev</span><span class="bim">BIM</span></span>';
+    link.innerHTML =
+      '<span class="devbim-word"><span class="dev">dev</span><span class="bim">BIM</span>' +
+      '<span class="design"> - Design</span></span>';
 
     var tagline = document.createElement('span');
     tagline.className = 'devbim-tagline';

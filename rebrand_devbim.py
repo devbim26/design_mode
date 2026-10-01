@@ -18,6 +18,7 @@ import json
 import re
 import shutil
 import sys
+import urllib.parse
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent
@@ -188,6 +189,80 @@ def patch_images() -> int:
         total += 1
     return total
 
+# Инлайн-эмблемы Invoke, вшитые data-URL'ами прямо в JS-бандлы (мимо
+# assets/images): сплэш при старте (белый символ 66x66), лого в сайдбаре
+# (контурный символ 44x44), баннер «Invoke» в модалке About (231x100).
+# Сигнатуры — куски path-данных «N»-образного знака Invoke (не зависят от цвета,
+# поэтому патч работает и до, и после перекраски %23E6FD13 -> %2338BDF8).
+INLINE_LOGO_SIGS = (
+    "10.6667H42V2H2V10.6667",    # 44x44, сайдбар (fallback лого с версией)
+    "38.6667H70V30H30V38.6667",  # 231x100, модалка About
+    "16H63.1211V3H3.12109V16",   # 66x66, сплэш-экран загрузки
+)
+
+# React-иконка InvokeLogoIcon (viewBox 66x66) — не data-URL, а JSX с path;
+# рендерится в пустой галерее (fallback «нет выбранного изображения»)
+INVOKE_ICON_PATH_RX = re.compile(
+    r'o\.jsx\("path",\{d:"M43\.9137 16H63\.1211V3H3\.12109V16H22\.3285'
+    r'L43\.9137 50H63\.1211V63H3\.12109V50H22\.3285"[^}]*\}\)'
+)
+INVOKE_ICON_DB_JSX = (
+    'o.jsxs("text",{x:33,y:33,textAnchor:"middle",dominantBaseline:"central",'
+    'fontFamily:"Arial, Helvetica, sans-serif",fontSize:41,fontWeight:"bold",'
+    'children:[o.jsx("tspan",{fill:"#FFFFFF",stroke:"none",children:"d"}),'
+    f'o.jsx("tspan",{{fill:"{ACCENT}",stroke:"none",children:"B"}})]}})'
+)
+
+def make_inline_db_svg(w: float, h: float, banner: bool) -> str:
+    """Монограмма «dB» тех же габаритов, что заменяемая эмблема.
+
+    banner=True (About, голубая плашка): буквы тёмные, как «D» на favicon.
+    Иначе (прозрачный фон поверх тёмного UI): «d» белым, «B» голубым."""
+    if banner:
+        bg = f'<rect width="{int(w)}" height="{int(h)}" rx="5" fill="{ACCENT}"/>'
+        d_fg, b_fg = BLACK, BLACK
+    else:
+        bg = ""
+        d_fg, b_fg = "#FFFFFF", ACCENT
+    return (
+        f'<svg width="{int(w)}" height="{int(h)}" viewBox="0 0 {int(w)} {int(h)}" '
+        f'fill="none" xmlns="http://www.w3.org/2000/svg">{bg}'
+        f'<text x="{w/2:.1f}" y="{h/2:.1f}" text-anchor="middle" dominant-baseline="central" '
+        f'font-family="Arial, Helvetica, sans-serif" font-size="{h*0.62:.1f}" font-weight="bold">'
+        f'<tspan fill="{d_fg}">d</tspan><tspan fill="{b_fg}">B</tspan></text></svg>'
+    )
+
+def encode_svg_data_url(svg: str) -> str:
+    # В оригиналах заквочены только спецсимволы (< > пробел #), кавычки-апострофы
+    # и знаки препинания — буквально; делаем так же
+    return "data:image/svg+xml," + urllib.parse.quote(svg, safe="'/=:,.()-")
+
+def patch_inline_logos() -> int:
+    total = 0
+    rx_url = re.compile(r'data:image/svg\+xml,[^"]*')
+    rx_size = re.compile(r"width='(\d+(?:\.\d+)?)' height='(\d+(?:\.\d+)?)'")
+    for f in DIST.glob("assets/*.js"):
+        s = f.read_text(encoding="utf-8")
+
+        def repl(m: re.Match) -> str:
+            url = m.group(0)
+            svg = urllib.parse.unquote(url.split(",", 1)[1])
+            if not any(sig in svg for sig in INLINE_LOGO_SIGS):
+                return url
+            size = rx_size.search(svg)
+            if not size:
+                return url
+            w, h = float(size.group(1)), float(size.group(2))
+            return encode_svg_data_url(make_inline_db_svg(w, h, banner=w > h * 1.5))
+
+        s2 = rx_url.sub(repl, s)
+        s2 = INVOKE_ICON_PATH_RX.sub(INVOKE_ICON_DB_JSX, s2)
+        if s2 != s:
+            f.write_text(s2, encoding="utf-8")
+            total += len(re.findall("|".join(map(re.escape, INLINE_LOGO_SIGS)), s))
+            total += len(INVOKE_ICON_PATH_RX.findall(s))
+    return total
+
 def patch_backend() -> int:
     total = 0
     for f in BACKEND_FILES:
@@ -260,6 +335,7 @@ def main() -> None:
     print("JS/CSS файлов изменено:", patch_js_css())
     print("Локалей обновлено:", patch_locales())
     print("Логотипов заменено:", patch_images())
+    print("Инлайн-эмблем в бандлах заменено:", patch_inline_logos())
     print("Файлов бэкенда изменено:", patch_backend())
     print("Баннер DevBIM подключён:", deploy_banner())
     print("Стили вкладок холста подключены:", deploy_canvas_tabs())
