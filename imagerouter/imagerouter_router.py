@@ -1422,7 +1422,7 @@ def _queue_event_factories(queue_id: str, batch: dict, graph: dict, services: An
     return services.events.dispatch, status_event, progress_event, batch_id, origin, destination, session_id
 
 
-def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
+def _handle_canvas_generation(queue_id: str, payload: dict, studio_user: str | None = None) -> dict:
     """Генерация через ImageRouter вместо локального исполнения графа."""
     from PIL import Image
 
@@ -1474,6 +1474,7 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
             queue_id=queue_id, batch_id=batch_id, enqueued=runs, requested=runs, priority=0, origin=origin
         )
     )
+    _studio_tag("batch", batch_id, studio_user)
 
     _inflight_inc(queue_id)
     # invalidates SessionQueueStatus -> клиент перезапросит /status (он патчится
@@ -1756,6 +1757,7 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
                     board_id=info["board_id"],
                     metadata=metadata,
                 )
+                _studio_tag("image", dto.image_name, studio_user)
                 saved.append(dto)
                 print(f"[imagerouter] saved {dto.image_name}", flush=True)
                 events.dispatch(
@@ -1799,7 +1801,7 @@ def _handle_canvas_generation(queue_id: str, payload: dict) -> dict:
     }
 
 
-def _handle_upscale_generation(queue_id: str, payload: dict) -> dict:
+def _handle_upscale_generation(queue_id: str, payload: dict, studio_user: str | None = None) -> dict:
     """Апскейлинг через ImageRouter (вкладка Upscaling и quick-action из
     контекстного меню картинки): исходник + масштаб → edits-эндпоинт с
     серверным промптом, результат — в галерею. Проверка эха НЕ применяется:
@@ -1864,6 +1866,7 @@ def _handle_upscale_generation(queue_id: str, payload: dict) -> dict:
             queue_id=queue_id, batch_id=batch_id, enqueued=runs, requested=runs, priority=0, origin=origin
         )
     )
+    _studio_tag("batch", batch_id, studio_user)
 
     _inflight_inc(queue_id)
     events.dispatch(_status_event("in_progress"))
@@ -1955,6 +1958,7 @@ def _handle_upscale_generation(queue_id: str, payload: dict) -> dict:
                     board_id=info["board_id"],
                     metadata=metadata,
                 )
+                _studio_tag("image", dto.image_name, studio_user)
                 saved.append(dto)
                 print(f"[imagerouter] upscale saved {dto.image_name}", flush=True)
                 events.dispatch(
@@ -2051,6 +2055,25 @@ def _ir_error_body(message: str) -> dict:
     return {"detail": [{"loc": [], "msg": message, "type": "value_error"}]}
 
 
+def _studio_user_from_scope(scope) -> "str | None":
+    """Пользователь студии, инжектированный SiteAuthMiddleware (sso-режим)."""
+    for k, v in scope.get("headers", []):
+        if k == b"x-studio-user":
+            return v.decode("latin-1") or None
+    return None
+
+
+def _studio_tag(kind: str, key, user: "str | None") -> None:
+    """Записать владение в оверлей-БД; без деплоя studio_store — молча пропустить."""
+    if not user or not key:
+        return
+    try:
+        from invokeai.app.api.routers import studio_store
+        studio_store.tag(kind, str(key), user)
+    except Exception:
+        pass
+
+
 class ImageRouterCanvasMiddleware:
     """Добавляет модели ImageRouter в /api/v2/models и перехватывает их генерацию."""
 
@@ -2141,7 +2164,8 @@ class ImageRouterCanvasMiddleware:
                 except Exception:
                     pass
                 try:
-                    result = await asyncio.to_thread(handler, queue_id, payload)
+                    studio_user = _studio_user_from_scope(scope)
+                    result = await asyncio.to_thread(handler, queue_id, payload, studio_user)
                 except _IRClientError as e:
                     # 06.09: ошибки улетали тостом в UI, не оставляя следа в
                     # ir_server.log — при разборе «что реально ушло» приходилось
