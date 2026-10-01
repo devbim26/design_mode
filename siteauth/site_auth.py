@@ -300,8 +300,42 @@ class SiteAuthMiddleware:
                                 "role": studio_store.effective_role(user) or "user"})
 
     async def _admin_panel(self, scope, receive, send, user: str, role: str) -> None:
-        """Задача 7 заменяет на полную панель; здесь — заглушка-страница."""
-        await _send_html(send, 200, _page("Админ", "<p>Админ-панель студии.</p>"))
+        path, method = scope.get("path", ""), scope.get("method", "GET").upper()
+        if path == "/admin/api/users" and method == "GET":
+            users = []
+            for u in studio_store.list_users():
+                # админы-операторы (базовая роль admin из devbim.com и локальный
+                # SITE_PASSWORD-админ) в таблице членов студии не показываются;
+                # участники с override-ролью admin остаются видимыми (пометка «*»)
+                if u["user_id"] == studio_store.ADMIN_LOCAL or u["role"] == "admin":
+                    continue
+                u = dict(u)
+                u["effective_role"] = studio_store.effective_role(u["user_id"])
+                u["counts"] = studio_store.owned_count(u["user_id"])
+                users.append(u)
+            await _send_json(send, {"users": users})
+            return
+
+        m = re.match(r"^/admin/api/users/([^/]+)/(role|revoke)$", path)
+        if m and method == "POST":
+            body = await _read_body(receive)
+            try:
+                data = json.loads(body or b"{}")
+            except ValueError:
+                data = {}
+            uid = unquote(m.group(1))
+            if m.group(2) == "role":
+                r = data.get("role")
+                if r not in ("admin", "user", None):
+                    await _send_json(send, {"detail": "role must be admin|user|null"}, status=422)
+                    return
+                studio_store.set_role_override(uid, r)
+            else:
+                studio_store.set_revoked(uid, bool(data.get("revoked")))
+            await _send_json(send, {"ok": True})
+            return
+
+        await _send_html(send, 200, _ADMIN_PAGE.encode("utf-8"))
 
     # ---------- изоляция владения (sso, role != admin) ----------
     @staticmethod
@@ -581,6 +615,64 @@ def _password_login_page(error: str = "") -> bytes:
 <label for="password">Пароль</label>
 <input id="password" type="password" name="password" autofocus autocomplete="current-password">
 <button type="submit">Войти</button></form>""")
+
+
+# --- админ-панель /admin (задача 7) ---
+_ADMIN_PAGE = """<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Пользователи — DevBIM Image Studio</title>
+<style>
+  body { font-family:'Segoe UI',system-ui,sans-serif; background:#0B0C0E; color:#E6EAF2; margin:0; padding:32px; }
+  h1 { font-size:20px; } a { color:#38BDF8; }
+  table { border-collapse:collapse; width:100%; margin-top:20px; font-size:13.5px; }
+  th, td { text-align:left; padding:8px 10px; border-bottom:1px solid #23262D; }
+  th { color:#7C8598; font-weight:600; }
+  select, button { background:#14161A; color:#E6EAF2; border:1px solid #2A2E37;
+        border-radius:6px; padding:5px 8px; font-size:12.5px; cursor:pointer; }
+  button:hover { border-color:#38BDF8; }
+  .revoked { color:#FCA5A5; }
+</style></head><body>
+<h1>Пользователи студии</h1>
+<p><a href="/">← к студии</a></p>
+<table id="t"><thead><tr>
+  <th>Email</th><th>Имя</th><th>Роль</th><th>Картинки</th><th>Борды</th>
+  <th>IFC</th><th>PDF</th><th>3D</th><th>Последний вход</th><th>Действия</th>
+</tr></thead><tbody></tbody></table>
+<script>
+fetch('/admin/api/users').then(r => r.json()).then(d => {
+  const tb = document.querySelector('#t tbody');
+  for (const u of d.users) {
+    const tr = document.createElement('tr');
+    if (u.revoked) tr.className = 'revoked';
+    const when = new Date(u.last_seen * 1000).toLocaleString();
+    tr.innerHTML = '<td>' + u.email + '</td><td>' + (u.name || '') + '</td>' +
+      '<td>' + u.effective_role + (u.role_override ? ' *' : '') + '</td>' +
+      '<td>' + u.counts.images + '</td><td>' + u.counts.boards + '</td>' +
+      '<td>' + u.counts.ifc + '</td><td>' + u.counts.pdf + '</td><td>' + u.counts.threed + '</td>' +
+      '<td>' + when + '</td><td></td>';
+    const td = tr.lastElementChild;
+    const sel = document.createElement('select');
+    for (const v of ['—', 'user', 'admin']) {
+      const o = document.createElement('option');
+      o.value = v === '—' ? '' : v; o.textContent = v;
+      if ((u.role_override || '') === o.value) o.selected = true;
+      sel.appendChild(o);
+    }
+    sel.onchange = () => post('/admin/api/users/' + encodeURIComponent(u.user_id) + '/role',
+      { role: sel.value || null });
+    const btn = document.createElement('button');
+    btn.textContent = u.revoked ? 'Разблокировать' : 'Заблокировать';
+    btn.onclick = () => post('/admin/api/users/' + encodeURIComponent(u.user_id) + '/revoke',
+      { revoked: !u.revoked }).then(() => location.reload());
+    td.appendChild(sel); td.appendChild(document.createTextNode(' ')); td.appendChild(btn);
+    tb.appendChild(tr);
+  }
+});
+function post(url, body) {
+  return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body) }).then(() => location.reload());
+}
+</script></body></html>"""
 
 
 # --- совместимость со старыми тестами/вызовами password-режима ---

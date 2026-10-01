@@ -177,6 +177,20 @@ try:
     d = r.json()
     assert [i["batch_id"] for i in d["items"]] == ["b1"] and d["total"] == 1, d
 
+    # 8. админ-панель: список пользователей и действия
+    r = Rec()
+    run(mw(scope("/admin/api/users", "GET", cadm), idle(), r))
+    d = r.json()
+    emails = {u["email"] for u in d["users"]}
+    assert emails == {"u1@x.io", "u2@x.io"}, emails
+    r = Rec()
+    body = json.dumps({"role": "admin"}).encode()
+    run(mw(scope("/admin/api/users/u2/role", "POST", cadm), idle(body), r))
+    assert r.status == 200 and studio_store.effective_role("u2") == "admin"
+    r = Rec()
+    run(mw(scope("/admin/api/users/u2/role", "POST", c1), idle(body), r))
+    assert r.status == 403, r.status  # не-админ не имеет доступа к /admin
+
     print("OK")
 finally:
     for k, v in saved.items():
