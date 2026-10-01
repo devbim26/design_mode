@@ -23,7 +23,10 @@ import os
 from pathlib import Path
 from urllib.parse import parse_qs, quote
 
-import studio_store
+try:  # задеплоено в venv (пакет invokeai.app.api.routers)
+    from invokeai.app.api.routers import studio_store
+except ImportError:  # дерево проекта (тесты: siteauth/ на sys.path)
+    import studio_store
 
 COOKIE_NAME = studio_store.COOKIE_NAME          # devbim_session (sso)
 LEGACY_COOKIE = "devbim_auth"                   # password-режим
