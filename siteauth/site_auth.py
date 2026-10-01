@@ -322,7 +322,8 @@ class SiteAuthMiddleware:
             try:
                 data = json.loads(body or b"{}")
             except ValueError:
-                data = {}
+                await _send_json(send, {"detail": "invalid JSON body"}, status=422)
+                return
             uid = unquote(m.group(1))
             if m.group(2) == "role":
                 r = data.get("role")
@@ -639,13 +640,18 @@ _ADMIN_PAGE = """<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8">
   <th>IFC</th><th>PDF</th><th>3D</th><th>Последний вход</th><th>Действия</th>
 </tr></thead><tbody></tbody></table>
 <script>
+function esc(s) {
+  const d = document.createElement('div');
+  d.textContent = s == null ? '' : String(s);
+  return d.innerHTML;
+}
 fetch('/admin/api/users').then(r => r.json()).then(d => {
   const tb = document.querySelector('#t tbody');
   for (const u of d.users) {
     const tr = document.createElement('tr');
     if (u.revoked) tr.className = 'revoked';
     const when = new Date(u.last_seen * 1000).toLocaleString();
-    tr.innerHTML = '<td>' + u.email + '</td><td>' + (u.name || '') + '</td>' +
+    tr.innerHTML = '<td>' + esc(u.email) + '</td><td>' + esc(u.name || '') + '</td>' +
       '<td>' + u.effective_role + (u.role_override ? ' *' : '') + '</td>' +
       '<td>' + u.counts.images + '</td><td>' + u.counts.boards + '</td>' +
       '<td>' + u.counts.ifc + '</td><td>' + u.counts.pdf + '</td><td>' + u.counts.threed + '</td>' +

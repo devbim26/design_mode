@@ -190,6 +190,9 @@ try:
     r = Rec()
     run(mw(scope("/admin/api/users/u2/role", "POST", c1), idle(body), r))
     assert r.status == 403, r.status  # не-админ не имеет доступа к /admin
+    r = Rec()
+    run(mw(scope("/admin/api/users/u2/role", "POST", cadm), idle(b"not-json{"), r))
+    assert r.status == 422, r.status  # кривой JSON не мутирует состояние
 
     print("OK")
 finally:
