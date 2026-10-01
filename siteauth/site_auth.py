@@ -53,8 +53,17 @@ _RE_IMAGES_BODY = re.compile(r"^/api/v1/images/(delete|download|star|unstar)/?$"
 _RE_QUEUE_LIST = re.compile(r"^/api/v1/queue/[^/]+/list(?:_all)?$")
 # destructive-эндпоинты без собственных гейтов (финальное ревью I1)
 _RE_IMAGES_UNCAT = re.compile(r"^/api/v1/images/uncategorized/?$")
-_RE_BOARD_IMAGES = re.compile(r"^/api/v1/board_images/(?:batch|batch/delete)/?$")
+# batch/batch/delete и единичные POST|DELETE / (follow-up N2/N3: в 6.2.0
+# у batch/delete и единичного DELETE тело БЕЗ board_id — гейт по картинкам)
+_RE_BOARD_IMAGES = re.compile(r"^/api/v1/board_images(?:/(?:batch/delete|batch))?/?$")
 _RE_QUEUE_ITEM = re.compile(r"^/api/v1/queue/[^/]+/i/[^/]+(?:/cancel)?/?$")
+# массовые queue-операции без карты владения (follow-up N1) — админ-only;
+# processor/resume|pause — через альтернативу processor + /[^/]+;
+# d/{destination} — DELETE по назначению (real router 6.2.0)
+_RE_QUEUE_ADMIN = re.compile(
+    r"^/api/v1/queue/[^/]+/(cancel_all_except_current|delete_all_except_current"
+    r"|cancel_by_batch_ids|cancel_by_destination|retry_items_by_id|clear|prune"
+    r"|processor|d)(?:/[^/]+)?/?$")
 _RE_WRITE_ADMIN = re.compile(r"^/api/v1/(style_presets|workflows)(?:/|$)")
 
 
@@ -432,6 +441,13 @@ class SiteAuthMiddleware:
             await _send_json(send, {"detail": "Administrator only"}, status=403)
             return
 
+        # --- массовые queue-операции без карты владения — админу (N1) ---
+        if method in ("POST", "PUT", "DELETE") and _RE_QUEUE_ADMIN.match(path) and role != "admin":
+            print(f"[studio] bulk queue op denied (admin only): {method} {path}",
+                  file=sys.stderr)
+            await _send_json(send, {"detail": "Administrator only"}, status=403)
+            return
+
         if role == "admin":  # админ не фильтруется
             await self.app(scope, receive, send)
             return
@@ -447,9 +463,14 @@ class SiteAuthMiddleware:
                 data = json.loads(body or b"{}") or {}
             except ValueError:
                 data = {}
-            names = data.get("image_names") or []
-            ok = self._visible(uid, studio_store.owner("board", str(data.get("board_id")))) \
-                and all(self._visible(uid, studio_store.owner("image", str(n))) for n in names)
+            names = [str(n) for n in (data.get("image_names") or [])]
+            if data.get("image_name"):
+                names.append(str(data["image_name"]))
+            # у batch/delete и единичного DELETE board_id в теле нет (6.2.0) —
+            # борд не проверяем, только владение всеми картинками (N2)
+            bid = data.get("board_id")
+            ok = (not bid or self._visible(uid, studio_store.owner("board", str(bid)))) \
+                and all(self._visible(uid, studio_store.owner("image", n)) for n in names)
             if not ok:
                 await _send_json(send, {"detail": "Forbidden: foreign board or images"}, status=403)
                 return

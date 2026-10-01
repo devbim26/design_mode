@@ -222,6 +222,54 @@ try:
     run(mw(scope("/api/v1/queue/default/i/5", "DELETE", c1), idle(), r))
     assert r.status == 403, r.status  # пункты очереди (id без карты владения) — админу
 
+    # 9b. массовые queue-операции — админу (follow-up N1; реальные пути 6.2.0)
+    r = Rec()
+    run(mw(scope("/api/v1/queue/default/clear", "PUT", c1), idle(), r))
+    assert r.status == 403, r.status
+    r = Rec()
+    run(mw(scope("/api/v1/queue/default/processor/resume", "PUT", c1), idle(), r))
+    assert r.status == 403, r.status
+    r = Rec()
+    run(mw(scope("/api/v1/queue/default/d/generation", "DELETE", c1), idle(), r))
+    assert r.status == 403, r.status
+    r = Rec()
+    run(mw(scope("/api/v1/queue/default/clear", "PUT", cadm), idle(), r))
+    assert r.status == 200 and r.json() == {"upstream": True}
+
+    # 9c. batch/delete без board_id (реальное тело 6.2.0) — только владение
+    #     картинками (follow-up N2: регрессия — всегда 403)
+    r = Rec()
+    body = json.dumps({"image_names": ["new-upload.png"]}).encode()
+    run(mw(scope("/api/v1/board_images/batch/delete", "POST", c1), idle(body), r))
+    assert r.status == 200 and r.json() == {"upstream": True}
+    r = Rec()
+    body = json.dumps({"image_names": ["u2.png"]}).encode()
+    run(mw(scope("/api/v1/board_images/batch/delete", "POST", c1), idle(body), r))
+    assert r.status == 403, r.status  # чужая картинка без board_id всё равно запрещена
+
+    # 9d. единичный board_images (POST/DELETE, тело {board_id,image_name})
+    #     под тем же гейтом (follow-up N3)
+    r = Rec()
+    body = json.dumps({"board_id": "new-board", "image_name": "new-upload.png"}).encode()
+    run(mw(scope("/api/v1/board_images/", "POST", c1), idle(body), r))
+    assert r.status == 200 and r.json() == {"upstream": True}  # всё своё
+    r = Rec()
+    body = json.dumps({"board_id": "u2-board", "image_name": "new-upload.png"}).encode()
+    run(mw(scope("/api/v1/board_images/", "POST", c1), idle(body), r))
+    assert r.status == 403, r.status  # чужой борд
+    r = Rec()
+    body = json.dumps({"board_id": "new-board", "image_name": "u2.png"}).encode()
+    run(mw(scope("/api/v1/board_images/", "POST", c1), idle(body), r))
+    assert r.status == 403, r.status  # чужая картинка
+    r = Rec()
+    body = json.dumps({"image_name": "u2.png"}).encode()  # DELETE без board_id
+    run(mw(scope("/api/v1/board_images/", "DELETE", c1), idle(body), r))
+    assert r.status == 403, r.status
+    r = Rec()
+    body = json.dumps({"image_name": "new-upload.png"}).encode()
+    run(mw(scope("/api/v1/board_images/", "DELETE", c1), idle(body), r))
+    assert r.status == 200 and r.json() == {"upstream": True}
+
     print("OK")
 finally:
     for k, v in saved.items():
