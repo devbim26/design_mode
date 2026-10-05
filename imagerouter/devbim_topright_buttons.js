@@ -11,7 +11,11 @@
  * window.__devbimPEPending. «3D Design» открывает модалку генерации 3D
  * (сценарий/источник/промт -> POST /api/v1/threed/generate -> {jobId} ->
  * поллинг GET /jobs/{id} с этапами (анализ/сборка/проверка) -> вкладка IFC;
- * сценарии: генплан, фасад, интерьер, сцена — все активны (фазы 1–4).
+ * сценарии: Site Plan (генплан), Floor Plan (план квартиры, бэкенд-ключ
+ * interior — стены по чертежу), Interior (interior3d, 05.10 — рендер/фото
+ * готового интерьера: комната-бокс + мебель + люди + камера как на
+ * исходнике), Exterior (сцена) — фасад убран из модалки 05.10
+ * (бэкенд-сценарий facade сохранён).
  * Фоновые задачи — фикс 524: конвейер 2–6 мин не влезает в ~100-секундный
  * лимит Cloudflare-туннеля на длинный HTTP-ответ.
  *
@@ -43,12 +47,12 @@
       srcCanvas: 'Холст', srcViewer: 'Галерея',
       noSource: 'Положите картинку на Холст или выберите в галерее/вьювере',
       generate: 'Сгенерировать 3D', generating: 'Анализ модели…',
-      done: 'Модель создана:', plan: 'Генплан', facade: 'Фасад', interior: 'Интерьер',
-      scene: 'Сцена',
+      done: 'Модель создана:', plan: 'Site Plan', interior: 'Floor Plan',
+      interior3d: 'Interior', scene: 'Exterior',
       pickScenario: 'Что генерируем?',
       promptPhPlan: 'Уточнения: «жилой 5 этажей, школа 3, масштаб 0.5 м/px»',
-      promptPhFacade: 'Уточнения: «5 этажей, двускатная крыша, окна 4 в ряд, балконы со 2 этажа, глубина 14 м»',
       promptPhInterior: 'Уточнения: «высота стен 2.8, масштаб 0.01 м/px, стены по чертежу»',
+      promptPhInterior3d: 'Уточнения: «гостиная 5×4 м, потолок 3 м, диван у северной стены, человек у окна»',
       promptPhScene: 'Уточнения: «2 дома: главный 7 этажей, второй 3 справа; деревья вдоль дороги; камера слева»',
       netErr: 'Ошибка сети/сервера',
       stageQueued: 'В очереди', stageAnalysis: 'Анализ картинки (VLM)',
@@ -62,12 +66,12 @@
       srcCanvas: 'Canvas', srcViewer: 'Gallery',
       noSource: 'Put an image on the Canvas or select one in the viewer',
       generate: 'Generate 3D', generating: 'Analyzing the model…',
-      done: 'Model created:', plan: 'Master plan', facade: 'Facade', interior: 'Interior',
-      scene: 'Scene',
+      done: 'Model created:', plan: 'Site Plan', interior: 'Floor Plan',
+      interior3d: 'Interior', scene: 'Exterior',
       pickScenario: 'What to generate?',
       promptPhPlan: 'Hints: "residential 5 floors, school 3, scale 0.5 m/px"',
-      promptPhFacade: 'Hints: "5 storeys, gable roof, 4 windows per row, balconies from floor 2, depth 14 m"',
       promptPhInterior: 'Hints: "wall height 2.8, scale 0.01 m/px, walls as drawn"',
+      promptPhInterior3d: 'Hints: "living room 5x4 m, ceiling 3 m, sofa at the north wall, person by the window"',
       promptPhScene: 'Hints: "2 houses: main 7 storeys, second 3 on the right; trees along the road; camera on the left"',
       netErr: 'Network/server error',
       stageQueued: 'Queued', stageAnalysis: 'Analyzing image (VLM)',
@@ -366,8 +370,8 @@
       '<div class="devbim-3d-head"><b>3D Design</b><button class="devbim-3d-x" aria-label="close">✕</button></div>' +
       '<div class="devbim-3d-tiles">' +
       '<button class="devbim-3d-tile" data-s="plan"><span>🗺</span>' + t().plan + '</button>' +
-      '<button class="devbim-3d-tile" data-s="facade"><span>🏢</span>' + t().facade + '</button>' +
-      '<button class="devbim-3d-tile" data-s="interior"><span>🛋</span>' + t().interior + '</button>' +
+      '<button class="devbim-3d-tile" data-s="interior"><span>📐</span>' + t().interior + '</button>' +
+      '<button class="devbim-3d-tile" data-s="interior3d"><span>🛋</span>' + t().interior3d + '</button>' +
       '<button class="devbim-3d-tile" data-s="scene"><span>🌇</span>' + t().scene + '</button>' +
       '</div>' +
       '<div class="devbim-3d-src"><img alt=""><span class="devbim-3d-badge">—</span></div>' +
@@ -386,8 +390,9 @@
         b.classList.add('on');
         var ta = document.getElementById('devbim-3d-prompt');
         if (ta) {
-          var ph = {plan: t().promptPhPlan, facade: t().promptPhFacade,
-                    interior: t().promptPhInterior, scene: t().promptPhScene};
+          var ph = {plan: t().promptPhPlan,
+                    interior: t().promptPhInterior,
+                    interior3d: t().promptPhInterior3d, scene: t().promptPhScene};
           ta.placeholder = ph[b.getAttribute('data-s')] || t().promptPhPlan;
         }
       });

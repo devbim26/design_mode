@@ -103,6 +103,23 @@ def scene_overview(scenario, scene):
                             1 for p in people if float(p.get("z_m") or 0.0) > 0.05),
                         "furniture": kinds},
         }
+    if scenario == "interior3d":
+        kinds = {}
+        for item in scene.get("furniture") or []:
+            ftype = item.get("type", "other")
+            kinds[ftype] = kinds.get(ftype, 0) + 1
+        ops = scene.get("openings") or []
+        room = scene.get("room") or {}
+        cam = scene.get("camera") or {}
+        return {"room": {"width_m": _r(room.get("width_m")),
+                         "depth_m": _r(room.get("depth_m")),
+                         "height_m": _r(room.get("height_m")),
+                         "ceiling": bool(room.get("ceiling"))},
+                "openings": {"doors": sum(1 for o in ops if o.get("kind") == "door"),
+                             "windows": sum(1 for o in ops
+                                            if o.get("kind") == "window")},
+                "furniture": kinds, "people": len(scene.get("people") or []),
+                "camera": {k: _r(v) for k, v in cam.items()}}
     if scenario == "interior":
         kinds = {}
         for item in scene.get("furniture") or []:

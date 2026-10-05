@@ -1452,3 +1452,298 @@ def _draw_scene_preview(data, preview_path):
     preview_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(preview_path, facecolor="white")
     plt.close(fig)
+
+
+# ===== Сценарий «Interior 3D» (рендер интерьера, 05.10) =====
+
+ASSUMPTION_INTERIOR3D = (
+    "Концептуальная модель комнаты по рендеру/фото интерьера (3D Design). Комната — "
+    "ортогональный «боксовый» каркас; мебель и люди — схематичные объёмы; перспектива "
+    "принята за ортогональную, размеры оценочные по опорным объектам. Камера "
+    "воспроизводит точку съёмки исходника приблизительно. Не использовать как "
+    "обмерную или рабочую документацию."
+)
+
+INTERIOR3D_COLORS = {
+    "floor": "#D9D4C8", "ceiling": "#f0ece4",
+    "door": "#7A4E35", "window": "#A8D4EA", "person": "#38424e",
+}
+# Стены комнаты — палитра ОРИЕНТАЦИЙ (запрос 05.10 «не сливаться»):
+# южная/северная — вдоль X (терракота), западная/восточная — вдоль Y (хаки);
+# hex-ы = INTERIOR_WALL_PALETTE фазы 3 (ext-варианты) — их знает AI-палитра
+# вьювера (AI_EXT_HEXES -> тёмный вариант по нормалям граней), пол #D9D4C8
+# тоже из её AI_SHELL_HEXES (светлый). Цвет кодирует ориентацию, не материал.
+INTERIOR3D_WALL_COLORS = {
+    "x": INTERIOR_WALL_PALETTE[("ext", "X")],   # южная/северная
+    "y": INTERIOR_WALL_PALETTE[("ext", "Y")],   # западная/восточная
+}
+INTERIOR3D_COLOR_LEGEND = (
+    "Стены: южная/северная — терракота, западная/восточная — хаки (код "
+    "ориентации, не материал); AI-палитра вьювера перекрашивает грани по "
+    "сторонам света (тёмные — стены, светлый — пол)."
+)
+# дефолты по типу; hex от VLM перекрывает (динамический стиль)
+INTERIOR3D_FURN_COLORS = {
+    "bed": "#8fa3bf", "sofa": "#7f9b8e", "armchair": "#9b8e7f",
+    "table": "#c9a227", "chair": "#d4ac9e", "wardrobe": "#a58d6f",
+    "kitchen": "#9aa3ad", "tv": "#23282e", "rug": "#c7b9a5",
+    "plant": "#4e7a4e", "lamp": "#f0d68a", "other": "#b8bcc2",
+}
+INTERIOR3D_FURN_RU = {
+    "bed": "Кровать", "sofa": "Диван", "armchair": "Кресло", "table": "Стол",
+    "chair": "Стул", "wardrobe": "Шкаф", "kitchen": "Кухня", "tv": "ТВ",
+    "rug": "Ковёр", "plant": "Растение", "lamp": "Лампа", "other": "Предмет",
+}
+INTERIOR3D_WALL_T = 0.15  # толщина стен shoebox
+INTERIOR3D_WALL_RU = {"south": "южная", "north": "северная",
+                      "west": "западная", "east": "восточная"}
+
+
+def build_interior3d(scene, ifc_path, preview_path, meta):
+    """Сцена рендера интерьера (validate_interior3d) -> IFC4 + план-превью.
+
+    Room-frame спеки: центр комнаты на полу, X восток, Y север; южная стена —
+    за камерой рендера. Камера — pset CameraHint (Mode=interior, глаз/цель
+    в метрах IFC) + camHint ответа роутера."""
+    data = dict(scene)
+    room = data["room"]
+    w, d, h = room["width_m"], room["depth_m"], room["height_m"]
+    T = INTERIOR3D_WALL_T
+
+    model = _api("project.create_file", version="IFC4")
+    project = _api("root.create_entity", file=model, ifc_class="IfcProject",
+                   name=data.get("project_name", "3D Design — Interior"))
+    project.Description = ASSUMPTION_INTERIOR3D
+    units = [_api("unit.add_si_unit", file=model, unit_type=t)
+             for t in ("LENGTHUNIT", "AREAUNIT", "VOLUMEUNIT")]
+    _api("unit.assign_unit", file=model, units=units)
+    context = _api("context.add_context", file=model, context_type="Model")
+    body = _api("context.add_context", file=model, context_type="Model",
+                context_identifier="Body", target_view="MODEL_VIEW", parent=context)
+    site = _api("root.create_entity", file=model, ifc_class="IfcSite", name="Участок")
+    _api("aggregate.assign_object", file=model, products=[site], relating_object=project)
+    _api("geometry.edit_object_placement", file=model, product=site, matrix=np.eye(4))
+    building = _api("root.create_entity", file=model, ifc_class="IfcBuilding",
+                    name=data.get("building_name", "Комната по рендеру"))
+    building.Description = ASSUMPTION_INTERIOR3D
+    _api("aggregate.assign_object", file=model, products=[building], relating_object=site)
+    _api("geometry.edit_object_placement", file=model, product=building, matrix=np.eye(4))
+    storey = _api("root.create_entity", file=model, ifc_class="IfcBuildingStorey",
+                  name="Этаж 01")
+    storey.Elevation = 0.0
+    _api("aggregate.assign_object", file=model, products=[storey], relating_object=building)
+    _api("geometry.edit_object_placement", file=model, product=storey, matrix=np.eye(4))
+    _properties(model, project, "DevBIM", {
+        "Source": meta.get("Source", "3D Design"),
+        "Scenario": meta.get("Scenario", "interior3d"),
+        "Prompt": (meta.get("Prompt") or "")[:1024], "Model": meta.get("Model", ""),
+        "ApproximateGeometry": True, "Notes": ASSUMPTION_INTERIOR3D,
+        "EnsembleAgreement": (meta.get("EnsembleAgreement") or ""),
+    })
+
+    # стили: пол/потолок (цвета VLM — hex-гейт уже в валидаторе), проёмы,
+    # человек, мебель по типу + динамика; стены — палитра ориентаций
+    base_colors = dict(INTERIOR3D_COLORS)
+    for key in ("floor", "ceiling"):
+        v = room.get(f"{key}_color")
+        if isinstance(v, str) and v.startswith("#") and len(v) == 7:
+            base_colors[key] = v
+    fstyles = {}
+    for key, color in base_colors.items():
+        r, g, b = matplotlib.colors.to_rgb(color)
+        style = _api("style.add_style", file=model, name=f"Int3d{key.capitalize()}")
+        attrs = {"SurfaceColour": {"Name": key, "Red": r, "Green": g, "Blue": b},
+                 "Transparency": 0.0}
+        _api("style.add_surface_style", file=model, style=style,
+             ifc_class="IfcSurfaceStyleShading", attributes=attrs)
+        fstyles[key] = style
+    for skey, color in INTERIOR3D_WALL_COLORS.items():
+        r, g, b = matplotlib.colors.to_rgb(color)
+        style = _api("style.add_style", file=model, name=f"Int3dWall{skey.upper()}")
+        _api("style.add_surface_style", file=model, style=style,
+             ifc_class="IfcSurfaceStyleShading",
+             attributes={"SurfaceColour": {"Name": f"wall-{skey}",
+                                            "Red": r, "Green": g, "Blue": b},
+                         "Transparency": 0.0})
+        fstyles[f"wall:{skey}"] = style
+    for ftype, color in INTERIOR3D_FURN_COLORS.items():
+        r, g, b = matplotlib.colors.to_rgb(color)
+        style = _api("style.add_style", file=model, name=f"Int3dF{ftype.capitalize()}")
+        _api("style.add_surface_style", file=model, style=style,
+             ifc_class="IfcSurfaceStyleShading",
+             attributes={"SurfaceColour": {"Name": f"furn-{ftype}", "Red": r,
+                                            "Green": g, "Blue": b},
+                         "Transparency": 0.0})
+        fstyles[f"furn:{ftype}"] = style
+
+    def box(name, bw, bd, bh, cx, cy, z, color_key, ifc_class="IfcBuildingElementProxy",
+            object_type="CONCEPTUAL_MASS", predefined=None, rot_deg=0.0):
+        """Прямоугольный блок room-frame: профиль bw×bd, выдавливание bh от z,
+        поворот rot_deg вокруг Z (как rbox интерьера, цвет по ключу fstyles)."""
+        kwargs = dict(file=model, ifc_class=ifc_class, name=name)
+        if predefined is not None:
+            kwargs["predefined_type"] = predefined
+        product = _api("root.create_entity", **kwargs)
+        if object_type is not None:
+            product.ObjectType = object_type
+        pts = [[-bw / 2, -bd / 2], [bw / 2, -bd / 2], [bw / 2, bd / 2], [-bw / 2, bd / 2]]
+        profile = _api("profile.add_arbitrary_profile", file=model, profile=pts, name=name)
+        representation = _api("geometry.add_profile_representation", file=model,
+                              context=body, profile=profile, depth=bh, cardinal_point=None)
+        _api("geometry.assign_representation", file=model, product=product,
+              representation=representation)
+        _api("spatial.assign_container", file=model, products=[product],
+             relating_structure=storey)
+        matrix = _rot_z(rot_deg)
+        matrix[0, 3], matrix[1, 3], matrix[2, 3] = float(cx), float(cy), float(z)
+        _api("geometry.edit_object_placement", file=model, product=product, matrix=matrix)
+        if color_key in fstyles:
+            _api("style.assign_representation_styles", file=model,
+                 shape_representation=representation, styles=[fstyles[color_key]])
+        return product
+
+    # --- пол / потолок / стены shoebox (внутренние грани на ±w/2, ±d/2);
+    #     стены — палитра ориентаций: юг/север вдоль X, запад/восток вдоль Y
+    box("Пол", w + 2 * T, d + 2 * T, 0.15, 0.0, 0.0, -0.15, "floor",
+        "IfcSlab", "CONCEPTUAL_FLOOR", predefined="FLOOR")
+    if room.get("ceiling"):
+        box("Потолок", w + 2 * T, d + 2 * T, 0.12, 0.0, 0.0, h, "ceiling",
+            "IfcCovering", "CONCEPTUAL_CEILING", predefined="CEILING")
+    box("Стена южная (за камерой)", w + 2 * T, T, h, 0.0, -(d / 2 + T / 2), 0.0,
+        "wall:x", "IfcWall", "CONCEPTUAL_WALL", predefined="USERDEFINED")
+    box("Стена северная", w + 2 * T, T, h, 0.0, d / 2 + T / 2, 0.0,
+        "wall:x", "IfcWall", "CONCEPTUAL_WALL", predefined="USERDEFINED")
+    box("Стена западная", T, d, h, -(w / 2 + T / 2), 0.0, 0.0,
+        "wall:y", "IfcWall", "CONCEPTUAL_WALL", predefined="USERDEFINED")
+    box("Стена восточная", T, d, h, w / 2 + T / 2, 0.0, 0.0,
+        "wall:y", "IfcWall", "CONCEPTUAL_WALL", predefined="USERDEFINED")
+
+    # --- проёмы: коробка на ВНУТРЕННЕЙ грани (+0.06 в комнату — урок фазы 2
+    #     о совпадающих гранях); x_m — от ЛЕВОГО конца стены ИЗНУТРИ комнаты
+    n_doors = n_windows = 0
+    for op in data.get("openings", []):
+        wall, x_m = op["wall"], op["x_m"]
+        if wall == "south":    # изнутри смотрим на -Y: лево = +X
+            cx, cy, rot = w / 2 - x_m, -d / 2 + 0.06, 0.0
+        elif wall == "north":  # на +Y: лево = -X
+            cx, cy, rot = -w / 2 + x_m, d / 2 - 0.06, 0.0
+        elif wall == "west":   # на -X: лево = -Y
+            cx, cy, rot = -w / 2 + 0.06, -d / 2 + x_m, 90.0
+        else:                  # east, на +X: лево = +Y
+            cx, cy, rot = w / 2 - 0.06, d / 2 - x_m, 90.0
+        if op["kind"] == "door":
+            n_doors += 1
+            name, otype, color_key = f"Дверь {n_doors}", "CONCEPTUAL_DOOR", "door"
+        else:
+            n_windows += 1
+            name, otype, color_key = f"Окно {n_windows}", "CONCEPTUAL_WINDOW", "window"
+        box(name, op["w_m"], 0.12, op["h_m"], cx, cy, op["sill_m"],
+            color_key, object_type=otype, predefined="USERDEFINED", rot_deg=rot)
+
+    # --- мебель: IfcFurnishingElement (дерево вьювера: «Оборудование/мебель»)
+    for idx, item in enumerate(data.get("furniture", []), start=1):
+        ftype = item["type"]
+        if item.get("color"):
+            color_key = _ensure_style(model, fstyles, f"i3dfurn{idx:02d}", item["color"])
+        else:
+            color_key = f"furn:{ftype}"
+        box(f"{INTERIOR3D_FURN_RU.get(ftype, 'Предмет')} {idx:02d}",
+            item["w_m"], item["d_m"], item["h_m"], item["x_m"], item["y_m"], 0.0,
+            color_key, ifc_class="IfcFurnishingElement",
+            object_type=f"FURNITURE_{ftype.upper()}", predefined="USERDEFINED",
+            rot_deg=item["rot_deg"])
+
+    # --- люди: схематичный бокс 0.5×0.3×h (паттерн «Сцены»)
+    for idx, per in enumerate(data.get("people", []), start=1):
+        box(f"Человек {idx}", 0.5, 0.3, per["h_m"], per["x_m"], per["y_m"], 0.0,
+            "person", object_type="CONCEPTUAL_PERSON", predefined="USERDEFINED",
+            rot_deg=per["rot_deg"])
+
+    cam = data["camera"]
+    # IFC-бокс комнаты (без мебели — она внутри): вьювер переводит глаз/цель
+    # camHint в мир по мировому box'у модели (вьювер сдвигает модель)
+    z_top = h + (0.12 if room.get("ceiling") else 0.0)
+    _properties(model, project, "CameraHint", {
+        "Mode": "interior",
+        "EyeXM": cam["eye_x_m"], "EyeYM": cam["eye_y_m"], "EyeZM": cam["eye_z_m"],
+        "YawDeg": cam["yaw_deg"],
+        "TargetXM": cam["target_x_m"], "TargetYM": cam["target_y_m"],
+        "TargetZM": cam["target_z_m"],
+        "BoxMinX": -(w / 2 + T), "BoxMinY": -(d / 2 + T), "BoxMinZ": -0.15,
+        "BoxMaxX": w / 2 + T, "BoxMaxY": d / 2 + T, "BoxMaxZ": z_top,
+    })
+    _properties(model, building, "RoomModel", {
+        "WidthM": w, "DepthM": d, "HeightM": h, "Ceiling": bool(room.get("ceiling")),
+        "OpeningsDoors": n_doors, "OpeningsWindows": n_windows,
+        "Furniture": len(data.get("furniture", [])),
+        "People": len(data.get("people", [])),
+        "OrthoAssumption": True, "Source": "3D Design", "Notes": ASSUMPTION_INTERIOR3D,
+        "ColorLegend": INTERIOR3D_COLOR_LEGEND,
+    })
+
+    _write_header(model, ifc_path)
+    ifc_path.parent.mkdir(parents=True, exist_ok=True)
+    model.write(str(ifc_path))
+    _draw_interior3d_preview(data, preview_path)
+    return ifc_path
+
+
+def _draw_interior3d_preview(data, preview_path):
+    """План комнаты сверху: мебель, люди, глаз камеры и взгляд до target."""
+    import matplotlib.transforms
+    from matplotlib.patches import Circle, FancyArrow, Rectangle
+
+    room = data["room"]
+    w, d = room["width_m"], room["depth_m"]
+    fig, ax = plt.subplots(figsize=(10, 8), dpi=140)
+    ax.add_patch(Rectangle((-w / 2, -d / 2), w, d, facecolor="#efece5",
+                           edgecolor="#263747", linewidth=1.4))
+    for it in data.get("furniture", []):
+        rot = it.get("rot_deg", 0.0) or 0.0
+        tr = matplotlib.transforms.Affine2D().rotate_deg_around(
+            it["x_m"], it["y_m"], rot) + ax.transData
+        rect = Rectangle((it["x_m"] - it["w_m"] / 2, it["y_m"] - it["d_m"] / 2),
+                         it["w_m"], it["d_m"],
+                         facecolor=it.get("color") or INTERIOR3D_FURN_COLORS.get(
+                             it["type"], "#b8bcc2"),
+                         edgecolor="#263747", alpha=.9)
+        rect.set_transform(tr)
+        ax.add_patch(rect)
+    for p in data.get("people", []):
+        ax.add_patch(Circle((p["x_m"], p["y_m"]), 0.3, facecolor="#38424e"))
+    cam = data["camera"]
+    ex, ey = cam["eye_x_m"], cam["eye_y_m"]
+    tx, ty = cam["target_x_m"], cam["target_y_m"]
+    ax.add_patch(Circle((ex, ey), 0.35, facecolor="#e2574c", edgecolor="#7a1f18", zorder=5))
+    ax.add_patch(FancyArrow(ex, ey, (tx - ex) * 0.85, (ty - ey) * 0.85,
+                            width=0.12, head_width=0.5, color="#e2574c",
+                            alpha=.85, zorder=5))
+    ax.text(ex, ey - 0.8, f"камера · глаз {cam['eye_z_m']:g} м",
+            ha="center", fontsize=8, color="#7a1f18", zorder=5)
+    for op in data.get("openings", []):
+        wall, x_m = op["wall"], op["x_m"]
+        if wall == "south":
+            x0, y0, bw, bd = w / 2 - x_m - op["w_m"] / 2, -d / 2 - 0.05, op["w_m"], 0.1
+        elif wall == "north":
+            x0, y0, bw, bd = -w / 2 + x_m - op["w_m"] / 2, d / 2 - 0.05, op["w_m"], 0.1
+        elif wall == "west":
+            x0, y0, bw, bd = -w / 2 - 0.05, -d / 2 + x_m - op["w_m"] / 2, 0.1, op["w_m"]
+        else:  # east
+            x0, y0, bw, bd = w / 2 - 0.05, d / 2 - x_m - op["w_m"] / 2, 0.1, op["w_m"]
+        ax.add_patch(Rectangle((x0, y0), bw, bd,
+                               facecolor=data.get("_colors", {}).get(
+                                   "door" if op["kind"] == "door" else "window",
+                                   "#7A4E35" if op["kind"] == "door" else "#A8D4EA"),
+                               edgecolor="#263747", linewidth=0.5))
+    ax.set_aspect("equal")
+    pad = 1.0
+    ax.set_xlim(-w / 2 - pad, w / 2 + pad)
+    ax.set_ylim(-d / 2 - pad, d / 2 + pad)
+    ax.set_title(f"3D Design — Interior: комната {w:g}×{d:g}×{room['height_m']:g} м, "
+                 f"мебели {len(data.get('furniture', []))}, людей "
+                 f"{len(data.get('people', []))}", fontsize=13)
+    ax.axis("off")
+    fig.tight_layout()
+    preview_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(preview_path, facecolor="white")
+    plt.close(fig)

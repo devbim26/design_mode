@@ -502,7 +502,7 @@ async function loadIfc(bytes, name) {
   await setProgress(0.9);
 
   await buildTree();
-  if (!applyCamHint()) fitModel();
+  if (!applyCamHint(name)) fitModel();
   if (personGroup && personModelName && personModelName !== name) removePerson();
   renderSecList();        // сечения переживают загрузку — пересчитать слайдеры
   updateSecShowPlanes();
@@ -515,7 +515,8 @@ async function loadIfc(bytes, name) {
   $("stat-model").className = "chip ok";
   $("empty").style.display = "none";
   $("counts").textContent = `элементов: ${n}`;
-  setStatus(`Модель загружена за ${secs} с`);
+  // интерьерная camHint уже объяснила камеру («Вид от глаз») — не перетирать
+  if (!fpState.active) setStatus(`Модель загружена за ${secs} с`);
 }
 
 function fitModel() {
@@ -538,11 +539,65 @@ function fitModel() {
 // П.46: hint.focus (балкон с людьми/мебелью, IFC-метры; view = (x, z, -y)) —
 // наводим камеру на фокус БЕЗ отъезда на 0.35 диагонали: сцена ~100 м,
 // человек 1.7 м — при фокусе нужна близость, а не охват всей сцены.
-function applyCamHint() {
+// Interior3d (05.10): hint.mode="interior" — в комнате СТОИТ ЧЕЛОВЕК, камера
+// «Вид от глаз» в позиции глаза рендера, взгляд на target (мышь — только
+// осмотр, WASD — ходьба; орбиты нет — камера не уходит за стены). Подсказка
+// ПЕРСОНИФИЦИРОВАНА по модели (devbim:ifc:interiorCam): F5/повторное
+// открытие модели возвращает тот же вид, а не fitModel снаружи коробки.
+function applyCamHint(modelName) {
   let hint = null;
   try { hint = JSON.parse(localStorage.getItem("devbim:ifc:camHint") || "null"); }
   catch { hint = null; }
   try { localStorage.removeItem("devbim:ifc:camHint"); } catch {}
+  if (!hint && modelName) {
+    // повторная загрузка той же модели — восстановить интерьерный вид
+    try {
+      const s = JSON.parse(localStorage.getItem("devbim:ifc:interiorCam") || "null");
+      if (s && s.model === modelName) hint = s.hint;
+    } catch {}
+  }
+  if (hint && hint.mode === "interior" && hint.eye && hint.target) {
+    const e = hint.eye, t = hint.target;
+    const num = v => (Number.isFinite(+v) ? +v : null);
+    const ex = num(e.eye_x_m ?? e.x_m), ey = num(e.eye_y_m ?? e.y_m),
+          ez = num(e.eye_z_m ?? e.z_m), tx = num(t.target_x_m ?? t.x_m),
+          ty = num(t.target_y_m ?? t.y_m), tz = num(t.target_z_m ?? t.z_m);
+    if (ex === null || ey === null || ez === null ||
+        tx === null || ty === null || tz === null) return false;
+    try {
+      localStorage.setItem("devbim:ifc:interiorCam",
+        JSON.stringify({ model: modelName, hint }));
+    } catch {}
+    // IFC room-frame -> мир вьювера: view = (x, z, -y) + перевод начала
+    // координат. Вьювер СДВИГАЕТ модель в мире (запекается во фрагменты) —
+    // «сырые» IFC-координаты дают камеру ВНЕ комнаты (живой кейс 05.10:
+    // глаз в 0,16 м за южной стеной). Сдвиг считаем по мировому box'у
+    // модели против IFC-бокса из hint.box (сдвиг трансляционный).
+    let ox = 0, oy = 0, oz = 0;
+    const wb = modelBox();
+    const b = hint.box;
+    if (wb && !wb.isEmpty() && Array.isArray(b?.min) && Array.isArray(b?.max)
+        && b.min.length === 3 && b.max.length === 3
+        && b.min.every(Number.isFinite) && b.max.every(Number.isFinite)) {
+      const cx = (b.min[0] + b.max[0]) / 2, cy = (b.min[1] + b.max[1]) / 2,
+            cz = (b.min[2] + b.max[2]) / 2;
+      const c = wb.getCenter(new Vector3());
+      ox = c.x - cx; oy = c.y - cz; oz = c.z + cy;   // IFC y -> world -y
+    }
+    const ewx = ex + ox, ewy = ez + oy, ewz = -ey + oz;
+    const twx = tx + ox, twy = tz + oy, twz = -ty + oz;
+    const floorWY = oy;   // пол комнаты: IFC z=0 -> world y=oy
+    // орбитальная цель = target рендера: enterFP возьмёт направление взгляда
+    // именно на неё; затем человек на полу у позиции глаза и камера в его
+    // глаза (мышь — осмотр, WASD — ходьба, орбиты нет — камера зафиксирована)
+    world.camera.controls.setLookAt(ewx, ewy, ewz, twx, twy, twz);
+    world.camera.controls.update();
+    placePersonExact(ewx, floorWY, ewz);
+    enterFP();
+    setStatus("Камера интерьера — как на исходном рендере (глаз человека, "
+      + "высота 1,7 м). Мышь — осмотр, WASD — ходьба, ESC — обзор со стороны");
+    return true;
+  }
   if (!hint || typeof hint.azimuth_deg !== "number") return false;
   const box = modelBox();
   if (!box || box.isEmpty()) return false;
@@ -1417,6 +1472,25 @@ function removePerson() {
   $("person-info").style.display = "none";
   $("person-remove").style.display = "none";
   $("person-eye").disabled = true;
+}
+
+// Интерьерный camHint: постановка БЕЗ луча до пола — высота пола известна
+// из hint-бокса (IFC z=0), а snapToGround у стен промахивается/смещается
+// (живой кейс 05.10: человек завис на 1,55 м). Глаз в FP всё равно на
+// фиксированных EYE_HEIGHT над точкой стояния.
+function placePersonExact(x, y, z) {
+  ensurePersonObject();
+  if (!personGroup) return;
+  personGroup.position.set(x, y, z);
+  personGroup.visible = true;
+  personModelName = loadedModelName;
+  personCtxId = null;
+  updatePromptContext();
+  const info = $("person-info");
+  info.style.display = "block";
+  info.textContent = `Стоит: x = ${x.toFixed(2)} м, отм. ${fmtM(y)} м, z = ${z.toFixed(2)} м · глаза на 1,7 м`;
+  $("person-remove").style.display = "";
+  $("person-eye").disabled = false;
 }
 
 function setPlacing(on) {

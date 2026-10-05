@@ -1175,3 +1175,234 @@ def validate_scene(scene):
                 "rot_deg": _clamp(rot, -180.0, 180.0)})
     out["context"] = ctx
     return out, warnings
+
+
+# =========== Сценарий «Interior 3D» (рендер интерьера, 05.10) ===========
+
+SYSTEM_INTERIOR3D = """You are a BIM interior analyst. Look at the attached PHOTO or RENDER of a
+finished INTERIOR: a room seen in perspective (NOT a 2D floor plan). Reconstruct a
+conceptual 3D model of the room as parametric JSON. The room is an axis-aligned
+rectangular box; the coordinate origin is the ROOM CENTER on the floor: X = east
+(right), Y = north (away from the viewer), Z = up. Reply with STRICT JSON ONLY - no
+markdown fences, no comments, no extra keys.
+
+Schema (ALL VALUES ARE METERS, in room coordinates):
+{
+ "room": {
+   "width_m": <room size along X, 2-30>, "depth_m": <along Y, 2-30>,
+   "height_m": <floor to ceiling, 2.0-6.0>,
+   "ceiling": <bool: true if the render shows a ceiling above>,
+   "floor_color": "#rrggbb", "ceiling_color": "#rrggbb"},
+ "openings": [
+   {"wall": "south"|"north"|"east"|"west",
+    "x_m": <center along the wall, from that wall's LEFT end as seen FROM INSIDE
+      the room>, "w_m": <width>, "h_m": <height>,
+    "sill_m": <0.0 for doors, ~0.9 for windows>, "kind": "door" | "window"}
+ ],
+ "furniture": [
+   {"type": "bed|sofa|armchair|table|chair|wardrobe|kitchen|tv|rug|plant|lamp|other",
+    "x_m": <center X>, "y_m": <center Y>, "w_m": <width along X at rot 0>,
+    "d_m": <depth along Y at rot 0>, "h_m": <height>,
+    "rot_deg": <rotation around center; 0 = long side along X>,
+    "color": "#rrggbb" (optional)}
+ ],
+ "people": [
+   {"x_m": <>, "y_m": <>, "h_m": <height 1.4-2.0, default 1.7>,
+    "rot_deg": <facing; 0 = faces north +Y>}
+ ],
+ "camera": {
+   "eye_x_m": <camera position X (ALWAYS inside the room)>,
+   "eye_y_m": <camera position Y>,
+   "eye_z_m": <eye height, 1.0-2.0 typical>,
+   "yaw_deg": <0 = looking north (+Y, away from the south wall);
+     90 = looking east (+X)>,
+   "target_x_m": <the point the camera aims at (room center of the render)>,
+   "target_y_m": <>, "target_z_m": <typically 0.8-1.6>}
+}
+
+Rules:
+- The camera is INSIDE the room; the wall closest BEHIND the camera is SOUTH.
+  Windows/doors on the far (north) wall are usually visible in the render.
+- Scale anchors: interior door 2.0-2.1 m tall, bed 2.0 x 1.6, sofa 2.2 x 0.9,
+  dining table 1.4 x 0.8 x 0.75, chair 0.45 x 0.45 x 0.9, person 1.7 m,
+  floor-to-ceiling 2.5-3.2.
+- Perspective: treat the far wall as flat; estimate room depth from floor tiles,
+  furniture sizes and the vanishing point.
+- List EVERY visible furniture item and person, including partially occluded
+  ones (a chair behind the table still goes into furniture).
+- The USER PROMPT overrides your guesses (room size, colors) wherever it states
+  them.
+"""
+
+# палитра типов мебели интерьера-рендера: дефолты (w_m, d_m, h_m), метры
+INTERIOR3D_FURNITURE_TYPES = {
+    "bed": (2.0, 1.6, 0.5), "sofa": (2.2, 0.9, 0.8), "armchair": (0.9, 0.9, 0.8),
+    "table": (1.4, 0.8, 0.75), "chair": (0.45, 0.45, 0.9),
+    "wardrobe": (2.0, 0.6, 2.2), "kitchen": (2.4, 0.6, 0.9), "tv": (1.2, 0.1, 0.7),
+    "rug": (2.0, 1.4, 0.02), "plant": (0.5, 0.5, 1.2), "lamp": (0.4, 0.4, 1.6),
+    "other": (0.8, 0.8, 0.8),
+}
+INTERIOR3D_WALLS = {"south", "north", "east", "west"}
+# геометрия сторон света: (длина стены, ось протяжённости, знак нормали)
+# юг/север — вдоль X, восток/запад — вдоль Y; внутренняя грань в комнату
+INTERIOR3D_WALL_AXIS = {"south": "x", "north": "x", "west": "y", "east": "y"}
+
+
+def validate_interior3d(scene):
+    """Сцена рендера интерьера от VLM -> (чистая сцена, warnings).
+    ValueError — не комната (нет room / нулевые габариты). Координаты — метры
+    в room-frame (центр комнаты на полу), клампы возвращают предмет в комнату."""
+    if not isinstance(scene, dict) or not isinstance(scene.get("room"), dict):
+        raise ValueError("Не удалось распознать интерьер на картинке (нет комнаты)")
+    warnings = []
+    r = scene["room"]
+    out = {"room": {}, "openings": [], "furniture": [], "people": [],
+           "camera": {}}
+    room = out["room"]
+    room["width_m"] = _num(r.get("width_m"), 5.0, 2.0, 30.0, "room.width_m", warnings)
+    room["depth_m"] = _num(r.get("depth_m"), 4.0, 2.0, 30.0, "room.depth_m", warnings)
+    room["height_m"] = _num(r.get("height_m"), 2.7, 2.0, 6.0, "room.height_m", warnings)
+    room["ceiling"] = bool(r.get("ceiling"))
+    # цвета пола/потолка: hex-гейт здесь — сборщик берёт как есть (стены он
+    # красит палитрой ориентаций, wall_color из ответа игнорируется)
+    for key in ("floor_color", "ceiling_color"):
+        v = r.get(key)
+        if _is_hex(v):
+            room[key] = v
+        elif v is not None:
+            warnings.append(f"room.{key}: не hex — дефолт сборщика")
+    w, d = room["width_m"], room["depth_m"]
+
+    raw_ops = scene.get("openings")
+    if not isinstance(raw_ops, list):
+        if raw_ops:
+            warnings.append("openings: не список — пропущены")
+        raw_ops = []
+    wall_len = {"south": w, "north": w, "west": d, "east": d}
+    for idx, op in enumerate(raw_ops[:40], start=1):
+        if not isinstance(op, dict):
+            warnings.append(f"Проём {idx}: не объект — пропущен")
+            continue
+        wall = op.get("wall")
+        if wall not in INTERIOR3D_WALLS:
+            warnings.append(f"Проём {idx}: стена «{wall}» не поддержана — пропущен")
+            continue
+        kind = op.get("kind")
+        if kind not in ("door", "window"):
+            warnings.append(f"Проём {idx}: kind {kind} не поддержан — пропущен")
+            continue
+        h_default = 2.1 if kind == "door" else 1.5
+        width = _num(op.get("width_m", 0.9), 0.9, 0.3, 6.0,
+                     f"Проём {idx}.width_m", warnings)
+        height = _num(op.get("height_m", h_default), h_default, 0.5, 3.2,
+                      f"Проём {idx}.height_m", warnings)
+        sill = _num(op.get("sill_m", 0.0 if kind == "door" else 0.9),
+                    0.0, 0.0, 2.0, f"Проём {idx}.sill_m", warnings)
+        if kind == "door" and sill > 0.3:
+            warnings.append(f"Проём {idx}: дверь с подоконником {sill:g} м — 0")
+            sill = 0.0
+        # посадка в длину стены: центр с полями 0.05 (кламп, не дроп)
+        lo, hi = width / 2 + 0.05, wall_len[wall] - width / 2 - 0.05
+        x = _num(op.get("x_m", wall_len[wall] / 2), wall_len[wall] / 2,
+                 -50.0, 50.0, f"Проём {idx}.x_m", warnings)
+        if lo > hi:  # проём шире стены — режем ширину
+            width = max(0.3, wall_len[wall] - 0.1)
+            lo = hi = wall_len[wall] / 2
+            warnings.append(f"Проём {idx}: шире стены — ширина срезана до {width:g}")
+        if x < lo or x > hi:
+            clamped = max(lo, min(hi, x))
+            warnings.append(f"Проём {idx}: центр {x:g} вне стены — кламп {clamped:g}")
+            x = clamped
+        out["openings"].append({"wall": wall, "x_m": x, "w_m": width,
+                                "h_m": height, "sill_m": sill, "kind": kind})
+    if isinstance(scene.get("openings"), list) and len(scene["openings"]) > 40:
+        warnings.append("openings: больше 40 — лишние отброшены")
+
+    raw_furn = scene.get("furniture")
+    if not isinstance(raw_furn, list):
+        if raw_furn:
+            warnings.append("furniture: не список — пропущена")
+        raw_furn = []
+    for idx, item in enumerate(raw_furn[:80], start=1):
+        if not isinstance(item, dict):
+            warnings.append(f"Мебель {idx}: не объект — пропущена")
+            continue
+        ftype = item.get("type")
+        if ftype not in INTERIOR3D_FURNITURE_TYPES:
+            warnings.append(f"Мебель {idx}: тип {ftype} не поддержан — other")
+            ftype = "other"
+        dw, dd, dh = INTERIOR3D_FURNITURE_TYPES[ftype]
+        part = {"type": ftype}
+        part["w_m"] = _num(item.get("w_m", dw), dw, 0.05, 6.0,
+                           f"Мебель {idx}.w_m", warnings)
+        part["d_m"] = _num(item.get("d_m", dd), dd, 0.05, 6.0,
+                           f"Мебель {idx}.d_m", warnings)
+        part["h_m"] = _num(item.get("h_m", dh), dh, 0.02, 3.0,
+                           f"Мебель {idx}.h_m", warnings)
+        part["rot_deg"] = _num(item.get("rot_deg", 0), 0, -180.0, 180.0,
+                               f"Мебель {idx}.rot_deg", warnings)
+        color = item.get("color")
+        part["color"] = color if _is_hex(color) else None
+        for axis, half, label in (("x_m", w / 2, "X"), ("y_m", d / 2, "Y")):
+            val = _num(item.get(axis, 0.0), 0.0, -60.0, 60.0,
+                       f"Мебель {idx}.{axis}", warnings)
+            if abs(val) > half:
+                clamped = max(-half, min(half, val))
+                warnings.append(f"Мебель {idx}: {label}={val:g} вне комнаты — "
+                                f"кламп {clamped:g}")
+                val = clamped
+            part[axis] = val
+        out["furniture"].append(part)
+    if isinstance(scene.get("furniture"), list) and len(scene["furniture"]) > 80:
+        warnings.append("furniture: больше 80 — лишние отброшены")
+
+    raw_people = scene.get("people")
+    if not isinstance(raw_people, list):
+        if raw_people:
+            warnings.append("people: не список — пропущены")
+        raw_people = []
+    for idx, per in enumerate(raw_people[:20], start=1):
+        if not isinstance(per, dict):
+            warnings.append(f"Человек {idx}: не объект — пропущен")
+            continue
+        person = {"h_m": _num(per.get("h_m", 1.7), 1.7, 1.2, 2.2,
+                              f"Человек {idx}.h_m", warnings),
+                  "rot_deg": _num(per.get("rot_deg", 0), 0, -180.0, 180.0,
+                                  f"Человек {idx}.rot_deg", warnings)}
+        for axis, half in (("x_m", w / 2), ("y_m", d / 2)):
+            val = _num(per.get(axis, 0.0), 0.0, -60.0, 60.0,
+                       f"Человек {idx}.{axis}", warnings)
+            val = max(-half, min(half, val))
+            person[axis] = val
+        out["people"].append(person)
+    if isinstance(scene.get("people"), list) and len(scene["people"]) > 20:
+        warnings.append("people: больше 20 — лишние отброшены")
+
+    cam = scene.get("camera") if isinstance(scene.get("camera"), dict) else {}
+    camera = out["camera"]
+    camera["yaw_deg"] = _num(cam.get("yaw_deg", 0.0), 0.0, -180.0, 180.0,
+                             "camera.yaw_deg", warnings)
+    # глаз — всегда внутри комнаты (отступ 0.3 от стен; warning при клампе)
+    eye_x = _num(cam.get("eye_x_m", 0.0), 0.0, -60.0, 60.0,
+                 "camera.eye_x_m", warnings)
+    if abs(eye_x) > w / 2 - 0.3:
+        clamped = max(-(w / 2 - 0.3), min(w / 2 - 0.3, eye_x))
+        warnings.append(f"camera.eye_x_m: глаз {eye_x:g} у стены — кламп {clamped:g}")
+        eye_x = clamped
+    eye_y = _num(cam.get("eye_y_m", -(d / 2 - 0.8)), -(d / 2 - 0.8), -60.0, 60.0,
+                 "camera.eye_y_m", warnings)
+    if abs(eye_y) > d / 2 - 0.3:
+        clamped = max(-(d / 2 - 0.3), min(d / 2 - 0.3, eye_y))
+        warnings.append(f"camera.eye_y_m: глаз {eye_y:g} у стены — кламп {clamped:g}")
+        eye_y = clamped
+    camera["eye_x_m"] = eye_x
+    camera["eye_y_m"] = eye_y
+    camera["eye_z_m"] = _num(cam.get("eye_z_m", 1.6), 1.6, 0.5, 2.5,
+                             "camera.eye_z_m", warnings)
+    # цель — в комнате ±2 м (VLM может целиться в мебель у дальней стены)
+    for axis, half in (("target_x_m", w / 2), ("target_y_m", d / 2)):
+        val = _num(cam.get(axis, 0.0), 0.0, -60.0, 60.0, f"camera.{axis}", warnings)
+        camera[axis] = max(-(half + 2.0), min(half + 2.0, val))
+    camera["target_z_m"] = _num(cam.get("target_z_m", 1.2), 1.2, 0.0, 6.0,
+                                "camera.target_z_m", warnings)
+    return out, warnings

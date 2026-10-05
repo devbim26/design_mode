@@ -2842,6 +2842,91 @@ invokeai==6.2.0` их нужно запускать повторно в поря
       `tests/test_studio_ownership.py`, `tests/test_studio_gzip.py`,
       `tests/test_studio_sockets.py` — plain asserts, печать OK.
 
+62. **3D Design: сценарий «Interior» (interior3d — рендер интерьера) +
+    переименования плиток** (05.10, ветка `feature/studio-sso`; спека
+    `docs/superpowers/specs/2026-10-05-3d-design-interior3d-design.md`,
+    план `docs/superpowers/plans/2026-10-05-3d-design-interior3d.md`).
+    - **Переименования модалки** (утро 05.10): «Сцена»→**Exterior**,
+      «Интерьер»→**Floor Plan** (бэкенд-ключ `interior` НЕ менялся),
+      «Генплан»→**Site Plan**, плитка «Фасад» УДАЛЕНА (бэкенд-сценарий
+      `facade` жив, `/generate {scenario:"facade"}` работает); подписи
+      плиток английские в ОБОИХ локалях ru/en.
+    - **Конвейер interior3d**: плитка «🛋 Interior» (4-я) →
+      `POST /api/v1/threed/generate {scenario:"interior3d"}` → VLM по
+      `SYSTEM_INTERIOR3D`: вход — фото/рендер ГОТОВОГО интерьера
+      (перспектива, не 2D-план); room-frame контракт — центр комнаты на
+      полу, X восток, Y север, южная стена ЗА КАМЕРОЙ; всё в МЕТРАХ
+      (room.width/depth/height/ceiling/colors, openings по сторонам
+      света с x_m от ЛЕВОГО конца ИЗНУТРИ, furniture 12 типов с hex,
+      people, camera {eye, yaw, target}) → `validate_interior3d`
+      (гейт только «нет room», остальное — клампы: посадка проёмов,
+      мебель в габарит, глаз камеры внутрь с отступом 0.3) →
+      `build_interior3d`: shoebox IfcWall×4 + IfcSlab пол + IfcCovering
+      потолок, проёмы-коробки на ВНУТРЕННЕЙ грани (+0.06 в комнату —
+      урок фазы 2), мебель IfcFurnishingElement (палитра типов + hex
+      VLM), люди CONCEPTUAL_PERSON 0.5×0.3×h, pset CameraHint
+      (Mode=interior, глаз/цель) + RoomModel; превью — план с маркером
+      глаза и взглядом до target.
+    - **Камера как на рендере**: ответ роутера несёт `camHint
+      {mode:"interior", eye, target, yaw}`; `applyCamHint()` в
+      ifcviewer.html — новая ветка mode=interior (до старой ветки
+      azimuth_deg «Сцены»): глаз/цель ПРЯМЫМИ координатами,
+      view=(x, z, −y), БЕЗ бокса/диагонали — глаз уже в комнате.
+    - Ансамбль/grounding для interior3d НЕ включен (как у «Сцены»);
+      verify — ветка scene_overview (комната/проёмы/мебель/люди/камера),
+      оверлей-этапа нет (судья видит оригинал).
+    - **E2E/живой smoke 05.10** (рендер гостиной 1920×1080): VLM корректно
+      разобрала комнату 5.4×5.6×2.9 + 14 предметов (диван/столы/кресло/
+      растение/лампа/ковёр/шкафы), verify ok=true, $0.17; вьювер с camHint
+      показал вид ИЗНУТРИ комнаты (скриншот
+      `docs/3d-design-interior3d-view.png`, модель
+      `data/ifc/3D_interior3d_20261005-100122.ifc`).
+    - **ГРАБЛИ**: (1) валидатор ОБЯЗАН переносить hex-цвета комнаты в
+      чистую сцену (сборщик берёт их из scene, не из сырого ответа);
+      (2) проёмы нумеруются в порядке списка — «Дверь 1» восточная,
+      «Дверь 2» южная (в тестах выбирать по имени, не «первая дверь»);
+      (3) нулевые габариты комнаты — кламп (2–30), не гейт — гейт только
+      на отсутствие `room`.
+    - **Продолжение 05.10 (жалоба «вид вне комнаты, нужен человек и
+      зафиксированная камера») — КОРНЕНОЙ БАГ**: вьювер СДВИГАЕТ модель
+      в мире (сдвиг запекается во фрагменты: каждый mesh несёт position,
+      у smoke-модели T≈(+1.53, −0.86, −0.61), размеры точные — сдвиг
+      чисто трансляционный). «Сырые» IFC-координаты из camHint ставили
+      камеру ЗА стеной (глаз в 0,16 м южнее комнаты; первая «удачная»
+      E2E-проверка обманула — почти-внутри). Фикс: camHint/pset CameraHint
+      несут ТОЧНЫЙ IFC-бокс комнаты (`box.min/max`, x±(w/2+T), y±(d/2+T),
+      z∈[−0.15, h(+0.12 потолка)]); вьювер считает T = worldBox.center −
+      ifcBox.center (с учётом осей (x, z, −y)) и переводит глаз/цель/пол.
+      Дополнительно: (а) `placePersonExact` — постановка человека БЕЗ луча
+      до пола (snapToGround у стен промахивался: человек завис на 1,55 м,
+      камера ушла над потолком); (б) после постановки сразу `enterFP()` —
+      «Вид от глаз»: камера ЖЁСТКО на глазах человека (1,7 м), мышь —
+      только осмотр, WASD — ходьба, орбиты нет; взгляд точно на target
+      рендера (enterFP берёт направление с орбитальной цели — ставить
+      setLookAt ДО входа в FP); (в) camHint интерьера ПЕРСОНИСТЕН по
+      модели (`devbim:ifc:interiorCam`): F5/повторное открытие возвращает
+      человека+FP, а не fitModel снаружи коробки; (г) финальный статус
+      «Модель загружена…» не перетирает подсказку камеры (гейт
+      `fpState.active`). Силуэт человека в FP скрыт («силуэт и есть вы»),
+      виден после ESC. E2E: человек (1.52, −0.86, 1.89) на полу, камера
+      +1.70 ровно, lookDir=(0,−0.10,−0.99) на target, camInsideWorldBox=
+      true; скриншот `docs/3d-design-interior3d-fp.png`.
+    - **Палитра стен 05.10 (жалоба «сливаются»)**: стены interior3d красятся
+      ПАЛИТРОЙ ОРИЕНТАЦИЙ (как фаза 3 плана): южная/северная — терракота
+      `INTERIOR_WALL_PALETTE[("ext","X")]` #C2765B, западная/восточная —
+      хаки ("ext","Y") #A98F55, дефолт пола — #D9D4C8 (все три hex-а в
+      AI_SHELL_HEXES вьювера → кнопка AI-палитры узнаёт модель: стены —
+      тёмный вариант по нормалям граней, пол — светлый; проверено E2E:
+      правая стена хаки → жёлтая negX). `wall_color` из ответа VLM УДАЛЁН
+      из схемы/валидатора (сборщик игнорирует), floor/ceiling_color
+      остаются; легенда — pset RoomModel.ColorLegend. Скриншот
+      `docs/3d-design-interior3d-palette.png`.
+    - Тесты: `tests/test_threed.py` +`test_validate_interior3d`/
+      `test_build_interior3d`/`test_generate_impl_interior3d`/
+      `test_interior3d_overview_and_viewer` (бокс в camHint/pset, бокс-
+      перевод и FP в ifcviewer.html); `test_widget_3d_modal`
+      переписан под 4 плитки без фасада.
+
 ```powershell
 cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
 .\venv\Scripts\python.exe .\setup_imagerouter.py        # применить патчи

@@ -928,9 +928,13 @@ def test_ifcviewer_autoload():
     assert re.search(r"^if \(!EMBED\) \{", m.group(1), re.M), \
         "блок автозагрузки должен быть топ-уровневым (вне if (EMBED))"
     # фаза 4: camHint — камера по подсказке генерации сцены
-    assert "function applyCamHint()" in m.group(1)
+    assert "function applyCamHint(" in m.group(1)
     assert "devbim:ifc:camHint" in m.group(1)
-    assert "if (!applyCamHint()) fitModel();" in m.group(1)
+    assert "if (!applyCamHint(name)) fitModel();" in m.group(1)
+    # interior3d: человек + «Вид от глаз» + персистентность по модели
+    assert "devbim:ifc:interiorCam" in m.group(1)
+    assert "placePersonExact(ewx, floorWY, ewz);" in m.group(1)
+    assert "enterFP();" in m.group(1)
     print("test_ifcviewer_autoload OK")
 
 
@@ -949,38 +953,33 @@ def test_widget_3d_modal():
     assert "cPresent.rasterLayers && cPresent.rasterLayers.entities" in src, \
         "canvasComposite обязан читать per-type entities (rasterLayers/controlLayers)"
     assert "toast(t().soon)" not in src.split("function build()")[1].split("function isYellow")[0]
-    # фаза 2: плитка фасада активна, placeholder зависит от сценария
-    facade_tile = '<button class="devbim-3d-tile" data-s="facade">'
-    assert facade_tile + "<span>\U0001F3E2</span>" in src, \
-        "плитка фасада должна быть активна (без disabled/title)"
-    assert 'data-s="facade" disabled' not in src
-    for key in ("promptPhPlan", "promptPhFacade"):
-        assert key + ":" in src, key
-    assert "promptPh:" not in src and "t().promptPh +" not in src
-    assert "promptPhFacade" in src.split('data-s="facade"')[1], \
-        "клик по плитке фасада подставляет promptPhFacade"
+    # фасад убран из модалки 05.10 (бэкенд-сценарий сохранён)
+    assert 'data-s="facade"' not in src and "promptPhFacade" not in src
     # EN-плейсхолдеры без HTML-сущностей: свойство placeholder не декодирует их,
     # экранирование — только в точке innerHTML-интерполяции
-    assert "promptPhFacade: 'Hints: \"5 storeys" in src
     assert "&quot;" not in src.split("en: {")[1].split("}")[0], \
         "TEXTS.en не должен хранить &quot; (утечка при присваивании свойства)"
     assert "promptPhPlan.replace(/\"/g, '&quot;')" in src, \
         "placeholder экранируется в точке HTML-интерполяции"
-    # фаза 3: плитка интерьера активна, placeholder по 3 сценариям
-    assert '<button class="devbim-3d-tile" data-s="interior"><span>🛋</span>' in src
+    # фаза 3: плитка плана квартиры (Floor Plan, ключ interior) активна
+    assert '<button class="devbim-3d-tile" data-s="interior"><span>📐</span>' in src
     assert 'data-s="interior" disabled' not in src
     assert "promptPhInterior" in src and "soon3d" not in src
-    # RU/EN тексты placeholder-ов интерьера
     assert "promptPhInterior: 'Уточнения:" in src
-    # переключение placeholder-а через карту сценариев
     assert "var ph = {plan: t().promptPhPlan" in src
-    # фаза 4: плитка «Сцена» активна, placeholder, camHint
+    # фаза 4: плитка «Exterior» (сцена) активна, placeholder, camHint
     assert '<button class="devbim-3d-tile" data-s="scene"><span>🌇</span>' in src
     assert 'data-s="scene" disabled' not in src
     assert "promptPhScene: 'Уточнения:" in src
     assert "promptPhScene: 'Hints:" in src
     assert "var ph = {plan: t().promptPhPlan" in src and "scene: t().promptPhScene" in src
     assert "devbim:ifc:camHint" in src
+    # interior3d (05.10): плитка «Interior» активна, placeholder RU/EN
+    assert '<button class="devbim-3d-tile" data-s="interior3d"><span>🛋</span>' in src
+    assert 'data-s="interior3d" disabled' not in src
+    assert "promptPhInterior3d: 'Уточнения:" in src
+    assert "promptPhInterior3d: 'Hints:" in src
+    assert "interior3d: t().promptPhInterior3d" in src
     print("test_widget_3d_modal OK")
 
 
@@ -1187,6 +1186,235 @@ def test_admin_threed_section():
     print("test_admin_threed_section OK")
 
 
+# =========== Сценарий «Interior 3D» (рендер интерьера, 05.10) ===========
+
+def sample_interior3d_scene():
+    """Гостиная 6×4.5×2.8: окно на северной стене, дверь восток, дверь юг
+    (вне стены + с подоконником — на клампы), диван/стол/фонтан(→other)/
+    кровать (дефолты), 2 человека, камера у южной стены."""
+    return {
+        "room": {"width_m": 6.0, "depth_m": 4.5, "height_m": 2.8,
+                 "ceiling": True, "wall_color": "#e8e2d8",
+                 "floor_color": "#8a6f4d", "ceiling_color": "#f2efe8"},
+        "openings": [
+            {"wall": "north", "x_m": 1.5, "w_m": 1.8, "h_m": 1.6, "sill_m": 0.9,
+             "kind": "window"},
+            {"wall": "east", "x_m": 1.0, "w_m": 0.9, "h_m": 2.1, "sill_m": 0.0,
+             "kind": "door"},
+            {"wall": "south", "x_m": 99.0, "w_m": 0.9, "h_m": 2.1, "sill_m": 0.5,
+             "kind": "door"},
+            {"wall": "roof", "x_m": 1.0, "w_m": 1.0, "h_m": 1.0, "sill_m": 0.0,
+             "kind": "window"},
+        ],
+        "furniture": [
+            {"type": "sofa", "x_m": -1.2, "y_m": -1.6, "w_m": 2.2, "d_m": 0.9,
+             "h_m": 0.8, "rot_deg": 0, "color": "#667788"},
+            {"type": "table", "x_m": 0.0, "y_m": 0.2, "rot_deg": 15},
+            {"type": "fountain", "x_m": 99, "y_m": 99},
+            {"type": "bed"},
+        ],
+        "people": [
+            {"x_m": 1.0, "y_m": 0.8, "h_m": 1.75, "rot_deg": -90},
+            {"x_m": -2.8, "y_m": 1.8, "h_m": 1.65},
+        ],
+        "camera": {
+            "eye_x_m": 0.3, "eye_y_m": -1.7, "eye_z_m": 1.6,
+            "yaw_deg": 5, "target_x_m": -0.2, "target_y_m": 1.9, "target_z_m": 1.1,
+        },
+    }
+
+
+def test_validate_interior3d():
+    from threed.threed_scenarios import validate_interior3d, SYSTEM_INTERIOR3D
+    assert "eye_x_m" in SYSTEM_INTERIOR3D and "target_z_m" in SYSTEM_INTERIOR3D
+    assert '"south"|"north"|"east"|"west"' in SYSTEM_INTERIOR3D
+    out, warn = validate_interior3d(sample_interior3d_scene())
+    r = out["room"]
+    assert (r["width_m"], r["depth_m"], r["height_m"]) == (6.0, 4.5, 2.8)
+    assert r["ceiling"] is True and r["floor_color"] == "#8a6f4d"
+    # 3 проёма: roof-стена выкинута, остальные живут
+    assert len(out["openings"]) == 3
+    assert any("roof" in w for w in warn)
+    south = next(o for o in out["openings"] if o["wall"] == "south")
+    # дверь на юге: x_m=99 -> кламп в длину стены (6-0.45-0.05), sill -> 0
+    assert abs(south["x_m"] - 5.5) < 1e-9 and south["sill_m"] == 0.0
+    assert any("подоконник" in w for w in warn) and any("вне стены" in w for w in warn)
+    # мебель: fountain -> other + кламп x=3.0; bed — дефолты по типу
+    assert len(out["furniture"]) == 4
+    other = next(f for f in out["furniture"] if f["type"] == "other")
+    assert other["x_m"] == 3.0 and other["y_m"] == 2.25
+    assert any("fountain" in w for w in warn) and any("вне комнаты" in w for w in warn)
+    bed = next(f for f in out["furniture"] if f["type"] == "bed")
+    assert (bed["w_m"], bed["d_m"], bed["h_m"]) == (2.0, 1.6, 0.5)
+    assert out["furniture"][0]["color"] == "#667788"      # hex от VLM живёт
+    assert len(out["people"]) == 2 and out["people"][0]["h_m"] == 1.75
+    cam = out["camera"]
+    assert (cam["eye_x_m"], cam["eye_y_m"], cam["eye_z_m"]) == (0.3, -1.7, 1.6)
+    assert (cam["target_x_m"], cam["target_y_m"], cam["target_z_m"]) == (-0.2, 1.9, 1.1)
+    # глаз за стеной -> кламп внутрь комнаты
+    sc = sample_interior3d_scene()
+    sc["camera"]["eye_x_m"] = 12.0
+    out2, warn2 = validate_interior3d(sc)
+    assert abs(out2["camera"]["eye_x_m"] - 2.7) < 1e-9    # w/2-0.3
+    assert any("eye_x_m" in w for w in warn2)
+    # гейты: не объект / нет комнаты (нулевые габариты не гейт — кламп,
+    # как в фасаде)
+    for bad in (None, {}, {"room": "x"}, 42, [1, 2]):
+        try:
+            validate_interior3d(bad)
+            raise AssertionError("ожидалась ошибка")
+        except ValueError:
+            pass
+    zero, zw = validate_interior3d({"room": {"width_m": 0, "depth_m": 0}})
+    assert zero["room"]["width_m"] == 2.0 and zero["room"]["depth_m"] == 2.0
+    assert any("width_m" in w for w in zw)
+    print("test_validate_interior3d OK")
+
+
+def test_build_interior3d():
+    import ifcopenshell
+    from threed.threed_scenarios import validate_interior3d
+    from threed.threed_build import build_interior3d, INTERIOR3D_WALL_T
+
+    clean, _ = validate_interior3d(sample_interior3d_scene())
+    TMP.mkdir(exist_ok=True)
+    ifc = TMP / "3D_interior3d_test.ifc"
+    prev = TMP / "3D_interior3d_test_preview.png"
+    path = build_interior3d(clean, ifc, prev,
+                            {"Scenario": "interior3d", "Prompt": "тест",
+                             "Model": "test/model", "Source": "3D Design"})
+    assert path == ifc and ifc.is_file() and prev.is_file()
+
+    m = ifcopenshell.open(str(ifc))
+    assert m.schema == "IFC4"
+    gids = [r.GlobalId for r in m.by_type("IfcRoot")]
+    assert len(gids) == len(set(gids)), "GlobalId не уникальны"
+    # shoebox: 4 стены, пол, потолок (ceiling=true)
+    assert len(m.by_type("IfcWall")) == 4
+    # палитра ориентаций стен (05.10, «не сливаться»): юг/север — терракота,
+    # запад/восток — хаки; hex-ы фазы 3 — их узнаёт AI-палитра вьювера
+    from threed.threed_build import INTERIOR3D_WALL_COLORS, INTERIOR_WALL_PALETTE
+    assert INTERIOR3D_WALL_COLORS["x"] == INTERIOR_WALL_PALETTE[("ext", "X")]
+    assert INTERIOR3D_WALL_COLORS["y"] == INTERIOR_WALL_PALETTE[("ext", "Y")]
+    assert INTERIOR3D_WALL_COLORS["x"] != INTERIOR3D_WALL_COLORS["y"]
+    surf = {s.Name: s for s in m.by_type("IfcSurfaceStyle")}
+    assert "Int3dWallX" in surf and "Int3dWallY" in surf
+
+    def surf_rgb(name):
+        ss = surf[name].Styles[0].SurfaceColour
+        return (round(ss.Red, 3), round(ss.Green, 3), round(ss.Blue, 3))
+    assert surf_rgb("Int3dWallX") != surf_rgb("Int3dWallY")
+    slabs = m.by_type("IfcSlab")
+    assert len(slabs) == 1 and slabs[0].ObjectType == "CONCEPTUAL_FLOOR"
+    covers = m.by_type("IfcCovering")
+    assert len(covers) == 1 and covers[0].ObjectType == "CONCEPTUAL_CEILING"
+    by_ot = {}
+    for p in m.by_type("IfcBuildingElementProxy"):
+        by_ot[p.ObjectType] = by_ot.get(p.ObjectType, 0) + 1
+    assert by_ot.get("CONCEPTUAL_DOOR") == 2
+    assert by_ot.get("CONCEPTUAL_WINDOW") == 1
+    assert by_ot.get("CONCEPTUAL_PERSON") == 2
+    assert len(m.by_type("IfcFurnishingElement")) == 4
+    # геометрия room-frame: северная стена y = d/2 + T/2; южная = -(d/2 + T/2)
+    from ifcopenshell.util.placement import get_local_placement
+    walls = {w.Name: get_local_placement(w.ObjectPlacement)[1, 3]
+             for w in m.by_type("IfcWall")}
+    assert abs(walls["Стена северная"] - (4.5 / 2 + INTERIOR3D_WALL_T / 2)) < 1e-6
+    assert abs(walls["Стена южная (за камерой)"] + (4.5 / 2 + INTERIOR3D_WALL_T / 2)) < 1e-6
+    # дверь юга («Дверь 2»: восточная идёт первой): x_m=5.5 от ЛЕВОГО
+    # (восточного) конца -> мир x = w/2-5.5 = -2.5; внутренняя грань юга
+    # y=-d/2, коробка +0.06 в комнату
+    south_door = next(p for p in m.by_type("IfcBuildingElementProxy")
+                      if p.ObjectType == "CONCEPTUAL_DOOR"
+                      and (p.Name or "") == "Дверь 2")
+    pl = get_local_placement(south_door.ObjectPlacement)
+    assert abs(pl[0, 3] - (-2.5)) < 1e-6 and abs(pl[1, 3] - (-4.5 / 2 + 0.06)) < 1e-6
+    # дверь востока («Дверь 1»): x_m=1.0 от ЛЕВОГО (северного) конца ->
+    # мир y = d/2-1.0 = 1.25; грань востока x=w/2, коробка -0.06 в комнату
+    east_door = next(p for p in m.by_type("IfcBuildingElementProxy")
+                     if p.ObjectType == "CONCEPTUAL_DOOR"
+                     and (p.Name or "") == "Дверь 1")
+    ple = get_local_placement(east_door.ObjectPlacement)
+    assert abs(ple[0, 3] - (6.0 / 2 - 0.06)) < 1e-6 \
+        and abs(ple[1, 3] - (4.5 / 2 - 1.0)) < 1e-6
+    # окно севера: x_m=1.5 от ЛЕВОГО (западного) конца -> мир x = -w/2+1.5 = -1.5
+    north_win = next(p for p in m.by_type("IfcBuildingElementProxy")
+                     if p.ObjectType == "CONCEPTUAL_WINDOW")
+    plw = get_local_placement(north_win.ObjectPlacement)
+    assert abs(plw[0, 3] - (-1.5)) < 1e-6 and abs(plw[1, 3] - (4.5 / 2 - 0.06)) < 1e-6
+    # CameraHint на проекте: mode=interior + глаз/цель room-frame + IFC-бокс
+    from ifcopenshell.util.element import get_psets
+    hint = get_psets(m.by_type("IfcProject")[0]).get("CameraHint", {})
+    assert hint.get("Mode") == "interior"
+    assert abs(hint.get("EyeXM", 9) - 0.3) < 1e-6
+    assert abs(hint.get("EyeYM", 9) + 1.7) < 1e-6
+    assert abs(hint.get("EyeZM", 9) - 1.6) < 1e-6
+    assert abs(hint.get("TargetYM", 9) - 1.9) < 1e-6
+    assert abs(hint.get("BoxMinX", 9) + 3.15) < 1e-6
+    assert abs(hint.get("BoxMaxZ", 0) - 2.92) < 1e-6
+    rm = get_psets(m.by_type("IfcBuilding")[0]).get("RoomModel", {})
+    assert rm.get("WidthM") == 6.0 and rm.get("Ceiling") is True
+    assert rm.get("Furniture") == 4 and rm.get("People") == 2
+    assert rm.get("OpeningsDoors") == 2 and rm.get("OpeningsWindows") == 1
+    # превью-план нарисован
+    from PIL import Image
+    im = Image.open(prev)
+    assert im.size[0] > 400 and im.size[1] > 300
+    print("test_build_interior3d OK")
+
+
+def test_generate_impl_interior3d():
+    from PIL import Image
+    import threed.threed_router as R
+    R._vlm_list_cached = lambda: []  # тесты без сети
+    scene = sample_interior3d_scene()
+    R._call_vlm = _mock_vlm_ok("```json\n" + json.dumps(scene, ensure_ascii=False) + "\n```")
+    TMP.mkdir(exist_ok=True)
+    img = Image.new("RGB", (800, 600), (250, 250, 250))
+    res = R._generate_impl("interior3d", "тест интерьера", img, TMP)
+    assert res["name"].startswith("3D_interior3d_") and res["name"].endswith(".ifc")
+    assert (TMP / res["name"]).is_file()
+    # camHint вьювера: mode=interior, глаз/цель room-frame + IFC-бокс
+    # (вьювер сдвигает модель в мире — переводит координаты по боксам)
+    hint = res["camHint"]
+    assert hint["mode"] == "interior" and hint["yaw_deg"] == 5
+    assert hint["eye"] == {"eye_x_m": 0.3, "eye_y_m": -1.7, "eye_z_m": 1.6}
+    assert hint["target"] == {"target_x_m": -0.2, "target_y_m": 1.9,
+                              "target_z_m": 1.1}
+    assert hint["box"] == {"min": [-3.15, -2.4, -0.15],
+                           "max": [3.15, 2.4, 2.92]}
+    assert "interior3d" in R.SCENARIOS
+    assert (TMP / "_threed_last.json").is_file()
+    dump = json.loads((TMP / "_threed_last.json").read_text(encoding="utf-8"))
+    assert dump["scenario"] == "interior3d"
+    print("test_generate_impl_interior3d OK")
+
+
+def test_interior3d_overview_and_viewer():
+    """verify-обзор interior3d + вьювер понимает mode=interior."""
+    from threed.threed_scenarios import validate_interior3d
+    from threed.threed_verify import scene_overview
+    clean, _ = validate_interior3d(sample_interior3d_scene())
+    ov = scene_overview("interior3d", clean)
+    assert ov["room"]["width_m"] == 6.0 and ov["room"]["ceiling"] is True
+    assert ov["openings"] == {"doors": 2, "windows": 1}
+    assert ov["furniture"] == {"sofa": 1, "table": 1, "other": 1, "bed": 1}
+    assert ov["people"] == 2 and "camera" in ov
+    src = (ROOT / "ifc" / "ifcviewer.html").read_text(encoding="utf-8")
+    assert 'hint.mode === "interior"' in src
+    # 05.10 (продолжение): IFC->мир по боксам (вьювер СДВИГАЕТ модель —
+    # «сырые» координаты оставляли камеру за стеной), человек на полу
+    # без луча + камера «Вид от глаз» (зафиксирована: мышь — осмотр,
+    # орбиты нет) + персистентность camHint по имени модели (F5 возвращает
+    # вид изнутри, а не fitModel снаружи коробки)
+    assert "const ewx = ex + ox, ewy = ez + oy, ewz = -ey + oz;" in src
+    assert "placePersonExact(ewx, floorWY, ewz);" in src
+    assert "function placePersonExact(" in src
+    assert "enterFP();" in src
+    assert "devbim:ifc:interiorCam" in src
+    print("test_interior3d_overview_and_viewer OK")
+
+
 if __name__ == "__main__":
     test_build_facade()
     test_build_interior()
@@ -1217,4 +1445,8 @@ if __name__ == "__main__":
     test_ifcviewer_autoload()
     test_widget_3d_modal()
     test_admin_threed_section()
+    test_validate_interior3d()
+    test_build_interior3d()
+    test_generate_impl_interior3d()
+    test_interior3d_overview_and_viewer()
     print("ALL OK")

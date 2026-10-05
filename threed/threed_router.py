@@ -2,8 +2,8 @@
 """3D Design: генерация IFC по картинке (VLM ImageRouter) + выбор модели в менеджере.
 
 Монтируется под /api:
-    POST /api/v1/threed/generate  {scenario: plan|facade|interior|scene, prompt,
-                                   image} -> {jobId, status} (фоновая задача)
+    POST /api/v1/threed/generate  {scenario: plan|facade|interior|scene|interior3d,
+                                   prompt, image} -> {jobId, status} (фоновая задача)
     GET  /api/v1/threed/jobs/{id} {jobId, status, stage, elapsed_s[, result|error]}
     GET  /api/v1/threed/model     {model, source, vlms:[...]}
     PUT  /api/v1/threed/model     {model} -> {ok}
@@ -59,7 +59,7 @@ DEFAULT_MODEL = "openai/gpt-6-astra"
 # astra $10/$50, sol $2/$10, luna $0.1/$0.5 — id сверены с /v3/models 24.09
 DEFAULT_REPAIR_MODEL = "openai/gpt-6-luna"
 REPAIR_RETRY_MODEL = "openai/gpt-6-sol"
-SCENARIOS = {"plan", "facade", "interior", "scene"}
+SCENARIOS = {"plan", "facade", "interior", "scene", "interior3d"}
 CHAT_TIMEOUT_S = 180
 VLM_LIST_CACHE_S = 600
 MAX_SIDE = 1536
@@ -455,7 +455,7 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
     и эскалация идут под "analysis") для статуса фоновой задачи.
     Raises ValueError (роутер даст 422)."""
     if scenario not in SCENARIOS:
-        raise ValueError(f"Сценарий «{scenario}» в разработке (доступны: plan, facade, interior, scene)")
+        raise ValueError(f"Сценарий «{scenario}» в разработке (доступны: plan, facade, interior, scene, interior3d)")
     _usage_log.clear()
     model, source = _stage_model("analysis")
     stage_models = {st: _stage_model(st)[0] for st in STAGES}
@@ -474,6 +474,7 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
     out_dir = Path(out_dir) if out_dir else _ifc_dir()
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     system = (threed_scenarios.SYSTEM_SCENE if scenario == "scene"
+              else threed_scenarios.SYSTEM_INTERIOR3D if scenario == "interior3d"
               else threed_scenarios.SYSTEM_INTERIOR if scenario == "interior"
               else threed_scenarios.SYSTEM_FACADE if scenario == "facade"
               else threed_scenarios.SYSTEM_GENPLAN)
@@ -606,6 +607,8 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
         if scenario == "interior":
             scene, warnings, contract_issues = threed_scenarios.validate_interior(
                 scene, image.width, image.height)
+        elif scenario == "interior3d":
+            scene, warnings = threed_scenarios.validate_interior3d(scene)
         elif scenario == "scene":
             scene, warnings = threed_scenarios.validate_scene(scene)
         elif scenario == "facade":
@@ -648,6 +651,8 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
             progress("build")
         if scenario == "interior":
             threed_build.build_interior(scene, ifc_path, preview_path, meta)
+        elif scenario == "interior3d":
+            threed_build.build_interior3d(scene, ifc_path, preview_path, meta)
         elif scenario == "scene":
             threed_build.build_scene(scene, ifc_path, preview_path, meta)
         elif scenario == "facade":
@@ -772,6 +777,24 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
                 res_i["camHint"]["focus"] = {
                     k: round(sum(it[k] for it in elev) / len(elev), 2)
                     for k in ("x_m", "y_m", "z_m")}
+        if scenario == "interior3d":
+            # камера как на рендере: глаз и цель — координаты room-frame (IFC-
+            # метры) + ТОЧНЫЙ IFC-бокс комнаты: вьювер сдвигает модель в мире
+            # (fragment baking), переводит глаз/цель/пол по мировому box'у
+            cam = scene["camera"]
+            room = scene["room"]
+            t_w = threed_build.INTERIOR3D_WALL_T
+            z_top = room["height_m"] + (0.12 if room.get("ceiling") else 0.0)
+            res_i["camHint"] = {
+                "mode": "interior", "yaw_deg": cam["yaw_deg"],
+                "eye": {k: cam[k] for k in ("eye_x_m", "eye_y_m", "eye_z_m")},
+                "target": {k: cam[k] for k in ("target_x_m", "target_y_m",
+                                               "target_z_m")},
+                "box": {"min": [-(room["width_m"] / 2 + t_w),
+                                -(room["depth_m"] / 2 + t_w), -0.15],
+                        "max": [room["width_m"] / 2 + t_w,
+                                room["depth_m"] / 2 + t_w, z_top]},
+            }
         if verify_payload is not None:
             res_i["verify"] = verify_payload
         if best is None or rank >= best[0]:
