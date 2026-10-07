@@ -2,8 +2,8 @@
  *
  * Подключается тегом <script src="/devbim-banner.js" defer> в index.html
  * (деплоит rebrand_devbim.py). Содержимое:
- *   - кликабельная эмблема «devBIM - Design» -> страница регистрации
- *     (REG_URL, заглушка);
+ *   - кликабельная эмблема «devBIM - Design» -> сайт devbim.com
+ *     (SITE_URL);
  *   - слоган справа; язык слогана следует за языком интерфейса приложения
  *     (срез system персистится redux-remember в IndexedDB «invoke» /
  *     «invoke-store», ключ «@@invokeai-system», поле language).
@@ -14,8 +14,8 @@
 (function () {
   'use strict';
 
-  // Страница регистрации — заглушка, поменять здесь
-  var REG_URL = 'https://devbim.com/register';
+  // Куда ведёт эмблема — поменять здесь
+  var SITE_URL = 'https://devbim.com';
 
   var BANNER_H = '44px'; // высота баннера (и компенсации в #root)
 
@@ -23,11 +23,11 @@
   var TEXTS = {
     ru: {
       tagline: 'Создавай реалистичные AI-рендеры интерьеров и фасадов зданий с высочайшей точностью…',
-      signup: 'Регистрация'
+      site: 'Сайт DevBIM'
     },
     en: {
       tagline: 'Create realistic AI renders of interiors and building facades with the highest precision…',
-      signup: 'Sign up'
+      site: 'DevBIM website'
     }
   };
 
@@ -66,8 +66,8 @@
   function render() {
     var t = texts();
     els.tagline.textContent = t.tagline;
-    els.link.title = t.signup;
-    els.link.setAttribute('aria-label', 'DevBIM — ' + t.signup);
+    els.link.title = t.site;
+    els.link.setAttribute('aria-label', t.site);
   }
 
   // --- язык интерфейса: IndexedDB «invoke» / «invoke-store» / «@@invokeai-system» ---
@@ -96,12 +96,12 @@
     });
   }
 
-  // --- SSO: email пользователя + «Выйти» (только в sso-режиме) ---
+  // --- SSO/users: email пользователя + «Выйти» ---
   function loadUser(banner) {
     fetch('/api/v1/studio/me', { credentials: 'same-origin' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (d) {
-        if (!d || d.mode !== 'sso' || !d.user_id) return;
+        if (!d || (d.mode !== 'sso' && d.mode !== 'users') || !d.user_id) return;
         var chip = document.createElement('span');
         chip.className = 'devbim-user';
         var who = document.createElement('span');
@@ -128,7 +128,7 @@
 
     var link = document.createElement('a');
     link.className = 'devbim-logo';
-    link.href = REG_URL;
+    link.href = SITE_URL;
     link.target = '_blank';
     link.rel = 'noopener';
     link.innerHTML =

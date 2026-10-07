@@ -161,6 +161,12 @@ def ensure_env_password() -> None:
         if k not in have:
             text += f"{k}={v}\n"
             print(f"В .env добавлен {k}={v}")
+    # секрет сессий обязателен для режимов sso/users (пустой секрет делал бы
+    # HMAC-подпись подделываемой — вход fail-closed); генерируем один раз
+    import secrets
+    if "STUDIO_SESSION_SECRET" not in have:
+        text += f"STUDIO_SESSION_SECRET={secrets.token_hex(32)}\n"
+        print("В .env добавлен сгенерированный STUDIO_SESSION_SECRET")
     env.write_text(text, encoding="utf-8")
 
 
