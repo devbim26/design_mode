@@ -32,7 +32,9 @@ import setup_site_auth
 SECRET = "g" * 40
 tmp = Path(tempfile.mkdtemp(prefix="studio_gzip_test_"))
 saved = {k: os.environ.get(k) for k in ("INVOKEAI_ROOT", "STUDIO_AUTH_MODE", "STUDIO_JWT_SECRET",
-                                        "STUDIO_SESSION_TTL", "SITE_PASSWORD", "SITE_VALID_UNTIL")}
+                                        "STUDIO_SESSION_SECRET", "STUDIO_SESSION_TTL",
+                                        "SITE_PASSWORD", "SITE_VALID_UNTIL")}
+prev_cwd = os.getcwd()
 
 
 def run(c):
@@ -90,8 +92,14 @@ async def inner(scope, receive, send):
 
 try:
     os.environ["INVOKEAI_ROOT"] = str(tmp)
+    # герметичность: env_value сканирует и cwd/.env — без chdir тест из корня
+    # репо возьмёт боевой STUDIO_SESSION_SECRET для проверки сессии (minted
+    # другим секретом -> 401)
+    os.chdir(tmp)
+    os.environ.pop("STUDIO_SESSION_SECRET", None)
     (tmp / ".env").write_text(
-        f"STUDIO_AUTH_MODE=sso\nSTUDIO_JWT_SECRET={SECRET}\nSTUDIO_SESSION_TTL=3600\n"
+        f"STUDIO_AUTH_MODE=sso\nSTUDIO_JWT_SECRET={SECRET}\nSTUDIO_SESSION_SECRET={SECRET}\n"
+        f"STUDIO_SESSION_TTL=3600\n"
         "SITE_PASSWORD=pw\nSITE_VALID_UNTIL=2030-01-01\n", encoding="utf-8")
     studio_store.init_db()
     studio_store.upsert_user("u1", "u1@x.io", "One", "user")
@@ -159,6 +167,7 @@ try:
 
     print("OK")
 finally:
+    os.chdir(prev_cwd)
     for k, v in saved.items():
         if v is None:
             os.environ.pop(k, None)

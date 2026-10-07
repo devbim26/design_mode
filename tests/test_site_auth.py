@@ -43,7 +43,9 @@ def scope(path="/", cookies=""):
 
 # --- окружение: tmp-каталог с .env, подменяем INVOKEAI_ROOT ---
 tmp = Path(tempfile.mkdtemp(prefix="site_auth_test_"))
-saved = {k: os.environ.get(k) for k in ("INVOKEAI_ROOT", "SITE_PASSWORD", "SITE_VALID_UNTIL")}
+saved = {k: os.environ.get(k) for k in ("INVOKEAI_ROOT", "SITE_PASSWORD", "SITE_VALID_UNTIL",
+                                        "STUDIO_AUTH_MODE", "STUDIO_SESSION_SECRET")}
+prev_cwd = os.getcwd()
 
 
 def write_env(**kv):
@@ -54,6 +56,11 @@ def write_env(**kv):
 
 try:
     os.environ["INVOKEAI_ROOT"] = str(tmp)
+    # герметичность: env_value сканирует и cwd/.env — без chdir тест из корня
+    # репо подхватит боевой STUDIO_AUTH_MODE=users и завалит legacy-куку
+    os.chdir(tmp)
+    os.environ.pop("STUDIO_AUTH_MODE", None)
+    os.environ.pop("STUDIO_SESSION_SECRET", None)
     write_env(SITE_PASSWORD="pw", SITE_VALID_UNTIL="2030-01-01")
 
     # 1. Токен зависит от даты лицензии; правка .env подхватывается без рестарта
@@ -119,7 +126,8 @@ try:
 
     print("OK")
 finally:
-    # --- очистка os.environ и tmp ---
+    # --- очистка os.environ, cwd и tmp ---
+    os.chdir(prev_cwd)
     for k, v in saved.items():
         if v is None:
             os.environ.pop(k, None)
