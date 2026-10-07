@@ -108,3 +108,27 @@
   — допустима только рантайм-ошибка, не SyntaxError.
 - Старый сервер держать выключенным после переключения: два живых
   экземпляра на одном туннеле = расхождение БД пользователей.
+
+## Восстановление при неполной переноске (опыт переезда 2026-10-07)
+
+- **Нет `config-design.yml` / credentials-JSON туннеля design** — не беда:
+  аккаунт Cloudflare авторизован `cert.pem`. Восстановление (схема
+  docx-gen/credits):
+  ```
+  cloudflared tunnel token design   # base64 {a,t,s}
+  # -> записать как ~/.cloudflared/<UUID>.json
+  #    {"AccountTag":a,"TunnelID":t,"TunnelSecret":s}
+  # -> пересоздать config-design.yml (tunnel/credentials-file/ingress
+  #    design.dev-bim.com -> http://localhost:9090, catch-all 404)
+  ```
+  UUID туннеля: `cloudflared tunnel list`. DNS-запись уже существовала
+  (проксированная, наружу видны только A/AAAA Cloudflare) и указывала
+  на нужный UUID — проверяется сквозным запросом https://design.dev-bim.com
+  после подъёма (303/200 = цепочка жива), API-ключ не нужен.
+- **Установщик python.org виснет при тихой установке из агентской сессии**
+  (процессы живы, CPU ~0, каталог не создаётся). Рабочий вариант:
+  `winget install --id Python.Python.3.11 --version 3.11.9 --source winget
+  --scope user --silent --accept-package-agreements --accept-source-agreements`.
+- **Точный состав пакетов старого venv** собирается из dist-info до удаления
+  venv (Name/Version из METADATA каждого `*.dist-info` → requirements) —
+  ставится без дрейфа версий.
