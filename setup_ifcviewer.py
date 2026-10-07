@@ -342,8 +342,12 @@ def patch_app_bundle() -> bool:
         s = s.replace(JS_APPCONTENT_ANCHOR, JS_IFC_PANEL_V2 + JS_APPCONTENT_ANCHOR, 1)
         print("App-бандл: вкладка IFC добавлена")
 
-    # 2) панель «IFC Viewer» на вкладке «Холст» + мост к холсту
-    if "__devbimIfc" in s:
+    # 2) панель «IFC Viewer» на вкладке «Холст» + мост к холсту.
+    #    Маркер моста ищем в ИСХОДНОМ тексте бандла (orig) и по точной
+    #    строке присваивания: шаг 1 только что вставил панель с
+    #    __devbimIfcCtx, и подстрока "__devbimIfc" в s на СВЕЖЕЙ установке
+    #    ложно считалась «мостом неизвестной версии» (патч умирал до записи).
+    if "window.__devbimIfc=" in orig:
         if JS_BRIDGE_V3 in s:
             print("App-бандл: панель IFC на холсте уже на месте, пропуск")
         elif JS_BRIDGE_V2 in s:
