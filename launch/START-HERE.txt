@@ -34,6 +34,15 @@
   create_company.py / start_company.bat / stop_company.py /
   list_companies.py - управление экземплярами компаний (порты 9100+).
 
+МНОГОПОЛЬЗОВАТЕЛЬСКИЙ РЕЖИМ (users)
+-----------------------------------
+  Страница входа: почта + пароль (+ токен ImageRouter при первом входе).
+  Вход владельца-админа: ПУСТАЯ почта + SITE_PASSWORD из .env,
+  затем http://localhost:9090/admin - управление пользователями.
+  Создать пользователя из консоли (в корне проекта):
+    python user_manager.py add ivan@mail.ru
+  Подробнее: docs\MULTIUSER.md
+
 АДРЕСА
 ------
   Локально:          http://localhost:9090

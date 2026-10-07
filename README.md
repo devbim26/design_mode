@@ -64,6 +64,21 @@
 .\venv\Scripts\python.exe tests\test_create_company.py       # создание компаний
 ```
 
+## Многопользовательский режим «users» (один экземпляр, публичный адрес)
+
+Альтернатива компаниям: один сервер открывается наружу через туннель,
+люди входят по почте и паролю, у каждого свой ключ ImageRouter и свои
+рабочие файлы (`data/ifc|pdf/<почта>/`, картинки — по владению).
+Полное руководство: **`docs/MULTIUSER.md`**.
+
+| Действие | Команда / где |
+|---|---|
+| Включить/выключить | `.env` корня: `STUDIO_AUTH_MODE=users` + перезапуск `launch\_restart_server.ps1` |
+| Вход владельца | страница входа: пустая почта + `SITE_PASSWORD` → `/admin` |
+| Создать пользователя | `/admin` (форма) или `python user_manager.py add <email> [--password …] [--token sk-…]` |
+| Пароли/токены/роли/блокировка | `/admin` или `user_manager.py set-password / set-token / role / revoke / restore` |
+| Тесты | `tests\test_userauth_*.py` (store/login/admin/cli/token/files/threed) |
+
 ## Структура
 
 | Путь | Назначение |
