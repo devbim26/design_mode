@@ -8,8 +8,10 @@
 """
 from __future__ import annotations
 
+import hashlib
 import hmac
 import os
+import re
 import sqlite3
 import sys
 import threading
@@ -18,6 +20,8 @@ from pathlib import Path
 
 ADMIN_LOCAL = "admin-local"          # синтетический user_id входа по SITE_PASSWORD
 COOKIE_NAME = "devbim_session"
+PBKDF2_ITER = 240_000                # пароли локальных аккаунтов (режим users)
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _LOCK = threading.Lock()
 _jti_cache: dict[str, int] = {}      # jti -> exp (unix sec)
 _ready = False
@@ -89,6 +93,16 @@ def init_db() -> None:
                      kind TEXT NOT NULL, key TEXT NOT NULL, user_id TEXT NOT NULL,
                      PRIMARY KEY(kind, key))"""
             )
+            # миграция под локальные аккаунты (режим users): пароль + токен IR
+            cols = {r[1] for r in c.execute("PRAGMA table_info(users)")}
+            if "password_hash" not in cols:
+                c.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
+            if "ir_token" not in cols:
+                c.execute("ALTER TABLE users ADD COLUMN ir_token TEXT")
+            try:
+                c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(lower(email))")
+            except Exception as e:  # noqa: BLE001 — дубли в легаси-БД не должны ронять старт
+                print(f"[studio_store] email index skipped: {e}", file=sys.stderr)
         _ready = True
 
 
@@ -164,6 +178,95 @@ def effective_role(user_id: str) -> str | None:
     if not u or u["revoked"]:
         return None
     return u["role_override"] or u["role"]
+
+
+# --- локальные аккаунты (режим users: вход по email/паролю) ---
+
+def auth_mode() -> str:
+    """Активный режим входа: password | sso | users (STUDIO_AUTH_MODE)."""
+    m = env_or("STUDIO_AUTH_MODE", "password").strip().lower()
+    return m if m in ("password", "sso", "users") else "password"
+
+
+def _hash_password(password: str) -> str:
+    salt = os.urandom(16)
+    dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, PBKDF2_ITER)
+    return f"pbkdf2_sha256${PBKDF2_ITER}${salt.hex()}${dk.hex()}"
+
+
+def _check_password_hash(stored: str, password: str) -> bool:
+    try:
+        algo, iters, salt_hex, want = stored.split("$")
+        if algo != "pbkdf2_sha256":
+            return False
+        dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"),
+                                 bytes.fromhex(salt_hex), int(iters))
+        return hmac.compare_digest(dk.hex(), want)
+    except Exception:
+        return False
+
+
+def user_id_for_email(email: str) -> str:
+    """Стабильный user_id локального аккаунта: u_ + sha256(email)[:16]."""
+    return "u_" + hashlib.sha256((email or "").strip().lower().encode("utf-8")).hexdigest()[:16]
+
+
+def create_user(email: str, name: str = "", password: "str | None" = None,
+                role: str = "user", ir_token: "str | None" = None) -> dict:
+    """Создать локальный аккаунт; ValueError при кривом email/роли/дубликате."""
+    email = (email or "").strip()
+    if not _EMAIL_RE.match(email):
+        raise ValueError("некорректный email")
+    if role not in ("user", "admin"):
+        raise ValueError("role must be user|admin")
+    init_db()
+    if find_user_by_email(email):
+        raise ValueError("пользователь с такой почтой уже есть")
+    now = int(time.time())
+    uid = user_id_for_email(email)
+    with _LOCK, _conn() as c:
+        c.execute(
+            """INSERT INTO users(user_id,email,name,role,created_at,last_seen,
+                                 password_hash,ir_token) VALUES(?,?,?,?,?,?,?,?)""",
+            (uid, email, name or "", role, now, now,
+             _hash_password(password) if password else None,
+             (ir_token or "").strip() or None),
+        )
+    u = get_user(uid)
+    assert u is not None
+    return u
+
+
+def find_user_by_email(email: str) -> "dict | None":
+    try:
+        with _conn() as c:
+            row = c.execute("SELECT * FROM users WHERE lower(email)=lower(?)",
+                            ((email or "").strip(),)).fetchone()
+            return dict(row) if row else None
+    except Exception:
+        return None
+
+
+def set_password(user_id: str, password: str) -> None:
+    with _LOCK, _conn() as c:
+        c.execute("UPDATE users SET password_hash=? WHERE user_id=?",
+                  (_hash_password(password), user_id))
+
+
+def check_password(user_id: str, password: str) -> bool:
+    u = get_user(user_id)
+    return bool(u and u.get("password_hash")) and _check_password_hash(u["password_hash"], password or "")
+
+
+def set_ir_token(user_id: str, token: "str | None") -> None:
+    with _LOCK, _conn() as c:
+        c.execute("UPDATE users SET ir_token=? WHERE user_id=?",
+                  ((token or "").strip() or None, user_id))
+
+
+def get_ir_token(user_id: str) -> "str | None":
+    u = get_user(user_id)
+    return (u.get("ir_token") or None) if u else None
 
 
 # --- владение ---
@@ -293,8 +396,9 @@ def _cookie_value(header: str) -> str:
 
 
 def room_for_environ(environ: dict) -> str | None:
-    """Комната пользователя для socket.io connect (по куке из environ). Password-режим -> None."""
-    if env_or("STUDIO_AUTH_MODE", "password").strip().lower() != "sso":
+    """Комната пользователя для socket.io connect (по куке из environ).
+    Password-режим -> None; sso и users -> комната user:<id>."""
+    if auth_mode() == "password":
         return None
     secret = env_or("STUDIO_SESSION_SECRET") or env_or("STUDIO_JWT_SECRET")
     if not secret:
