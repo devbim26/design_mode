@@ -164,9 +164,25 @@ Schema (ALL VALUES ARE METERS - no pixel coordinates):
    USER PROMPT if it states one>,
  "roof": "flat" | "gable" | "hip" | "mansard",
  "roof_height": <float m, ridge height above the eave, only for gable>,
+ "curve": <optional, curved buildings; omit for a flat rectangular box>: {
+   "silhouette": "wave" | "slope_up" | "slope_down" | null,
+   "amplitude_m": <0.3-3.0, wave height / slope rise>,
+   "wavelength_m": <4.0-40.0, wave only>,
+   "taper_pct": <0-40, plan narrowing toward the top>,
+   "plan_bend_m": <-15..15, arc in plan: + bulges toward the camera>,
+   "end_left": "flat" | "round", "end_right": "flat" | "round"
+ },
+ "context": <optional surroundings; omit for a clean elevation/drawing>: {
+   "trees": [{"x_m" <from facade LEFT edge>, "y_m" <0 = facade line, + behind>,
+              "h_m": 2-20, "crown_d_m": 1-8}],
+   "people": [{"x_m", "y_m", "h_m": 1.4-2.0}],
+   "background_buildings": [{"x_m", "y_m" <behind the building>, "w_m",
+     "d_m", "h_m", "color": "#rrggbb"}]
+ },
  "windows": {
    "rows": <int 1-4, window rows per storey>,
-   "cols": <int 1-10, windows per row>,
+   "cols": <int 1-40, windows per row - on continuous glazing count EVERY
+     bay/mullion, do NOT squeeze a long facade into 10>,
    "w_m": <float m, window width>, "h_m": <float m, window height>,
    "margin_x_m": <float m, side margin>, "margin_y_m": <float m, margin inside a storey>,
    "skip": <rows x cols boolean matrix, true = NO window there (e.g. stair shaft,
@@ -195,6 +211,13 @@ Rules:
 - SCALE: if the image has dimension lines - use them (they are exact). Otherwise use
   anchors: storey ~3 m, window ~1.5 x 1.5 m, entrance door ~2.1 m, balcony ~3 x 1.2 m.
 - Count storeys and window columns CAREFULLY; one window row per storey is typical.
+- Continuous glazing: each mullion bay between floor slabs IS a window column
+  (up to 40); blind/opaque panels -> skip matrix, NOT fewer columns.
+- Curved buildings: estimate the roof-line wave (amplitude/wavelength), linear
+  height rise/fall along the facade, plan bend and rounded ends from the photo
+  into "curve"; keep "roof": "flat" then.
+- Report visible surroundings in "context" (roadside trees, people, background
+  blocks); the model must match the photo environment.
 - Perspective in photos: treat the facade as flat (orthographic).
 - Use dormers/towers/chimneys/entrance/custom_parts when the image shows them
   (dormer windows in the roof, corner turrets, chimneys, entrance porches).
@@ -297,6 +320,137 @@ def _valid_custom_parts(raw, out, warnings):
     return parts
 
 
+def _facade_curve(raw, out, warnings):
+    """Опц. блок curve (гнутое здание) -> dict | None. None = прямые формы,
+    ветка кривой в сборке не включается. Не гейт: любой мусор -> дефолт."""
+    if not isinstance(raw, dict):
+        if raw:
+            warnings.append("curve: не объект — изгибы выключены")
+        return None
+    sil = raw.get("silhouette")
+    if sil not in ("wave", "slope_up", "slope_down", None):
+        warnings.append(f"curve.silhouette «{sil}» не поддержан — силуэта нет")
+        sil = None
+    amp = _facade_float(raw.get("amplitude_m", 1.0), 1.0, 0.3, 3.0,
+                        "curve.amplitude_m", warnings)
+    wl_def = max(4.0, min(12.0, out["width_m"] / 2))
+    wl = _facade_float(raw.get("wavelength_m", wl_def), wl_def, 4.0,
+                       max(4.0, out["width_m"] / 1.5), "curve.wavelength_m", warnings)
+    taper = int(_facade_float(raw.get("taper_pct", 0), 0, 0, 40,
+                              "curve.taper_pct", warnings))
+    bend = _facade_float(raw.get("plan_bend_m", 0), 0, -15.0, 15.0,
+                         "curve.plan_bend_m", warnings)
+    bend_cap = out["width_m"] / 4
+    if abs(bend) > bend_cap:
+        clamped = max(-bend_cap, min(bend_cap, bend))
+        warnings.append(f"curve.plan_bend_m: {bend:g} вне ±w/4 — кламп до {clamped:g}")
+        bend = clamped
+    ends = {}
+    for k in ("end_left", "end_right"):
+        v = raw.get(k, "flat")
+        if v not in ("flat", "round"):
+            warnings.append(f"curve.{k} «{v}» не поддержан — flat")
+            v = "flat"
+        ends[k] = v
+    if sil is None and taper == 0 and abs(bend) < 0.05 \
+            and ends == {"end_left": "flat", "end_right": "flat"}:
+        return None
+    return {"silhouette": sil,
+            "amplitude_m": amp if sil else 0.0,
+            "wavelength_m": wl if sil == "wave" else 0.0,
+            "taper_pct": taper, "plan_bend_m": bend, **ends}
+
+
+def _facade_context(raw, out, warnings):
+    """Опц. блок context (окружение фасада): деревья/люди/фоновые дома.
+    Рамка: x от левой кромки фасада, y: 0 = линия фасада, + за зданием."""
+    if not isinstance(raw, dict):
+        if raw:
+            warnings.append("context: не объект — окружение пропущено")
+        return None
+    w, d = out["width_m"], out["depth_m"]
+    ctx = {"trees": [], "people": [], "background_buildings": []}
+    trees = raw.get("trees")
+    if not isinstance(trees, list):
+        if trees:
+            warnings.append("context.trees: не список — пропущены")
+        trees = []
+    if len(trees) > 40:
+        warnings.append("context.trees: больше 40 — лишние отброшены")
+    for idx, tr in enumerate(trees[:40], start=1):
+        if not isinstance(tr, dict):
+            warnings.append(f"Дерево {idx}: не объект — пропущено")
+            continue
+        try:
+            x = float(tr.get("x_m", w / 2))
+            y = float(tr.get("y_m", 10.0))
+        except (TypeError, ValueError):
+            warnings.append(f"Дерево {idx}: координаты не числа — пропущено")
+            continue
+        h = _facade_float(tr.get("h_m", 6.0), 6.0, 2.0, 20.0,
+                          f"дерево {idx}.h_m", warnings)
+        cr = _facade_float(tr.get("crown_d_m", 3.0), 3.0, 1.0, 8.0,
+                           f"дерево {idx}.crown_d_m", warnings)
+        ctx["trees"].append({"x_m": max(-10.0, min(w + 10.0, x)),
+                             "y_m": max(-30.0, min(60.0, y)),
+                             "h_m": h, "crown_d_m": cr})
+    people = raw.get("people")
+    if not isinstance(people, list):
+        if people:
+            warnings.append("context.people: не список — пропущены")
+        people = []
+    if len(people) > 20:
+        warnings.append("context.people: больше 20 — лишние отброшены")
+    for idx, per in enumerate(people[:20], start=1):
+        if not isinstance(per, dict):
+            warnings.append(f"Человек {idx}: не объект — пропущен")
+            continue
+        try:
+            x = float(per.get("x_m", w / 2))
+            y = float(per.get("y_m", -3.0))
+        except (TypeError, ValueError):
+            warnings.append(f"Человек {idx}: координаты не числа — пропущен")
+            continue
+        h = _facade_float(per.get("h_m", 1.7), 1.7, 1.4, 2.0,
+                          f"человек {idx}.h_m", warnings)
+        ctx["people"].append({"x_m": max(-10.0, min(w + 10.0, x)),
+                              "y_m": max(-30.0, min(60.0, y)), "h_m": h})
+    bgs = raw.get("background_buildings")
+    if not isinstance(bgs, list):
+        if bgs:
+            warnings.append("context.background_buildings: не список — пропущены")
+        bgs = []
+    if len(bgs) > 8:
+        warnings.append("context.background_buildings: больше 8 — лишние отброшены")
+    for idx, bb in enumerate(bgs[:8], start=1):
+        if not isinstance(bb, dict):
+            warnings.append(f"Фоновый дом {idx}: не объект — пропущен")
+            continue
+        try:
+            x = float(bb.get("x_m", w / 2))
+            y = float(bb.get("y_m", 25.0))
+            bw = float(bb.get("w_m", 20.0))
+            bd = float(bb.get("d_m", 12.0))
+            bh = float(bb.get("h_m", 15.0))
+        except (TypeError, ValueError):
+            warnings.append(f"Фоновый дом {idx}: размеры не числа — пропущен")
+            continue
+        if y <= d / 2 + 3:
+            warnings.append(f"Фоновый дом {idx}: перед зданием (y={y:g}) — "
+                            f"сброс за фасад")
+            y = d / 2 + 6.0
+        color = bb.get("color")
+        if not _is_hex(color):
+            if color:
+                warnings.append(f"Фоновый дом {idx}.color: не hex — дефолт")
+            color = "#c3c9cf"
+        ctx["background_buildings"].append({
+            "x_m": max(-10.0, min(w + 10.0, x)), "y_m": min(60.0, y),
+            "w_m": max(4.0, min(60.0, bw)), "d_m": max(4.0, min(30.0, bd)),
+            "h_m": max(3.0, min(60.0, bh)), "color": color})
+    return ctx
+
+
 def validate_facade(scene):
     """Сцена фасада от VLM -> (чистая сцена, warnings). ValueError — не фасад."""
     if not isinstance(scene, dict) or not any(
@@ -326,7 +480,7 @@ def validate_facade(scene):
         src = {}
     win = {}
     win["rows"] = int(_facade_float(src.get("rows", 1), 1, 1, 4, "windows.rows", warnings))
-    win["cols"] = int(_facade_float(src.get("cols", 3), 3, 1, 10, "windows.cols", warnings))
+    win["cols"] = int(_facade_float(src.get("cols", 3), 3, 1, 40, "windows.cols", warnings))
     win["margin_x_m"] = _facade_float(src.get("margin_x_m", 1.0), 1.0, 0.05, 5.0,
                                       "windows.margin_x_m", warnings)
     win["margin_y_m"] = _facade_float(src.get("margin_y_m", 0.8), 0.8, 0.05, 3.0,
@@ -351,6 +505,12 @@ def validate_facade(scene):
     if win["h_m"] > fit_h:
         warnings.append(f"windows.h_m: {win['h_m']:g} не влезает — сжат до {fit_h:g}")
         win["h_m"] = fit_h
+    curve = _facade_curve(scene.get("curve"), out, warnings)
+    if curve and curve["silhouette"] and out["roof"] != "flat":
+        warnings.append(f"roof {out['roof']} заменён силуэтом "
+                        f"«{curve['silhouette']}» (приоритет curve)")
+        out["roof"] = "flat"
+    out["curve"] = curve   # None = прямые формы (ветка сборки не включается)
     # skip -> строго rows×cols из bool
     raw_skip = src.get("skip")
     skip = [[False] * win["cols"] for _ in range(win["rows"])]
@@ -363,6 +523,23 @@ def validate_facade(scene):
                     skip[j][i] = bool(raw_skip[j][i])
         else:
             warnings.append("windows.skip: неверная форма — все окна считаются остеклёнными")
+    if curve and ("round" in (curve["end_left"], curve["end_right"])):
+        # окна только на прямом участке: за круглыми торцами колонки гасим
+        inset = 0.3 * out["depth_m"]          # 0.6 * d/2 с каждой стороны
+        usable = out["width_m"] - 2 * win["margin_x_m"]
+        gap = (usable - win["cols"] * win["w_m"]) / max(win["cols"] - 1, 1) \
+            if win["cols"] > 1 else 0.0
+        hidden = 0
+        for i in range(win["cols"]):
+            cx = win["margin_x_m"] + win["w_m"] / 2 + i * (win["w_m"] + gap)
+            if (curve["end_left"] == "round" and cx < inset) or \
+                    (curve["end_right"] == "round" and cx > out["width_m"] - inset):
+                for j in range(win["rows"]):
+                    if not skip[j][i]:
+                        skip[j][i] = True
+                        hidden += 1
+        if hidden:
+            warnings.append(f"скруглённый торец: {hidden} окон скрыты (skip)")
     shape = src.get("shape", "rect")
     if shape not in ("rect", "arched"):
         warnings.append(f"windows.shape «{shape}» не поддержан — rect")
@@ -493,6 +670,10 @@ def validate_facade(scene):
                               "round": bool(t.get("round")), "roof": roof, "roof_h_m": rh})
 
     out["custom_parts"] = _valid_custom_parts(scene.get("custom_parts"), out, warnings)
+
+    ctx = _facade_context(scene.get("context"), out, warnings)
+    if ctx is not None:
+        out["context"] = ctx
 
     src_colors = scene.get("colors")
     if not isinstance(src_colors, dict):
@@ -1200,10 +1381,11 @@ Schema (ALL VALUES ARE METERS, in room coordinates):
     "sill_m": <0.0 for doors, ~0.9 for windows>, "kind": "door" | "window"}
  ],
  "furniture": [
-   {"type": "bed|sofa|armchair|table|chair|wardrobe|kitchen|tv|rug|plant|lamp|other",
+   {"type": "bed|sofa|armchair|table|chair|wardrobe|kitchen|tv|rug|plant|lamp|
+      nightstand|desk|shelf|dresser|toilet|sink|bathtub|other",
     "x_m": <center X>, "y_m": <center Y>, "w_m": <width along X at rot 0>,
     "d_m": <depth along Y at rot 0>, "h_m": <height>,
-    "rot_deg": <rotation around center; 0 = long side along X>,
+    "rot_deg": <see facing rules below>,
     "color": "#rrggbb" (optional)}
  ],
  "people": [
@@ -1230,6 +1412,15 @@ Rules:
   furniture sizes and the vanishing point.
 - List EVERY visible furniture item and person, including partially occluded
   ones (a chair behind the table still goes into furniture).
+- FACING (rot_deg): for seating, wardrobes, kitchens, TVs, desks, nightstands,
+  dressers, shelves, toilets and sinks: 0 = the FRONT faces north (+Y) and the
+  long side lies along X; 90 = front faces east (+X). The back of a sofa, the
+  doors of a wardrobe, the TV screen point that way. For a BED: 0 = long side
+  along X with the HEAD (pillows) at the WEST end; rot_deg swings the head end.
+  Point fronts honestly: sofa back to the wall it touches, bed head to its
+  wall, TV screen toward the sofa.
+- Prefer the SPECIFIC type over "other" (nightstand, desk, shelf, dresser,
+  toilet, sink, bathtub when you see them).
 - The USER PROMPT overrides your guesses (room size, colors) wherever it states
   them.
 """
@@ -1240,7 +1431,10 @@ INTERIOR3D_FURNITURE_TYPES = {
     "table": (1.4, 0.8, 0.75), "chair": (0.45, 0.45, 0.9),
     "wardrobe": (2.0, 0.6, 2.2), "kitchen": (2.4, 0.6, 0.9), "tv": (1.2, 0.1, 0.7),
     "rug": (2.0, 1.4, 0.02), "plant": (0.5, 0.5, 1.2), "lamp": (0.4, 0.4, 1.6),
-    "other": (0.8, 0.8, 0.8),
+    "nightstand": (0.5, 0.4, 0.55), "desk": (1.2, 0.6, 0.75),
+    "shelf": (0.9, 0.35, 1.8), "dresser": (1.2, 0.5, 0.85),
+    "toilet": (0.4, 0.65, 0.75), "sink": (0.6, 0.45, 0.85),
+    "bathtub": (1.7, 0.75, 0.55), "other": (0.8, 0.8, 0.8),
 }
 INTERIOR3D_WALLS = {"south", "north", "east", "west"}
 # геометрия сторон света: (длина стены, ось протяжённости, знак нормали)

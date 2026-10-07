@@ -9,6 +9,8 @@ from pathlib import Path
 
 import ifcopenshell
 import ifcopenshell.api
+import json
+import math
 from ifcopenshell.util.shape_builder import ShapeBuilder
 import matplotlib
 matplotlib.use("Agg")
@@ -265,6 +267,72 @@ def _window_skip(data):
     return data["windows"].get("skip") or []
 
 
+def _facade_ztop(curve, w, H):
+    """Линия верха фасада (центр-фрейм): [(x, z), …] или None — прямая."""
+    if not curve or not curve.get("silhouette"):
+        return None
+    n = 24
+    xs = [-w / 2 + w * i / n for i in range(n + 1)]
+    sil, a = curve["silhouette"], curve["amplitude_m"]
+    if sil == "wave":
+        lam = curve["wavelength_m"]
+        return [(x, H + a * math.sin(2 * math.pi * (x + w / 2) / lam)) for x in xs]
+    pts = [(x, H - a + 2 * a * (x + w / 2) / w) for x in xs]
+    return list(reversed(pts)) if sil == "slope_down" else pts
+
+
+def _facade_footprint(w, d, bend=0.0, end_l="flat", end_r="flat", scale=1.0):
+    """Контур плана фасада (центр-фрейм, CCW): параболы фронт/тыл (дуга),
+    плоские/полукруглые торцы (10 сегментов); scale — taper-этаж."""
+    w, d = w * scale, d * scale
+    n = 16
+    r = d / 2
+
+    def par(x):
+        return bend * (1 - (2 * x / w) ** 2)
+
+    pts = [[-w / 2 + w * i / n, -d / 2 + par(-w / 2 + w * i / n)]
+           for i in range(n + 1)]
+    if end_r == "round":
+        pts += [[w / 2 + r * math.cos(t), r * math.sin(t)]
+                for t in (math.pi * (k / 10 - 0.5) for k in range(1, 10))]
+    else:
+        pts.append([w / 2, d / 2])
+    pts += [[w / 2 - w * i / n, d / 2 + par(w / 2 - w * i / n)]
+            for i in range(1, n + 1)]
+    if end_l == "round":
+        pts += [[-w / 2 - r * math.cos(t), -r * math.sin(t)]
+                for t in (math.pi * (k / 10 - 0.5) for k in range(1, 10))]
+    else:
+        pts.append([-w / 2, -d / 2])
+    return pts
+
+
+def _facade_front_at(curve, w, d, x):
+    """Посадка окна на фронтальную грань: (y, rot_deg). Без дуги — (-d/2, 0)."""
+    if not curve or abs(curve.get("plan_bend_m", 0.0)) < 0.05:
+        return -d / 2, 0.0
+    bend = curve["plan_bend_m"]
+    y = -d / 2 + bend * (1 - (2 * x / w) ** 2)
+    dydx = bend * (-8 * x / w ** 2)
+    return y, math.degrees(math.atan(dydx))
+
+
+def _ctx_tree(mk, idx, tr):
+    """Дерево-прокси (ствол+крона) через колбэк mk — общий для facade/scene."""
+    h, crown = float(tr["h_m"]), float(tr.get("crown_d_m", 3.0))
+    mk(f"Дерево {idx} · ствол", 0.3, 0.3, h * 0.4, tr["x_m"], tr["y_m"], 0.0,
+       "trunk", "CONCEPTUAL_TREE")
+    mk(f"Дерево {idx} · крона", crown, crown, h * 0.6, tr["x_m"], tr["y_m"],
+       h * 0.4, "tree", "CONCEPTUAL_TREE")
+
+
+def _ctx_person(mk, idx, per):
+    """Человек-прокси через колбэк mk — общий для facade/scene."""
+    mk(f"Человек {idx}", 0.5, 0.3, 1.7, per["x_m"], per["y_m"],
+       per.get("z_m", 0.0), "person", "CONCEPTUAL_PERSON")
+
+
 def _hull(points):
     """Точки xyz -> (points, faces) выпуклой оболочки; faces = plain int."""
     from scipy.spatial import ConvexHull
@@ -396,6 +464,39 @@ def build_facade(scene, ifc_path, preview_path, meta):
 
     w, d, fh, n = data["width_m"], data["depth_m"], data["floor_height"], data["storeys"]
     sb = ShapeBuilder(model)  # v2: арочные окна, крыши/башенки-меши, custom_parts
+    curve = data.get("curve")
+    ztop = _facade_ztop(curve, w, n * fh) if curve else None
+
+    def poly_walls(name, pts_xy, bh, z, container, otype="CONCEPTUAL_STOREY",
+                   color_key="walls"):
+        """Этаж-стены экструзией произвольного контура (кривой план/taper)."""
+        product = _api("root.create_entity", file=model,
+                       ifc_class="IfcBuildingElementProxy",
+                       predefined_type="USERDEFINED", name=name)
+        product.ObjectType = otype
+        profile = _api("profile.add_arbitrary_profile", file=model,
+                       profile=[[float(x), float(y)] for x, y in pts_xy], name=name)
+        rep = _api("geometry.add_profile_representation", file=model, context=body,
+                   profile=profile, depth=bh, cardinal_point=None)
+        _api("geometry.assign_representation", file=model, product=product,
+             representation=rep)
+        _api("spatial.assign_container", file=model, products=[product],
+             relating_structure=container)
+        matrix = np.eye(4)
+        matrix[2, 3] = z
+        _api("geometry.edit_object_placement", file=model, product=product,
+             matrix=matrix)
+        _api("style.assign_representation_styles", file=model,
+             shape_representation=rep, styles=[fstyles[color_key]])
+        return product
+
+    def footprint_of(scale=1.0, pad=0.0):
+        if not curve:
+            return None
+        return _facade_footprint(w + 2 * pad, d + 2 * pad,
+                                 curve.get("plan_bend_m", 0.0),
+                                 curve.get("end_left", "flat"),
+                                 curve.get("end_right", "flat"), scale)
 
     def box(name, bw, bd, bh, cx, cy, z, color_key, container,
             object_type="CONCEPTUAL_MASS", rot_deg=0.0):
@@ -434,8 +535,13 @@ def build_facade(scene, ifc_path, preview_path, meta):
     xs, zs = _facade_grid(data)
     skip = _window_skip(data)
     for f in range(n):
-        box(f"Стены · этаж {f + 1}", w, d, fh, 0.0, 0.0, f * fh, "walls", storeys[f],
-            object_type="CONCEPTUAL_STOREY")
+        fp = footprint_of(1.0 - (curve.get("taper_pct", 0) / 100.0)
+                          * (f + 0.5) / n) if curve else None
+        if fp is not None:
+            poly_walls(f"Стены · этаж {f + 1}", fp, fh, f * fh, storeys[f])
+        else:
+            box(f"Стены · этаж {f + 1}", w, d, fh, 0.0, 0.0, f * fh, "walls",
+                storeys[f], object_type="CONCEPTUAL_STOREY")
         for j, z_in in enumerate(zs):
             for i, x in enumerate(xs):
                 if j < len(skip) and i < len(skip[j]) and skip[j][i]:
@@ -449,9 +555,14 @@ def build_facade(scene, ifc_path, preview_path, meta):
                                    win["w_m"], win["h_m"], x + win["w_m"] / 2,
                                    -d / 2, f * fh + z_in, storeys[f], fstyles)
                 else:
+                    # кривой план: окно ставится на дугу фронта с поворотом
+                    # по нормали; прямой план — заподлицо с фасадом
+                    wx = x + win["w_m"] / 2
+                    wy, wrot = _facade_front_at(curve, w, d, wx) if curve \
+                        else (-d / 2, 0.0)
                     box(f"Окно Э{f + 1}-{i + 1}", win["w_m"], 0.12, win["h_m"],
-                        x + win["w_m"] / 2, -d / 2, f * fh + z_in, "glazing",
-                        storeys[f], object_type="CONCEPTUAL_WINDOW")
+                        wx, wy, f * fh + z_in, "glazing",
+                        storeys[f], object_type="CONCEPTUAL_WINDOW", rot_deg=wrot)
                 windows_total += 1
     for b_idx, bal in enumerate(data["balconies"], start=1):
         # пол балкона = уровень пола его этажа (k-1)*fh: plate толщиной 0.18
@@ -460,8 +571,13 @@ def build_facade(scene, ifc_path, preview_path, meta):
         box(f"Балкон {b_idx} · этаж {bal['floor']}", bal["w_m"], bal["d_m"], 0.18,
             bal["x_m"] - w / 2, -(d / 2 + bal["d_m"] / 2), bal_z, "balcony",
             storeys[bal["floor"] - 1], object_type="CONCEPTUAL_BALCONY")
-    box("Цоколь", w + 0.2, d + 0.2, 0.6, 0.0, 0.0, 0.0, "plinth", building,
-        object_type="CONCEPTUAL_PLINTH")
+    fp_plinth = footprint_of(1.0, pad=0.1) if curve else None
+    if fp_plinth is not None:
+        poly_walls("Цоколь", fp_plinth, 0.6, 0.0, building,
+                   otype="CONCEPTUAL_PLINTH", color_key="plinth")
+    else:
+        box("Цоколь", w + 0.2, d + 0.2, 0.6, 0.0, 0.0, 0.0, "plinth", building,
+            object_type="CONCEPTUAL_PLINTH")
     top = n * fh
     if data["roof"] == "gable" and data["roof_height"] > 0.05:
         gable = _api("root.create_entity", file=model, ifc_class="IfcBuildingElementProxy",
@@ -498,6 +614,30 @@ def build_facade(scene, ifc_path, preview_path, meta):
         _mesh_product(model, body, sb,
                       "Крыша вальмовая" if data["roof"] == "hip" else "Крыша мансардная",
                       *_hull(pts), building, "CONCEPTUAL_ROOF", fstyles, "roof")
+
+    if ztop:
+        # кривая линия верха (волна/наклон): меш-полоса 0.5 м с ЯВНЫМИ
+        # гранями — волна невыпуклая, выпуклый _hull её сплющит
+        th = 0.5
+        pts, faces = [], []
+        for x, z in ztop:
+            pts.extend([[x, -d / 2, z], [x, d / 2, z],
+                        [x, -d / 2, z - th], [x, d / 2, z - th]])
+
+        def q(a, b, c, dd):
+            faces.extend([[a, b, c], [a, c, dd]])
+
+        for i in range(len(ztop) - 1):
+            j = i * 4
+            q(j, j + 4, j + 5, j + 1)      # верхняя лента
+            q(j + 2, j + 3, j + 7, j + 6)  # нижняя
+            q(j, j + 2, j + 6, j + 4)      # фронт-юбка
+            q(j + 1, j + 5, j + 7, j + 3)  # тыл-юбка
+        q(0, 1, 3, 2)
+        last = (len(ztop) - 1) * 4
+        q(last, last + 2, last + 3, last + 1)
+        _mesh_product(model, body, sb, "Крыша-полоса", pts, faces, building,
+                      "CONCEPTUAL_ROOF", fstyles, "roof")
 
     # --- v2: башенки (тело + крыша; round = цилиндр-меш) ---
     for idx, t in enumerate(data.get("towers") or [], start=1):
@@ -622,9 +762,39 @@ def build_facade(scene, ifc_path, preview_path, meta):
             _api("style.assign_representation_styles", file=model,
                  shape_representation=rep, styles=[fstyles[color]])
 
+    # --- v2: окружение (context: деревья/люди/фоновые дома) ---
+    ctx = data.get("context")
+    if ctx:
+        _ensure_style(model, fstyles, "trunk", "#8a6b4f")
+        _ensure_style(model, fstyles, "tree", "#5d8a4a")
+        _ensure_style(model, fstyles, "person", "#d4a373")
+
+        def ctx_mk(name, bw, bd, bh, cx, cy, z, color_key, otype, rot_deg=0.0):
+            # x контекста — от левой кромки фасада; y: 0 = линия фасада
+            box(name, bw, bd, bh, cx - w / 2, cy - d / 2, z, color_key, building,
+                object_type=otype, rot_deg=rot_deg)
+
+        for t_idx, tr in enumerate(ctx.get("trees") or [], start=1):
+            _ctx_tree(ctx_mk, t_idx, tr)
+        for p_idx, per in enumerate(ctx.get("people") or [], start=1):
+            _ctx_person(ctx_mk, p_idx, per)
+        for b_idx, bb in enumerate(ctx.get("background_buildings") or [], start=1):
+            hex_c = bb.get("color") if str(bb.get("color", "")).startswith("#") else None
+            ck = _ensure_style(model, fstyles, f"bgb{b_idx:02d}",
+                               hex_c or "#c3c9cf")
+            ctx_mk(f"Фоновый дом {b_idx:02d}", bb["w_m"], bb["d_m"], bb["h_m"],
+                   bb["x_m"], bb["y_m"], 0.0, ck, "CONCEPTUAL_MASS")
+
     _properties(model, building, "FacadeModel", {
         "Storeys": n, "FloorHeight": fh, "WidthM": w, "DepthM": d,
         "Roof": data["roof"], "RoofHeight": data["roof_height"] if data["roof"] in ("gable", "hip", "mansard") else 0.0,
+        # data.get, не локаль curve: ниже в custom_parts призм локаль curve
+        # перезаписывается polyline-сущностью ShapeBuilder
+        "Curve": (json.dumps(data.get("curve"), ensure_ascii=False)
+                  if data.get("curve") else ""),
+        "ContextTrees": len((data.get("context") or {}).get("trees") or []),
+        "ContextPeople": len((data.get("context") or {}).get("people") or []),
+        "ContextBg": len((data.get("context") or {}).get("background_buildings") or []),
         "WindowsTotal": windows_total, "BalconiesCount": len(data["balconies"]),
         "Dormers": len(data.get("dormers") or []),
         "Towers": len(data.get("towers") or []),
@@ -653,9 +823,19 @@ def _draw_facade_preview(data, preview_path):
     colors.update({k: v for k, v in (data.get("colors") or {}).items() if k in colors})
     w, fh, n = data["width_m"], data["floor_height"], data["storeys"]
     H = n * fh
+    top = H
+    curve = data.get("curve")
+    ztop = _facade_ztop(curve, w, H) if curve else None
     fig, ax = plt.subplots(figsize=(12, 7), facecolor="white")
-    ax.add_patch(PlotPolygon([[-w / 2, 0], [w / 2, 0], [w / 2, H], [-w / 2, H]],
-                             facecolor=colors["walls"], edgecolor="#263747", linewidth=1.2))
+    if ztop:
+        # кривой силуэт (волна/наклон): контур по линии верха
+        ax.add_patch(PlotPolygon(
+            [[x, 0] for x, _ in ztop] + [[x, z] for x, z in reversed(ztop)],
+            facecolor=colors["walls"], edgecolor="#263747", linewidth=1.2))
+        top = max(top, max(z for _, z in ztop))
+    else:
+        ax.add_patch(PlotPolygon([[-w / 2, 0], [w / 2, 0], [w / 2, H], [-w / 2, H]],
+                                 facecolor=colors["walls"], edgecolor="#263747", linewidth=1.2))
     ax.add_patch(PlotPolygon([[-w / 2 - 0.1, 0], [w / 2 + 0.1, 0],
                               [w / 2 + 0.1, 0.6], [-w / 2 - 0.1, 0.6]],
                              facecolor=colors["plinth"], edgecolor="#263747", linewidth=1.0))
@@ -683,7 +863,6 @@ def _draw_facade_preview(data, preview_path):
             facecolor="none", edgecolor=colors["balcony"], hatch="////", linewidth=1.2))
         ax.text(bx, bal_lo + 0.5, f"Б{b_idx}", ha="center", va="center",
                 fontsize=7, color="#15232e")
-    top = H
     if data["roof"] == "gable":
         ax.add_patch(PlotPolygon([[-w / 2, H], [w / 2, H], [0, H + data["roof_height"]]],
                                  facecolor=colors["roof"], edgecolor="#263747", alpha=.9))
@@ -721,13 +900,44 @@ def _draw_facade_preview(data, preview_path):
     if e:
         ax.add_patch(plt.Rectangle((e["x_m"] - w / 2 - e["w_m"] / 2, 0), e["w_m"], 2.4,
                                    fill=False, ls="--", ec="#2f855a", lw=1.2))
+    # v2: глифы окружения — деревья-кроны, люди-точки, фоновые дома-контуры
+    ctx_pv = data.get("context") or {}
+    for t in ctx_pv.get("trees") or []:
+        tx = t["x_m"] - w / 2
+        ax.add_patch(plt.Circle((tx, t["h_m"] / 2), t["crown_d_m"] / 2,
+                                fill=False, ec="#5d8a4a", lw=1.0, alpha=.7))
+        top = max(top, t["h_m"])
+    for per in ctx_pv.get("people") or []:
+        px = per["x_m"] - w / 2
+        ax.plot([px], [-0.9], marker="o", ms=3, color="#d4a373")
+    for bb in ctx_pv.get("background_buildings") or []:
+        bx0 = bb["x_m"] - w / 2 - bb["w_m"] / 2
+        ax.add_patch(plt.Rectangle((bx0, 0), bb["w_m"], bb["h_m"],
+                                   fill=False, ls=":", ec="#9aa3ad", lw=.8))
+        top = max(top, bb["h_m"])
     ax.set_xlim(-w / 2 - 1.5, w / 2 + 1.5)
     ax.set_ylim(-1.5, top + 1.0)
     ax.set_aspect("equal")
     ax.axis("off")
     dp = data["depth_m"]
+    cnote = ""
+    if curve:
+        bits = []
+        if curve.get("silhouette"):
+            bits.append(f"силуэт {curve['silhouette']} ±{curve['amplitude_m']:g} м")
+        if curve.get("taper_pct"):
+            bits.append(f"тейпер {curve['taper_pct']}%")
+        if abs(curve.get("plan_bend_m", 0)) > 0.05:
+            bits.append(f"дуга {curve['plan_bend_m']:g} м")
+        if "round" in (curve.get("end_left"), curve.get("end_right")):
+            bits.append("круглые торцы")
+        cnote = ", " + ", ".join(bits)
+    nctx = sum(len(ctx_pv.get(k) or []) for k in
+               ("trees", "people", "background_buildings"))
+    if nctx:
+        cnote += f", окружение {nctx}"
     ax.set_title(f"3D Design — фасад: {n} эт. × {fh:g} м, {w:g}×{dp:g} м, "
-                 f"крыша {data['roof']}", fontsize=13)
+                 f"крыша {data['roof']}{cnote}", fontsize=13)
     fig.tight_layout()
     preview_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(preview_path, dpi=160, facecolor="white")
@@ -1342,17 +1552,12 @@ def build_scene(scene, ifc_path, preview_path, meta):
 
     ctx = data["context"]
     for t_idx, tr in enumerate(ctx.get("trees", []), start=1):
-        h, crown = tr["h_m"], tr["crown_d_m"]
-        boxx(f"Дерево {t_idx} · ствол", 0.3, 0.3, h * 0.4, tr["x_m"], tr["y_m"], 0.0,
-             "trunk", "CONCEPTUAL_TREE")
-        boxx(f"Дерево {t_idx} · крона", crown, crown, h * 0.6, tr["x_m"], tr["y_m"],
-             h * 0.4, "tree", "CONCEPTUAL_TREE")
+        _ctx_tree(boxx, t_idx, tr)
     for c_idx, car in enumerate(ctx.get("cars", []), start=1):
         boxx(f"Машина {c_idx}", 1.8, 4.5, 1.4, car["x_m"], car["y_m"], 0.0,
              "car", "CONCEPTUAL_CAR", rot=car.get("rot_deg", 0.0))
     for p_idx, per in enumerate(ctx.get("people", []), start=1):
-        boxx(f"Человек {p_idx}", 0.5, 0.3, 1.7, per["x_m"], per["y_m"],
-             per.get("z_m", 0.0), "person", "CONCEPTUAL_PERSON")
+        _ctx_person(boxx, p_idx, per)
     for f_idx, fu in enumerate(ctx.get("furniture", []), start=1):
         boxx(f"Мебель {f_idx} · {fu['type']}", fu["w_m"], fu["d_m"], fu["h_m"],
              fu["x_m"], fu["y_m"], fu.get("z_m", 0.0), "furniture",
@@ -1458,10 +1663,11 @@ def _draw_scene_preview(data, preview_path):
 
 ASSUMPTION_INTERIOR3D = (
     "Концептуальная модель комнаты по рендеру/фото интерьера (3D Design). Комната — "
-    "ортогональный «боксовый» каркас; мебель и люди — схематичные объёмы; перспектива "
-    "принята за ортогональную, размеры оценочные по опорным объектам. Камера "
-    "воспроизводит точку съёмки исходника приблизительно. Не использовать как "
-    "обмерную или рабочую документацию."
+    "ортогональный «боксовый» каркас; мебель и люди — схематичные композиции из "
+    "блоков-деталей (спинки, ножки, дверцы — приближение параллелепипедами); "
+    "перспектива принята за ортогональную, размеры оценочные по опорным объектам. "
+    "Камера воспроизводит точку съёмки исходника приблизительно. Не использовать "
+    "как обмерную или рабочую документацию."
 )
 
 INTERIOR3D_COLORS = {
@@ -1487,16 +1693,185 @@ INTERIOR3D_FURN_COLORS = {
     "bed": "#8fa3bf", "sofa": "#7f9b8e", "armchair": "#9b8e7f",
     "table": "#c9a227", "chair": "#d4ac9e", "wardrobe": "#a58d6f",
     "kitchen": "#9aa3ad", "tv": "#23282e", "rug": "#c7b9a5",
-    "plant": "#4e7a4e", "lamp": "#f0d68a", "other": "#b8bcc2",
+    "plant": "#4e7a4e", "lamp": "#f0d68a",
+    "nightstand": "#a58d6f", "desk": "#b08a4f", "shelf": "#8a6f52",
+    "dresser": "#9c8265", "toilet": "#d9dee2", "sink": "#d9dee2",
+    "bathtub": "#dfe7ea", "other": "#b8bcc2",
 }
 INTERIOR3D_FURN_RU = {
     "bed": "Кровать", "sofa": "Диван", "armchair": "Кресло", "table": "Стол",
     "chair": "Стул", "wardrobe": "Шкаф", "kitchen": "Кухня", "tv": "ТВ",
-    "rug": "Ковёр", "plant": "Растение", "lamp": "Лампа", "other": "Предмет",
+    "rug": "Ковёр", "plant": "Растение", "lamp": "Лампа",
+    "nightstand": "Тумба", "desk": "Стол письменный", "shelf": "Стеллаж",
+    "dresser": "Комод", "toilet": "Унитаз", "sink": "Раковина",
+    "bathtub": "Ванна", "other": "Предмет",
 }
+# короткие подписи превью (длинные имена сжимаем)
+INTERIOR3D_FURN_SHORT = {
+    "nightstand": "тумба", "desk": "стол", "shelf": "стеллаж",
+    "dresser": "комод", "toilet": "унитаз", "sink": "раков.",
+    "bathtub": "ванна", "armchair": "кресло", "wardrobe": "шкаф",
+}
+# фиксированные акценты деталей мебели (furniture-parts, 05.10)
+INTERIOR3D_ACCENTS = {
+    "wood": "#6b5b47", "mattress": "#e8e2d4", "pillow": "#f2efe6",
+    "plantpot": "#8a5a3c", "plantcrown": "#4e7a4e", "screen": "#14171c",
+    "stand": "#3a3f46", "pole": "#4a4f55", "lampshade": "#f0d68a",
+    "porcelain": "#e8ecef", "water": "#cfe3ec", "skin": "#d8b89a",
+    "frame": "#f2f0ea",
+}
+INTERIOR3D_GLASS_HEX = "#A8D4EA"  # стекло окна + Transparency 0.55
+# типы с front-facing семантикой rot_deg: θ = −rot (0 = перед на север +Y,
+# длинная сторона вдоль X — семантика people). Остальные (bed/table/rug/
+# plant/lamp/bathtub) — θ = +rot; у кровати изголовье у локального −X
+INTERIOR3D_FRONT_Y = {"sofa", "armchair", "chair", "wardrobe", "kitchen",
+                      "tv", "desk", "nightstand", "dresser", "shelf",
+                      "toilet", "sink", "other"}
 INTERIOR3D_WALL_T = 0.15  # толщина стен shoebox
 INTERIOR3D_WALL_RU = {"south": "южная", "north": "северная",
                       "west": "западная", "east": "восточная"}
+
+
+def _shade(hex_color, factor):
+    """hex → осветление/затемнение (factor >1 светлее) — оттенки деталей."""
+    r, g, b = matplotlib.colors.to_rgb(hex_color)
+    q = [min(255, max(0, int(round(c * factor * 255)))) for c in (r, g, b)]
+    return "#{:02x}{:02x}{:02x}".format(*q)
+
+
+def _i3d_parts(ftype, item, room_h):
+    """Детали предмета интерьера в ЛОКАЛЬНОМ фрейме (перед = +Y, пол z=0).
+
+    Возвращает [(суффикс, w, d, h, dx, dy, z, цвет), ...]; цвет — None
+    (основной цвет предмета), ("hex", ...) (акцент) или ("shade", множитель)
+    (оттенок основного). Ширина/глубина/высота части мельче 3 см / 1.2 см /
+    8 мм пропускаются (тонкие панели-фронты легальны); пустой результат
+    невозможен (fallback — 1 бокс)."""
+    w, d, h = float(item["w_m"]), float(item["d_m"]), float(item["h_m"])
+    acc = INTERIOR3D_ACCENTS
+    P = []
+
+    def add(sfx, bw, bd, bh, dx, dy, z, color=None):
+        if bw >= 0.03 and bd >= 0.012 and bh >= 0.008:
+            P.append((sfx, bw, bd, bh, dx, dy, z, color))
+
+    if ftype == "bed":  # изголовье у −X: при θ=+rot, 0 = изголовье на западе
+        add("каркас", w, d, 0.25, 0.0, 0.0, 0.05)
+        add("матрас", w - 0.08, d - 0.08, 0.18, -0.02, 0.0, 0.30,
+            ("hex", acc["mattress"]))
+        add("изголовье", 0.10, d + 0.04, max(0.55, h + 0.30),
+            -w / 2 + 0.05, 0.0, 0.0)
+        pw = min(0.42, w / 4)
+        for sy in (-1.0, 1.0):
+            add("подушка", pw, d / 2 - 0.14, 0.10, -w / 2 + pw / 2 + 0.14,
+                sy * d / 4, h - 0.02, ("hex", acc["pillow"]))
+        add("одеяло", max(w / 2 - 0.06, 0.4), d - 0.10, 0.06, w / 4, 0.0,
+            h - 0.04, ("shade", 0.82))
+    elif ftype in ("sofa", "armchair"):
+        add("основание", w, d, 0.30, 0.0, 0.0, 0.08)
+        back_h = max(h - 0.38, 0.15)
+        add("спинка", w, 0.22, back_h, 0.0, -d / 2 + 0.11, 0.38)
+        for sx in (-1.0, 1.0):
+            add("подлокотник", 0.18, d - 0.06, back_h, sx * (w / 2 - 0.09),
+                -0.02, 0.38)
+        cw = w / 2 - 0.26
+        if cw >= 0.12:
+            for sx in (-1.0, 1.0):
+                add("подушка сиденья", cw, d - 0.40, 0.16, sx * w / 4, 0.05,
+                    0.38, ("shade", 1.15))
+        elif w - 0.44 >= 0.12:
+            add("подушка сиденья", w - 0.44, d - 0.40, 0.16, 0.0, 0.05, 0.38,
+                ("shade", 1.15))
+    elif ftype == "chair":
+        add("сиденье", w, d - 0.06, 0.05, 0.0, 0.01, 0.43)
+        add("спинка", w, 0.05, h - 0.48, 0.0, -d / 2 + 0.03, 0.48)
+        for sx in (-1.0, 1.0):
+            for sy in (-1.0, 1.0):
+                add("ножка", 0.04, 0.04, 0.43, sx * (w / 2 - 0.05),
+                    sy * (d / 2 - 0.07), 0.0, ("hex", acc["wood"]))
+    elif ftype == "table":
+        add("столешница", w, d, 0.05, 0.0, 0.0, h - 0.05)
+        for sx in (-1.0, 1.0):
+            for sy in (-1.0, 1.0):
+                add("ножка", 0.07, 0.07, h - 0.05, sx * (w / 2 - 0.10),
+                    sy * (d / 2 - 0.10), 0.0, ("hex", acc["wood"]))
+    elif ftype == "desk":
+        add("столешница", w, d, 0.05, 0.0, 0.0, h - 0.05)
+        for sx in (-1.0, 1.0):
+            add("боковина", 0.05, d - 0.08, h - 0.05, sx * (w / 2 - 0.025),
+                0.0, 0.0, ("hex", acc["wood"]))
+        add("задняя панель", w - 0.14, 0.04, h - 0.18, 0.0, -d / 2 + 0.04,
+            0.10, ("hex", acc["wood"]))
+    elif ftype == "wardrobe":
+        add("корпус", w, d, h, 0.0, 0.0, 0.0)
+        dw = w / 2 - 0.04
+        if dw >= 0.10:
+            for sx in (-1.0, 1.0):
+                add("дверь", dw, 0.02, h - 0.10, sx * w / 4, d / 2 + 0.01,
+                    0.05, ("shade", 1.18))
+        else:
+            add("дверь", w - 0.06, 0.02, h - 0.10, 0.0, d / 2 + 0.01, 0.05,
+                ("shade", 1.18))
+    elif ftype == "kitchen":
+        add("тумбы", w, d - 0.04, h - 0.05, 0.0, -0.02, 0.10)
+        add("столешница", w + 0.03, d, 0.05, 0.0, 0.0, h - 0.05,
+            ("shade", 1.25))
+        if room_h - 1.48 >= 0.65:  # верхние шкафы, если позволяет потолок
+            add("верхние шкафы", w, d - 0.22, 0.65, 0.0,
+                -d / 2 + (d - 0.22) / 2, 1.45)
+    elif ftype == "tv":
+        add("экран", w, 0.04, h, 0.0, 0.0, 0.16, ("hex", acc["screen"]))
+        add("подставка", min(0.40, w / 2), max(d + 0.12, 0.22), 0.14, 0.0,
+            0.0, 0.02, ("hex", acc["stand"]))
+    elif ftype == "rug":
+        add("кайма", w + 0.16, d + 0.16, 0.015, 0.0, 0.0, 0.0, ("shade", 0.8))
+        add("основа", w, d, 0.02, 0.0, 0.0, 0.015)
+    elif ftype == "plant":
+        pot_h = min(0.32, h * 0.28)
+        pot_w = min(w, 0.36)
+        add("горшок", pot_w, pot_w, pot_h, 0.0, 0.0, 0.0,
+            ("hex", acc["plantpot"]))
+        trunk_h = h * 0.30
+        add("ствол", 0.06, 0.06, trunk_h, 0.0, 0.0, pot_h, ("hex", acc["wood"]))
+        add("крона", w, min(w, d), max(h - pot_h - trunk_h, 0.15), 0.0, 0.0,
+            pot_h + trunk_h, ("hex", acc["plantcrown"]))
+    elif ftype == "lamp":
+        add("база", 0.32, 0.32, 0.03, 0.0, 0.0, 0.0, ("hex", acc["pole"]))
+        add("стойка", 0.04, 0.04, h - 0.28, 0.0, 0.0, 0.03, ("hex", acc["pole"]))
+        add("абажур", 0.42, 0.42, 0.25, 0.0, 0.0, h - 0.25,
+            ("hex", acc["lampshade"]))
+    elif ftype in ("nightstand", "dresser"):
+        add("корпус", w, d, h, 0.0, 0.0, 0.0)
+        n = 2 if ftype == "nightstand" else 3
+        fh = (h - 0.10) / n - 0.02
+        for i in range(n):
+            add("фронт", w - 0.06, 0.02, fh, 0.0, d / 2 + 0.01,
+                0.05 + i * (fh + 0.02), ("shade", 1.18))
+    elif ftype == "shelf":
+        add("боковина", 0.03, d, h, -(w / 2 - 0.015), 0.0, 0.0)
+        add("боковина", 0.03, d, h, w / 2 - 0.015, 0.0, 0.0)
+        for i in range(5):
+            add("полка", w - 0.06, d - 0.02, 0.025, 0.0, 0.0,
+                0.02 + (h - 0.045) * i / 4)
+        add("задник", w - 0.02, 0.015, h, 0.0, -d / 2 + 0.008, 0.0,
+            ("shade", 0.85))
+    elif ftype == "toilet":
+        bowl_h = min(0.42, h * 0.55)
+        add("чаша", w, d * 0.60, bowl_h, 0.0, d * 0.20, 0.0,
+            ("hex", acc["porcelain"]))
+        add("бачок", w, d * 0.34, max(h - bowl_h - 0.02, 0.15), 0.0,
+            -d / 2 + d * 0.17, bowl_h, ("hex", acc["porcelain"]))
+    elif ftype == "sink":
+        add("тумба", w, d, h - 0.14, 0.0, 0.0, 0.10)
+        add("чаша", w - 0.16, d - 0.12, 0.12, 0.0, 0.0, h - 0.14,
+            ("hex", acc["porcelain"]))
+    elif ftype == "bathtub":
+        add("корпус", w, d, h, 0.0, 0.0, 0.0, ("hex", acc["porcelain"]))
+        add("вода", w - 0.18, d - 0.18, 0.05, 0.0, 0.0, h - 0.06,
+            ("hex", acc["water"]))
+    if not P:
+        P.append(("объём", w, d, h, 0.0, 0.0, 0.0, None))
+    return P
 
 
 def build_interior3d(scene, ifc_path, preview_path, meta):
@@ -1575,11 +1950,23 @@ def build_interior3d(scene, ifc_path, preview_path, meta):
                                             "Green": g, "Blue": b},
                          "Transparency": 0.0})
         fstyles[f"furn:{ftype}"] = style
+    # стекло окон — полупрозрачное (детали-части окон, 05.10)
+    glass = _api("style.add_style", file=model, name="Int3dGlass")
+    r, g, b = matplotlib.colors.to_rgb(INTERIOR3D_GLASS_HEX)
+    _api("style.add_surface_style", file=model, style=glass,
+         ifc_class="IfcSurfaceStyleShading",
+         attributes={"SurfaceColour": {"Name": "glass", "Red": r,
+                                        "Green": g, "Blue": b},
+                     "Transparency": 0.55})
+    fstyles["acc:glass"] = glass
 
     def box(name, bw, bd, bh, cx, cy, z, color_key, ifc_class="IfcBuildingElementProxy",
-            object_type="CONCEPTUAL_MASS", predefined=None, rot_deg=0.0):
+            object_type="CONCEPTUAL_MASS", predefined=None, rot_deg=0.0,
+            container=True):
         """Прямоугольный блок room-frame: профиль bw×bd, выдавливание bh от z,
-        поворот rot_deg вокруг Z (как rbox интерьера, цвет по ключу fstyles)."""
+        поворот rot_deg вокруг Z (как rbox интерьера, цвет по ключу fstyles).
+        container=False — деталь-часть: живёт в IfcRelAggregates родителя,
+        а не в контейнере этажа."""
         kwargs = dict(file=model, ifc_class=ifc_class, name=name)
         if predefined is not None:
             kwargs["predefined_type"] = predefined
@@ -1592,8 +1979,9 @@ def build_interior3d(scene, ifc_path, preview_path, meta):
                               context=body, profile=profile, depth=bh, cardinal_point=None)
         _api("geometry.assign_representation", file=model, product=product,
               representation=representation)
-        _api("spatial.assign_container", file=model, products=[product],
-             relating_structure=storey)
+        if container:
+            _api("spatial.assign_container", file=model, products=[product],
+                 relating_structure=storey)
         matrix = _rot_z(rot_deg)
         matrix[0, 3], matrix[1, 3], matrix[2, 3] = float(cx), float(cy), float(z)
         _api("geometry.edit_object_placement", file=model, product=product, matrix=matrix)
@@ -1601,6 +1989,29 @@ def build_interior3d(scene, ifc_path, preview_path, meta):
             _api("style.assign_representation_styles", file=model,
                  shape_representation=representation, styles=[fstyles[color_key]])
         return product
+
+    def parent_of(name, object_type, ifc_class="IfcBuildingElementProxy"):
+        """Родитель-«счётчик» без геометрии: ObjectType как у одиночного
+        элемента раньше (verify-судья кросс-чекает counts 1:1 со сценой),
+        детали агрегируются в него."""
+        product = _api("root.create_entity", file=model, ifc_class=ifc_class,
+                       predefined_type="USERDEFINED", name=name)
+        product.ObjectType = object_type
+        _api("spatial.assign_container", file=model, products=[product],
+             relating_structure=storey)
+        _api("geometry.edit_object_placement", file=model, product=product,
+             matrix=np.eye(4))
+        return product
+
+    def part_color(col, main_key, main_hex):
+        """Цвет детали: None → основной, ("hex", v) → акцент,
+        ("shade", f) → оттенок основного (стиль по требованию)."""
+        if col is None:
+            return main_key
+        if col[0] == "hex":
+            return _ensure_style(model, fstyles, f"acc:{col[1]}", col[1])
+        return _ensure_style(model, fstyles, f"i3dsh:{main_hex}:{col[1]}",
+                             _shade(main_hex, col[1]))
 
     # --- пол / потолок / стены shoebox (внутренние грани на ±w/2, ±d/2);
     #     стены — палитра ориентаций: юг/север вдоль X, запад/восток вдоль Y
@@ -1634,30 +2045,89 @@ def build_interior3d(scene, ifc_path, preview_path, meta):
         if op["kind"] == "door":
             n_doors += 1
             name, otype, color_key = f"Дверь {n_doors}", "CONCEPTUAL_DOOR", "door"
+            box(name, op["w_m"], 0.12, op["h_m"], cx, cy, op["sill_m"],
+                color_key, object_type=otype, predefined="USERDEFINED",
+                rot_deg=rot)
         else:
             n_windows += 1
-            name, otype, color_key = f"Окно {n_windows}", "CONCEPTUAL_WINDOW", "window"
-        box(name, op["w_m"], 0.12, op["h_m"], cx, cy, op["sill_m"],
-            color_key, object_type=otype, predefined="USERDEFINED", rot_deg=rot)
+            wname = f"Окно {n_windows}"
+            wpar = parent_of(wname, "CONCEPTUAL_WINDOW")
+            frame = box(f"{wname} · рама", op["w_m"], 0.12, op["h_m"], cx, cy,
+                        op["sill_m"], _ensure_style(
+                            model, fstyles, "acc:" + INTERIOR3D_ACCENTS["frame"],
+                            INTERIOR3D_ACCENTS["frame"]),
+                        object_type="CONCEPTUAL_WINDOW_PART",
+                        predefined="USERDEFINED", rot_deg=rot, container=False)
+            glass_w, glass_h = max(op["w_m"] - 0.10, 0.10), max(op["h_m"] - 0.10, 0.10)
+            pane = box(f"{wname} · стекло", glass_w, 0.05, glass_h, cx, cy,
+                       op["sill_m"] + 0.05, "acc:glass",
+                       object_type="CONCEPTUAL_WINDOW_PART",
+                       predefined="USERDEFINED", rot_deg=rot, container=False)
+            _api("aggregate.assign_object", file=model, products=[frame, pane],
+                 relating_object=wpar)
 
-    # --- мебель: IfcFurnishingElement (дерево вьювера: «Оборудование/мебель»)
+    # --- мебель (furniture-parts, 05.10): родитель без геометрии
+    #     (ObjectType FURNITURE_<TYPE> — счётчик verify 1:1 со сценой) +
+    #     детали FURNISHING_PART в IfcRelAggregates. Фронтальные типы:
+    #     θ=−rot (0 = перед на север, длинная сторона вдоль X — семантика
+    #     people); кровать и симметричные — θ=+rot, изголовье у локального −X
+    n_furn_parts = 0
     for idx, item in enumerate(data.get("furniture", []), start=1):
         ftype = item["type"]
+        rot = float(item.get("rot_deg", 0.0) or 0.0)
+        theta = -rot if ftype in INTERIOR3D_FRONT_Y else rot
+        R = _rot_z(theta)
         if item.get("color"):
-            color_key = _ensure_style(model, fstyles, f"i3dfurn{idx:02d}", item["color"])
+            main_key = _ensure_style(model, fstyles, f"i3dfurn{idx:02d}",
+                                     item["color"])
+            main_hex = item["color"]
         else:
-            color_key = f"furn:{ftype}"
-        box(f"{INTERIOR3D_FURN_RU.get(ftype, 'Предмет')} {idx:02d}",
-            item["w_m"], item["d_m"], item["h_m"], item["x_m"], item["y_m"], 0.0,
-            color_key, ifc_class="IfcFurnishingElement",
-            object_type=f"FURNITURE_{ftype.upper()}", predefined="USERDEFINED",
-            rot_deg=item["rot_deg"])
+            main_key = f"furn:{ftype}"
+            main_hex = INTERIOR3D_FURN_COLORS.get(ftype, "#b8bcc2")
+        base = f"{INTERIOR3D_FURN_RU.get(ftype, 'Предмет')} {idx:02d}"
+        fpar = parent_of(base, f"FURNITURE_{ftype.upper()}",
+                         ifc_class="IfcFurnishingElement")
+        parts, seen = [], {}
+        for sfx, pw, pd, ph, dx, dy, z, col in _i3d_parts(ftype, item, h):
+            seen[sfx] = seen.get(sfx, 0) + 1
+            pname = f"{base} · {sfx}" + (f" {seen[sfx]}" if seen[sfx] > 1 else "")
+            cx = item["x_m"] + R[0, 0] * dx + R[0, 1] * dy
+            cy = item["y_m"] + R[1, 0] * dx + R[1, 1] * dy
+            parts.append(box(pname, pw, pd, ph, cx, cy, z,
+                             part_color(col, main_key, main_hex),
+                             ifc_class="IfcFurnishingElement",
+                             object_type="FURNISHING_PART",
+                             predefined="USERDEFINED", rot_deg=theta,
+                             container=False))
+            n_furn_parts += 1
+        _api("aggregate.assign_object", file=model, products=parts,
+             relating_object=fpar)
 
-    # --- люди: схематичный бокс 0.5×0.3×h (паттерн «Сцены»)
+    # --- люди: родитель + 3 детали (ноги/торс/голова), θ=−rot — как мебель
+    #     с front-facing семантикой (0 = лицом на север)
     for idx, per in enumerate(data.get("people", []), start=1):
-        box(f"Человек {idx}", 0.5, 0.3, per["h_m"], per["x_m"], per["y_m"], 0.0,
-            "person", object_type="CONCEPTUAL_PERSON", predefined="USERDEFINED",
-            rot_deg=per["rot_deg"])
+        ph_m = per["h_m"]
+        theta = -float(per.get("rot_deg", 0.0) or 0.0)
+        R = _rot_z(theta)
+        base = f"Человек {idx}"
+        ppar = parent_of(base, "CONCEPTUAL_PERSON")
+        person_parts = [
+            ("ноги", 0.22, 0.16, ph_m * 0.45, 0.0, 0.0, 0.0, ("shade", 0.75)),
+            ("торс", 0.40, 0.26, ph_m * 0.40, 0.0, 0.0, ph_m * 0.45, None),
+            ("голова", 0.20, 0.20, ph_m * 0.14, 0.0, 0.0, ph_m * 0.85,
+             ("hex", INTERIOR3D_ACCENTS["skin"])),
+        ]
+        parts = []
+        for sfx, pw, pd, pph, dx, dy, z, col in person_parts:
+            cx = per["x_m"] + R[0, 0] * dx + R[0, 1] * dy
+            cy = per["y_m"] + R[1, 0] * dx + R[1, 1] * dy
+            parts.append(box(f"{base} · {sfx}", pw, pd, pph, cx, cy, z,
+                             part_color(col, "person", "#38424e"),
+                             object_type="CONCEPTUAL_PERSON_PART",
+                             predefined="USERDEFINED", rot_deg=theta,
+                             container=False))
+        _api("aggregate.assign_object", file=model, products=parts,
+             relating_object=ppar)
 
     cam = data["camera"]
     # IFC-бокс комнаты (без мебели — она внутри): вьювер переводит глаз/цель
@@ -1676,6 +2146,7 @@ def build_interior3d(scene, ifc_path, preview_path, meta):
         "WidthM": w, "DepthM": d, "HeightM": h, "Ceiling": bool(room.get("ceiling")),
         "OpeningsDoors": n_doors, "OpeningsWindows": n_windows,
         "Furniture": len(data.get("furniture", [])),
+        "FurnitureParts": n_furn_parts,
         "People": len(data.get("people", [])),
         "OrthoAssumption": True, "Source": "3D Design", "Notes": ASSUMPTION_INTERIOR3D,
         "ColorLegend": INTERIOR3D_COLOR_LEGEND,
@@ -1691,17 +2162,18 @@ def build_interior3d(scene, ifc_path, preview_path, meta):
 def _draw_interior3d_preview(data, preview_path):
     """План комнаты сверху: мебель, люди, глаз камеры и взгляд до target."""
     import matplotlib.transforms
-    from matplotlib.patches import Circle, FancyArrow, Rectangle
+    from matplotlib.patches import Circle, FancyArrow, Polygon, Rectangle
 
     room = data["room"]
     w, d = room["width_m"], room["depth_m"]
     fig, ax = plt.subplots(figsize=(10, 8), dpi=140)
     ax.add_patch(Rectangle((-w / 2, -d / 2), w, d, facecolor="#efece5",
                            edgecolor="#263747", linewidth=1.4))
-    for it in data.get("furniture", []):
-        rot = it.get("rot_deg", 0.0) or 0.0
+    for i, it in enumerate(data.get("furniture", []), start=1):
+        ftype, rot = it["type"], it.get("rot_deg", 0.0) or 0.0
+        theta = -rot if ftype in INTERIOR3D_FRONT_Y else rot
         tr = matplotlib.transforms.Affine2D().rotate_deg_around(
-            it["x_m"], it["y_m"], rot) + ax.transData
+            it["x_m"], it["y_m"], theta) + ax.transData
         rect = Rectangle((it["x_m"] - it["w_m"] / 2, it["y_m"] - it["d_m"] / 2),
                          it["w_m"], it["d_m"],
                          facecolor=it.get("color") or INTERIOR3D_FURN_COLORS.get(
@@ -1709,8 +2181,40 @@ def _draw_interior3d_preview(data, preview_path):
                          edgecolor="#263747", alpha=.9)
         rect.set_transform(tr)
         ax.add_patch(rect)
-    for p in data.get("people", []):
-        ax.add_patch(Circle((p["x_m"], p["y_m"]), 0.3, facecolor="#38424e"))
+        # подпись: короткое имя + номер (мелкие предметы — только номер)
+        label = (INTERIOR3D_FURN_SHORT.get(ftype)
+                 or INTERIOR3D_FURN_RU.get(ftype, "предмет").lower())
+        text = f"{label} {i}" if it["w_m"] >= 0.5 else str(i)
+        ax.text(it["x_m"], it["y_m"], text, fontsize=5.5, ha="center",
+                va="center", color="#263747", zorder=4,
+                bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none",
+                          alpha=0.75))
+        # куда повёрнут перед (θ уже учтён в transform — рисуем в локальном
+        # фрейме): фронтальные типы — носик у +Y, кровать — метка изголовья
+        if ftype in INTERIOR3D_FRONT_Y:
+            hw = min(0.16, it["w_m"] / 3)
+            nose = Polygon([(-hw, it["d_m"] / 2 + 0.02),
+                            (hw, it["d_m"] / 2 + 0.02),
+                            (0.0, it["d_m"] / 2 + 0.20)],
+                           closed=True, facecolor="#263747", alpha=.75, zorder=4)
+            nose.set_transform(tr)
+            ax.add_patch(nose)
+        elif ftype == "bed":
+            head = Rectangle((-it["w_m"] / 2 - 0.10, -it["d_m"] * 0.3),
+                             0.07, it["d_m"] * 0.6, facecolor="#7a1f18",
+                             alpha=.85, zorder=4)
+            head.set_transform(tr)
+            ax.add_patch(head)
+    for i, p in enumerate(data.get("people", []), start=1):
+        rot = p.get("rot_deg", 0.0) or 0.0
+        fx, fy = np.sin(np.radians(rot)), np.cos(np.radians(rot))
+        ax.add_patch(Circle((p["x_m"], p["y_m"]), 0.28, facecolor="#38424e",
+                            zorder=4))
+        ax.add_patch(Circle((p["x_m"] + 0.12 * fx, p["y_m"] + 0.12 * fy),
+                            0.10, facecolor="#d8b89a", zorder=5))
+        ax.add_patch(FancyArrow(p["x_m"] + 0.16 * fx, p["y_m"] + 0.16 * fy,
+                                0.20 * fx, 0.20 * fy, width=0.03,
+                                head_width=0.14, color="#e2574c", zorder=5))
     cam = data["camera"]
     ex, ey = cam["eye_x_m"], cam["eye_y_m"]
     tx, ty = cam["target_x_m"], cam["target_y_m"]

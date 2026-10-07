@@ -447,6 +447,49 @@ def test_validate_facade():
     # клампы
     out, warn = validate_facade({"storeys": 99, "floor_height": 9.0, "width_m": 500.0})
     assert out["storeys"] == 30 and out["floor_height"] == 6.0 and out["width_m"] == 200.0
+    # витражные фасады: cols до 40 без клампа (жалоба 05.10 «совсем другое
+    # здание» — 22 оси остекления ужимались в 10 растянутых окон)
+    out, warn = validate_facade({"storeys": 1, "width_m": 48.0,
+                                 "windows": {"cols": 22, "w_m": 1.8, "h_m": 3.0}})
+    assert out["windows"]["cols"] == 22 and not any("cols" in w for w in warn)
+    out, warn = validate_facade({"storeys": 1, "width_m": 48.0,
+                                 "windows": {"cols": 60}})
+    assert out["windows"]["cols"] == 40 and any("cols" in w for w in warn)
+    # curve (v2): гнутое здание — разбор/клампы/дефолты
+    base = {"storeys": 2, "width_m": 40.0, "depth_m": 12.0}
+    out, warn = validate_facade(dict(base, roof="gable", curve={
+        "silhouette": "wave", "amplitude_m": 1.2, "wavelength_m": 9.0,
+        "taper_pct": 15, "plan_bend_m": 3.0,
+        "end_left": "round", "end_right": "round"}))
+    assert out["curve"]["silhouette"] == "wave"
+    assert abs(out["curve"]["amplitude_m"] - 1.2) < 1e-9
+    assert abs(out["curve"]["wavelength_m"] - 9.0) < 1e-9
+    assert out["curve"]["taper_pct"] == 15
+    assert abs(out["curve"]["plan_bend_m"] - 3.0) < 1e-9
+    assert out["curve"]["end_left"] == "round" and out["curve"]["end_right"] == "round"
+    # волна+gable -> приоритет кривой, крыша выключена
+    assert out["roof"] == "flat" and any("силуэт" in w for w in warn)
+    # клампы: amplitude 0.3-3, wavelength <= width/1.5, taper 0-40, bend <= w/4
+    out, warn = validate_facade(dict(base, curve={
+        "silhouette": "wave", "amplitude_m": 9.0, "wavelength_m": 60.0,
+        "taper_pct": 90, "plan_bend_m": 50.0}))
+    assert out["curve"]["amplitude_m"] == 3.0
+    assert out["curve"]["wavelength_m"] == 40.0 / 1.5
+    assert out["curve"]["taper_pct"] == 40
+    assert abs(out["curve"]["plan_bend_m"] - 10.0) < 1e-9   # w/4 = 10
+    assert any("amplitude_m" in w for w in warn) and any("taper_pct" in w for w in warn)
+    # мусорные энумы -> дефолты; пустой блок -> None (ветка сборки не включается)
+    out, warn = validate_facade(dict(base, curve={
+        "silhouette": "banana", "end_left": "circle", "end_right": "circle"}))
+    assert out["curve"] is None and any("silhouette" in w for w in warn)
+    out, warn = validate_facade(dict(base))
+    assert "curve" not in out or out.get("curve") is None
+    # skip за скруглёнными торцами: у широкого фасада крайние колонки гасятся
+    out, warn = validate_facade(dict(base, windows={
+        "cols": 20, "w_m": 1.5, "h_m": 2.5}, curve={"end_left": "round",
+                                                    "end_right": "round"}))
+    assert out["windows"]["skip"][0][0] is True and out["windows"]["skip"][0][-1] is True
+    assert any("скруглённый торец" in w for w in warn)
     # крыша вне белого списка -> flat + warning (v2: hip/mansard уже валидны)
     out, warn = validate_facade({"storeys": 2, "roof": "onion", "roof_height": 1.0})
     assert out["roof"] == "flat" and any("onion" in w for w in warn)
@@ -684,6 +727,29 @@ def test_generate_impl_facade():
     except ValueError as e:
         assert "plan, facade" in str(e)
     print("test_generate_impl_facade OK")
+
+
+def test_generate_impl_facade_curve():
+    """Роутер: facade с curve+context (мок VLM) -> IFC с кривой и окружением."""
+    from PIL import Image
+    import threed.threed_router as R
+    R._vlm_list_cached = lambda: []  # тесты без сети
+    scene = {
+        "storeys": 1, "floor_height": 4.0, "width_m": 40.0, "depth_m": 12.0,
+        "roof": "flat",
+        "windows": {"rows": 2, "cols": 18, "w_m": 1.6, "h_m": 2.2},
+        "curve": {"silhouette": "wave", "amplitude_m": 1.2,
+                  "wavelength_m": 10.0, "plan_bend_m": 3.0, "end_left": "round"},
+        "context": {"trees": [{"x_m": 5, "y_m": 15, "h_m": 8, "crown_d_m": 4}]},
+        "colors": {"walls": "#d9dde3", "roof": "#b9c1cb", "plinth": "#92989f"}}
+    R._call_vlm = _mock_vlm_ok("```json\n" + json.dumps(scene, ensure_ascii=False) + "\n```")
+    TMP.mkdir(exist_ok=True)
+    img = Image.new("RGB", (600, 800), (250, 250, 250))
+    res = R._generate_impl("facade", "", img, TMP)
+    assert res["name"].startswith("3D_facade_") and (TMP / res["name"]).is_file()
+    dump = json.loads((TMP / "_threed_last.json").read_text(encoding="utf-8"))
+    assert dump["scenario"] == "facade"
+    print("test_generate_impl_facade_curve OK")
 
 
 def test_generate_impl_interior(monkeypatch=None):
@@ -953,8 +1019,14 @@ def test_widget_3d_modal():
     assert "cPresent.rasterLayers && cPresent.rasterLayers.entities" in src, \
         "canvasComposite обязан читать per-type entities (rasterLayers/controlLayers)"
     assert "toast(t().soon)" not in src.split("function build()")[1].split("function isYellow")[0]
-    # фасад убран из модалки 05.10 (бэкенд-сценарий сохранён)
-    assert 'data-s="facade"' not in src and "promptPhFacade" not in src
+    # фасад возвращён в модалку 05.10 (жалоба: без плитки фото фасада
+    # гоняли через Exterior/сцену — генплан-контекст, «приходит другое
+    # здание»; бэкенд-сценарий facade и раньше оставался жив)
+    assert '<button class="devbim-3d-tile" data-s="facade"><span>🏢</span>' in src
+    assert 'data-s="facade" disabled' not in src
+    assert "promptPhFacade: 'Уточнения:" in src
+    assert "promptPhFacade: 'Hints:" in src
+    assert "facade: t().promptPhFacade" in src
     # EN-плейсхолдеры без HTML-сущностей: свойство placeholder не декодирует их,
     # экранирование — только в точке innerHTML-интерполяции
     assert "&quot;" not in src.split("en: {")[1].split("}")[0], \
@@ -981,6 +1053,154 @@ def test_widget_3d_modal():
     assert "promptPhInterior3d: 'Hints:" in src
     assert "interior3d: t().promptPhInterior3d" in src
     print("test_widget_3d_modal OK")
+
+
+def test_validate_facade_context():
+    from threed.threed_scenarios import validate_facade
+    base = {"storeys": 2, "width_m": 40.0, "depth_m": 12.0}
+    # без context ключа нет; мусор -> предупреждение
+    out, warn = validate_facade(dict(base))
+    assert "context" not in out
+    out, warn = validate_facade(dict(base, context="мусор"))
+    assert "context" not in out and any("context" in w for w in warn)
+    out, warn = validate_facade(dict(base, context={
+        "trees": [{"x_m": 5, "y_m": 20, "h_m": 8, "crown_d_m": 4},
+                  {"x_m": 7, "y_m": 25, "h_m": 99, "crown_d_m": 0.2},
+                  "не объект"] * 15,
+        "people": [{"x_m": 10, "y_m": -5, "h_m": 1.8}],
+        "background_buildings": [
+            {"x_m": 20, "y_m": 30, "w_m": 25, "d_m": 15, "h_m": 30,
+             "color": "#9aa3ad"},
+            {"x_m": 30, "y_m": 2, "w_m": 20, "d_m": 10, "h_m": 20},
+            {"x_m": 35, "y_m": 40, "w_m": 999, "d_m": 10, "h_m": 20}]}))
+    ctx = out["context"]
+    # 45 элементов на входе -> [:40]; в них 13 «не объект» -> 27 валидных
+    assert len(ctx["trees"]) == 27 and len(ctx["people"]) == 1
+    assert any("больше 40" in w for w in warn)
+    tr = ctx["trees"][1]
+    assert tr["h_m"] == 20.0 and tr["crown_d_m"] == 1.0   # клампы 2-20 / 1-8
+    assert ctx["people"][0]["h_m"] == 1.8
+    # второй фоновый дом: y=2 < d/2+3=9 -> сброс за фасад (y=12) + warning;
+    # третий: w-кламп 60; дропов нет — информация сохраняется
+    assert len(ctx["background_buildings"]) == 3
+    assert any("перед зданием" in w for w in warn)
+    assert ctx["background_buildings"][0]["color"] == "#9aa3ad"
+    assert ctx["background_buildings"][1]["w_m"] == 60.0 or \
+        ctx["background_buildings"][2]["w_m"] == 60.0
+    assert ctx["background_buildings"][1]["y_m"] == 12.0 / 2 + 6.0
+    print("test_validate_facade_context OK")
+
+
+def test_build_facade_curve():
+    import tempfile
+    import ifcopenshell
+    from threed.threed_scenarios import validate_facade
+    from threed.threed_build import (build_facade, _facade_footprint,
+                                     _facade_ztop, _facade_front_at)
+    out = Path(tempfile.mkdtemp())
+    scene, warn = validate_facade({
+        "storeys": 1, "width_m": 40.0, "depth_m": 12.0,
+        "windows": {"rows": 2, "cols": 16, "w_m": 1.6, "h_m": 2.2},
+        "curve": {"silhouette": "wave", "amplitude_m": 1.2, "wavelength_m": 10.0,
+                  "plan_bend_m": 3.0, "end_left": "round"}})
+    ifc, prev = out / "wave.ifc", out / "wave_preview.png"
+    build_facade(scene, ifc, prev, {})
+    assert ifc.is_file() and prev.is_file()
+    m = ifcopenshell.open(str(ifc))
+    names = [p.Name for p in m.by_type("IfcBuildingElementProxy")]
+    assert any("Крыша-полоса" in (nm or "") for nm in names)
+    # стены-полигон: профиль этажа > 4 точек (парабола); IfcIndexedPolyCurve
+    # держит точки в Points.CoordList (IfcCartesianPointList), не в списке
+    def prof_xs(p):
+        oc = p.OuterCurve
+        if hasattr(oc.Points, "CoordList"):
+            return [c[0] for c in oc.Points.CoordList]
+        return [pt.Coordinates[0] for pt in oc.Points]
+
+    storey_prof_pts = 0
+    for p in m.by_type("IfcArbitraryClosedProfileDef"):
+        if "Стены" in (p.ProfileName or ""):
+            storey_prof_pts = len(prof_xs(p))
+    assert storey_prof_pts > 4
+    # хелперы: волна выше/ниже прямой, круглый торец шире w, дуга фронта
+    ztop = _facade_ztop(scene["curve"], 40.0, 5.0)
+    assert max(z for _, z in ztop) > 5.0 and min(z for _, z in ztop) < 5.0
+    fp = _facade_footprint(40.0, 12.0, 0.0, "flat", "round")
+    assert max(x for x, _ in fp) > 20.0            # полукруг за x=w/2
+    fp_flat = _facade_footprint(40.0, 12.0, 0.0, "flat", "flat")
+    assert abs(max(x for x, _ in fp_flat) - 20.0) < 1e-9
+    y_mid, rot_mid = _facade_front_at(scene["curve"], 40.0, 12.0, 0.0)
+    y_edge, rot_edge = _facade_front_at(scene["curve"], 40.0, 12.0, 19.0)
+    assert y_mid > -6.0 and abs(rot_mid) < 1e-9
+    assert abs(y_edge - (-6.0 + 3.0 * (1 - (2 * 19.0 / 40.0) ** 2))) < 1e-9
+    assert abs(rot_edge) > 0.0
+    # taper: верхний этаж уже нижнего
+    scene2, _ = validate_facade({
+        "storeys": 3, "width_m": 30.0, "depth_m": 10.0,
+        "curve": {"taper_pct": 40}})
+    ifc2 = out / "taper.ifc"
+    build_facade(scene2, ifc2, out / "taper_preview.png", {})
+    m2 = ifcopenshell.open(str(ifc2))
+    widths = []
+    for p in m2.by_type("IfcArbitraryClosedProfileDef"):
+        if "Стены" in (p.ProfileName or ""):
+            xs2 = [c[0] for c in p.OuterCurve.Points.CoordList]
+            widths.append(max(xs2) - min(xs2))
+    assert len(widths) == 3 and widths[0] > widths[-1]
+    print("test_build_facade_curve OK")
+
+
+def test_build_facade_context():
+    import tempfile
+    import ifcopenshell
+    from threed.threed_scenarios import validate_facade
+    from threed.threed_build import build_facade
+    out = Path(tempfile.mkdtemp())
+    scene, _ = validate_facade({
+        "storeys": 2, "width_m": 40.0, "depth_m": 12.0,
+        "context": {"trees": [{"x_m": 5, "y_m": 15, "h_m": 8, "crown_d_m": 4}],
+                    "people": [{"x_m": 20, "y_m": -4, "h_m": 1.75}],
+                    "background_buildings": [
+                        {"x_m": 10, "y_m": 30, "w_m": 25, "d_m": 15, "h_m": 30}]}})
+    ifc = out / "ctx.ifc"
+    build_facade(scene, ifc, out / "ctx_preview.png", {})
+    m = ifcopenshell.open(str(ifc))
+    ot = [p.ObjectType for p in m.by_type("IfcBuildingElementProxy")]
+    assert ot.count("CONCEPTUAL_TREE") == 2          # ствол + крона
+    assert ot.count("CONCEPTUAL_PERSON") == 1
+    assert ot.count("CONCEPTUAL_MASS") == 1
+    assert any((p.Name or "").startswith("Фоновый дом")
+               for p in m.by_type("IfcBuildingElementProxy"))
+    print("test_build_facade_context OK")
+
+
+def test_facade_curve_preview_overlay():
+    import tempfile
+    from PIL import Image
+    from threed.threed_scenarios import validate_facade
+    from threed.threed_build import build_facade
+    from threed.threed_verify import scene_overview, render_overlay
+    out = Path(tempfile.mkdtemp())
+    scene, _ = validate_facade({
+        "storeys": 1, "width_m": 40.0, "depth_m": 12.0,
+        "windows": {"rows": 2, "cols": 18, "w_m": 1.6, "h_m": 2.0},
+        "curve": {"silhouette": "wave", "amplitude_m": 1.5, "wavelength_m": 12.0,
+                  "plan_bend_m": 3.0, "end_left": "round"},
+        "context": {"trees": [{"x_m": 5, "y_m": 15, "h_m": 8, "crown_d_m": 4}]}})
+    build_facade(scene, out / "pv.ifc", out / "pv.png", {})
+    assert (out / "pv.png").is_file()
+    ov = scene_overview("facade", scene)
+    assert ov["curve"]["silhouette"] == "wave"
+    assert abs(ov["curve"]["plan_bend_m"] - 3.0) < 1e-9
+    assert ov["context"]["trees"] == 1
+    im = render_overlay("facade", scene, Image.new("RGB", (800, 600), "white"))
+    assert im.size == (800, 600)
+    # без curve — прежний прямой оверлей, overview без ключа curve
+    scene_flat, _ = validate_facade({"storeys": 2, "width_m": 20.0})
+    ov2 = scene_overview("facade", scene_flat)
+    assert "curve" not in ov2 and "context" not in ov2
+    render_overlay("facade", scene_flat, Image.new("RGB", (800, 600), "white"))
+    print("test_facade_curve_preview_overlay OK")
 
 
 def test_validate_facade_balcony_fit():
@@ -1191,7 +1411,8 @@ def test_admin_threed_section():
 def sample_interior3d_scene():
     """Гостиная 6×4.5×2.8: окно на северной стене, дверь восток, дверь юг
     (вне стены + с подоконником — на клампы), диван/стол/фонтан(→other)/
-    кровать (дефолты), 2 человека, камера у южной стены."""
+    кровать/шкаф(фронт rot 180)/тумба/унитаз (facing 90), 2 человека,
+    камера у южной стены."""
     return {
         "room": {"width_m": 6.0, "depth_m": 4.5, "height_m": 2.8,
                  "ceiling": True, "wall_color": "#e8e2d8",
@@ -1212,6 +1433,10 @@ def sample_interior3d_scene():
             {"type": "table", "x_m": 0.0, "y_m": 0.2, "rot_deg": 15},
             {"type": "fountain", "x_m": 99, "y_m": 99},
             {"type": "bed"},
+            {"type": "wardrobe", "x_m": 2.2, "y_m": 1.9, "w_m": 1.6, "d_m": 0.6,
+             "h_m": 2.2, "rot_deg": 180},
+            {"type": "nightstand", "x_m": 0.8, "y_m": -1.85, "rot_deg": 0},
+            {"type": "toilet", "x_m": 2.4, "y_m": -1.6, "rot_deg": 90},
         ],
         "people": [
             {"x_m": 1.0, "y_m": 0.8, "h_m": 1.75, "rot_deg": -90},
@@ -1228,6 +1453,10 @@ def test_validate_interior3d():
     from threed.threed_scenarios import validate_interior3d, SYSTEM_INTERIOR3D
     assert "eye_x_m" in SYSTEM_INTERIOR3D and "target_z_m" in SYSTEM_INTERIOR3D
     assert '"south"|"north"|"east"|"west"' in SYSTEM_INTERIOR3D
+    # furniture-parts (05.10): новые типы + front-facing семантика rot_deg
+    assert "nightstand" in SYSTEM_INTERIOR3D and "bathtub" in SYSTEM_INTERIOR3D
+    assert "FRONT faces north" in SYSTEM_INTERIOR3D
+    assert "HEAD (pillows) at the WEST end" in SYSTEM_INTERIOR3D
     out, warn = validate_interior3d(sample_interior3d_scene())
     r = out["room"]
     assert (r["width_m"], r["depth_m"], r["height_m"]) == (6.0, 4.5, 2.8)
@@ -1239,13 +1468,15 @@ def test_validate_interior3d():
     # дверь на юге: x_m=99 -> кламп в длину стены (6-0.45-0.05), sill -> 0
     assert abs(south["x_m"] - 5.5) < 1e-9 and south["sill_m"] == 0.0
     assert any("подоконник" in w for w in warn) and any("вне стены" in w for w in warn)
-    # мебель: fountain -> other + кламп x=3.0; bed — дефолты по типу
-    assert len(out["furniture"]) == 4
+    # мебель: fountain -> other + кламп x=3.0; bed/toilet — дефолты по типу
+    assert len(out["furniture"]) == 7
     other = next(f for f in out["furniture"] if f["type"] == "other")
     assert other["x_m"] == 3.0 and other["y_m"] == 2.25
     assert any("fountain" in w for w in warn) and any("вне комнаты" in w for w in warn)
     bed = next(f for f in out["furniture"] if f["type"] == "bed")
     assert (bed["w_m"], bed["d_m"], bed["h_m"]) == (2.0, 1.6, 0.5)
+    toilet = next(f for f in out["furniture"] if f["type"] == "toilet")
+    assert (toilet["w_m"], toilet["d_m"], toilet["h_m"]) == (0.4, 0.65, 0.75)
     assert out["furniture"][0]["color"] == "#667788"      # hex от VLM живёт
     assert len(out["people"]) == 2 and out["people"][0]["h_m"] == 1.75
     cam = out["camera"]
@@ -1312,9 +1543,19 @@ def test_build_interior3d():
     for p in m.by_type("IfcBuildingElementProxy"):
         by_ot[p.ObjectType] = by_ot.get(p.ObjectType, 0) + 1
     assert by_ot.get("CONCEPTUAL_DOOR") == 2
-    assert by_ot.get("CONCEPTUAL_WINDOW") == 1
-    assert by_ot.get("CONCEPTUAL_PERSON") == 2
-    assert len(m.by_type("IfcFurnishingElement")) == 4
+    assert by_ot.get("CONCEPTUAL_WINDOW") == 1        # родитель-счётчик
+    assert by_ot.get("CONCEPTUAL_WINDOW_PART") == 2   # рама + стекло
+    assert by_ot.get("CONCEPTUAL_PERSON") == 2        # родители-счётчики
+    assert by_ot.get("CONCEPTUAL_PERSON_PART") == 6   # ноги/торс/голова ×2
+    # furniture-parts (05.10): 7 родителей FURNITURE_* + 26 деталей;
+    # детали — IfcFurnishingElement FURNISHING_PART в IfcRelAggregates
+    furn_ot = {}
+    for p in m.by_type("IfcFurnishingElement"):
+        furn_ot[p.ObjectType] = furn_ot.get(p.ObjectType, 0) + 1
+    assert sum(v for k, v in furn_ot.items() if k.startswith("FURNITURE_")) == 7
+    assert furn_ot.get("FURNISHING_PART") == 26
+    assert len(m.by_type("IfcFurnishingElement")) == 33   # 7 родителей + 26
+    assert len(m.by_type("IfcRelAggregates")) == 13  # 3 каркас + 7 + 2 + окно
     # геометрия room-frame: северная стена y = d/2 + T/2; южная = -(d/2 + T/2)
     from ifcopenshell.util.placement import get_local_placement
     walls = {w.Name: get_local_placement(w.ObjectPlacement)[1, 3]
@@ -1338,10 +1579,38 @@ def test_build_interior3d():
     assert abs(ple[0, 3] - (6.0 / 2 - 0.06)) < 1e-6 \
         and abs(ple[1, 3] - (4.5 / 2 - 1.0)) < 1e-6
     # окно севера: x_m=1.5 от ЛЕВОГО (западного) конца -> мир x = -w/2+1.5 = -1.5
-    north_win = next(p for p in m.by_type("IfcBuildingElementProxy")
-                     if p.ObjectType == "CONCEPTUAL_WINDOW")
-    plw = get_local_placement(north_win.ObjectPlacement)
+    # (родитель «Окно 1» без геометрии в (0,0); позиция — у детали-рамы)
+    frame = next(p for p in m.by_type("IfcBuildingElementProxy")
+                 if (p.Name or "") == "Окно 1 · рама")
+    plw = get_local_placement(frame.ObjectPlacement)
     assert abs(plw[0, 3] - (-1.5)) < 1e-6 and abs(plw[1, 3] - (4.5 / 2 - 0.06)) < 1e-6
+    # детали мебели: спинка дивана — сзади (юг, rot 0), изголовье кровати —
+    # на западе (θ=+rot), двери шкафа rot 180 — на юге (фронт повёрнут),
+    # бачок унитаза rot 90 — с запада (фронт на восток)
+    back = next(p for p in m.by_type("IfcFurnishingElement")
+                if (p.Name or "") == "Диван 01 · спинка")
+    plb = get_local_placement(back.ObjectPlacement)
+    assert abs(plb[0, 3] - (-1.2)) < 1e-6 and abs(plb[1, 3] - (-1.94)) < 1e-6 \
+        and abs(plb[2, 3] - 0.38) < 1e-6
+    head = next(p for p in m.by_type("IfcFurnishingElement")
+                if (p.Name or "") == "Кровать 04 · изголовье")
+    plh = get_local_placement(head.ObjectPlacement)
+    assert abs(plh[0, 3] - (-0.95)) < 1e-6 and abs(plh[1, 3]) < 1e-6
+    door_x = sorted(get_local_placement(p.ObjectPlacement)[0, 3]
+                    for p in m.by_type("IfcFurnishingElement")
+                    if (p.Name or "").startswith("Шкаф 05 · дверь"))
+    assert len(door_x) == 2 and abs(door_x[0] - 1.8) < 1e-6 \
+        and abs(door_x[1] - 2.6) < 1e-6
+    tank = next(p for p in m.by_type("IfcFurnishingElement")
+                if (p.Name or "") == "Унитаз 07 · бачок")
+    pltk = get_local_placement(tank.ObjectPlacement)
+    assert abs(pltk[0, 3] - 2.1855) < 1e-3 and abs(pltk[1, 3] - (-1.6)) < 1e-6
+    # человек — 3 детали; торс по центру на высоте 0.45h
+    torso = next(p for p in m.by_type("IfcBuildingElementProxy")
+                 if (p.Name or "") == "Человек 1 · торс")
+    pltb = get_local_placement(torso.ObjectPlacement)
+    assert abs(pltb[0, 3] - 1.0) < 1e-6 and abs(pltb[1, 3] - 0.8) < 1e-6 \
+        and abs(pltb[2, 3] - 1.75 * 0.45) < 1e-6
     # CameraHint на проекте: mode=interior + глаз/цель room-frame + IFC-бокс
     from ifcopenshell.util.element import get_psets
     hint = get_psets(m.by_type("IfcProject")[0]).get("CameraHint", {})
@@ -1354,7 +1623,8 @@ def test_build_interior3d():
     assert abs(hint.get("BoxMaxZ", 0) - 2.92) < 1e-6
     rm = get_psets(m.by_type("IfcBuilding")[0]).get("RoomModel", {})
     assert rm.get("WidthM") == 6.0 and rm.get("Ceiling") is True
-    assert rm.get("Furniture") == 4 and rm.get("People") == 2
+    assert rm.get("Furniture") == 7 and rm.get("FurnitureParts") == 26
+    assert rm.get("People") == 2
     assert rm.get("OpeningsDoors") == 2 and rm.get("OpeningsWindows") == 1
     # превью-план нарисован
     from PIL import Image
@@ -1398,7 +1668,8 @@ def test_interior3d_overview_and_viewer():
     ov = scene_overview("interior3d", clean)
     assert ov["room"]["width_m"] == 6.0 and ov["room"]["ceiling"] is True
     assert ov["openings"] == {"doors": 2, "windows": 1}
-    assert ov["furniture"] == {"sofa": 1, "table": 1, "other": 1, "bed": 1}
+    assert ov["furniture"] == {"sofa": 1, "table": 1, "other": 1, "bed": 1,
+                               "wardrobe": 1, "nightstand": 1, "toilet": 1}
     assert ov["people"] == 2 and "camera" in ov
     src = (ROOT / "ifc" / "ifcviewer.html").read_text(encoding="utf-8")
     assert 'hint.mode === "interior"' in src
@@ -1424,6 +1695,10 @@ if __name__ == "__main__":
     test_extract_json()
     test_validate_genplan()
     test_validate_facade()
+    test_validate_facade_context()
+    test_build_facade_curve()
+    test_build_facade_context()
+    test_facade_curve_preview_overlay()
     test_validate_interior()
     test_interior_seating_contract()
     test_validate_facade_balcony_fit()
@@ -1433,6 +1708,7 @@ if __name__ == "__main__":
     test_generate_impl_scene()
     test_generate_impl()
     test_generate_impl_facade()
+    test_generate_impl_facade_curve()
     test_generate_impl_interior()
     test_model_choice_and_put()
     test_generate_job_flow()

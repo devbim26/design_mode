@@ -37,7 +37,10 @@ Verdict rules:
   missing balconies, a building/room/furniture category missing entirely.
 - Tolerate (NOT issues): building depth guesses (not visible), simplified side
   windows, dimensions within ~20%, colors shifted by lighting, massing-level
-  simplification without facade detail.
+  simplification without facade detail; furniture and people are built as one
+  parent element plus sub-part volumes (FURNISHING_PART / *_PART counts are
+  sub-volumes of a single item - compare item counts by FURNITURE_<TYPE> /
+  CONCEPTUAL_PERSON), window frame+pane sub-parts.
 - issues: up to 8 short lines, each naming the mismatch with built vs image
   values, e.g. "storeys: built 5, image shows 4". Empty list when ok=true.
 """
@@ -83,6 +86,16 @@ def scene_overview(scenario, scene):
         out = _facade_summary(scene)
         skip = (scene.get("windows") or {}).get("skip") or []
         out["windows"]["skipped_cells"] = sum(1 for row in skip for cell in row if cell)
+        if isinstance(scene.get("curve"), dict):
+            out["curve"] = {k: scene["curve"].get(k) for k in (
+                "silhouette", "amplitude_m", "wavelength_m", "taper_pct",
+                "plan_bend_m", "end_left", "end_right")}
+        if isinstance(scene.get("context"), dict):
+            ctx = scene["context"]
+            out["context"] = {"trees": len(ctx.get("trees") or []),
+                              "people": len(ctx.get("people") or []),
+                              "background_buildings":
+                                  len(ctx.get("background_buildings") or [])}
         return out
     if scenario == "scene":
         people = (scene.get("context") or {}).get("people") or []
@@ -295,6 +308,25 @@ def render_overlay(scenario, scene, image, pixel_hint=None):
             x1, y1 = (im.width - bw) // 2, (im.height - bh) // 2
             x2, y2 = x1 + bw, y1 + bh
         d.rectangle([x1, y1, x2, y2], outline=OVERLAY_COLOR, width=3)
+        # кривая линия верха (волна/наклон): полилиния поверх прямого бокса
+        # (дубль формулы ztop из threed_build — verify остаётся лёгким, без
+        # импорта build-модуля с matplotlib)
+        curve = scene.get("curve")
+        if isinstance(curve, dict) and curve.get("silhouette"):
+            sx = (x2 - x1) / w_m
+            a = float(curve.get("amplitude_m") or 1.0)
+            line = []
+            for k in range(25):
+                xm = w_m * k / 24
+                if curve["silhouette"] == "wave":
+                    z = st * fh + a * math.sin(
+                        2 * math.pi * xm / float(curve.get("wavelength_m") or 12))
+                elif curve["silhouette"] == "slope_down":
+                    z = st * fh + a - 2 * a * xm / w_m
+                else:
+                    z = st * fh - a + 2 * a * xm / w_m
+                line.append((x1 + xm * sx, y2 - z * sx))
+            d.line(line, fill=OVERLAY_COLOR, width=3)
         for b in facade_grid_boxes(scene, pixel_hint, im.width, im.height):
             d.rectangle(b, outline=OVERLAY_COLOR, width=2)
     elif scenario == "plan":
