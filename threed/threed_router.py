@@ -111,6 +111,48 @@ def _ifc_dir() -> Path:
     return d
 
 
+# --- многопользовательский режим: каталог и ключ владельца задачи ---
+_DIR_UNSAFE_RE = re.compile(r"[^a-z0-9@._+-]+")
+_IR_USER_LOCAL = threading.local()   # user_id владельца текущей задачи (поток = задача)
+
+
+def _studio_store_threed():
+    try:
+        from invokeai.app.api.routers import studio_store
+    except ImportError:  # дерево проекта (тесты)
+        import studio_store
+    return studio_store
+
+
+def user_out_dir(user_id: "str | None") -> Path:
+    """Каталог IFC-результатов пользователя (data/ifc/<email-слаг>; IFC-вьювер
+    пользователя ищет файлы в своей подпапке); без пользователя и у admin-local —
+    общий корень data/ifc."""
+    if not user_id or user_id == "admin-local":
+        return _ifc_dir()
+    try:
+        u = _studio_store_threed().get_user(user_id)
+    except Exception:
+        return _ifc_dir()
+    if not u or not u.get("email"):
+        return _ifc_dir()
+    slug = _DIR_UNSAFE_RE.sub("_", u["email"].strip().lower())[:80].strip(".")
+    d = _ifc_dir() / (slug or user_id)
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _tag_ifc_result(name: "str | None", user_id: "str | None") -> None:
+    """Владение готовым IFC-файлом: автор видит свой результат 3D-генерации
+    во вкладке IFC (раньше тегировалась только задача)."""
+    if not user_id or not name:
+        return
+    try:
+        _studio_store_threed().tag("ifc", name, user_id)
+    except Exception:
+        pass
+
+
 def _model_store_path() -> Path:
     return _data_dir() / "imagerouter_threed_model.json"
 
@@ -307,11 +349,17 @@ def _call_vlm(system: str, prompt: str, image_url: "str | list[str] | None",
     """Запрос в ImageRouter chat completions (паттерн prompt_enhancer.call_vlm).
     image_url=None — text-only вызов (ремонт JSON п.56: числовая/семантическая
     правка, зрение не нужно). Возвращает СЫРОЙ ответ (разбор — на вызывающем).
-    Бюджет попытки считает обёртка _vlm_counted — вызывать только через неё."""
-    from invokeai.app.api.routers.imagerouter import CHAT_COMPLETIONS_URL, _load_key
+    Бюджет попытки считает обёртка _vlm_counted — вызывать только через неё.
+    Ключ — персональный токен владельца задачи (users-режим), иначе глобальный;
+    обычному пользователю без токена глобальный НЕ подставляется."""
+    from invokeai.app.api.routers.imagerouter import CHAT_COMPLETIONS_URL, effective_key
 
-    key = _load_key()
+    user = getattr(_IR_USER_LOCAL, "user", None)
+    key = effective_key(user)
     if not key:
+        if user and user != "admin-local":
+            raise ValueError(
+                "Персональный токен ImageRouter не задан — обратитесь к администратору")
         raise ValueError("API-ключ ImageRouter не задан (.env: IMAGEROUTER_API_KEY)")
     content = [{"type": "text", "text": prompt or "No user prompt; analyze the image."}]
     urls = image_url if isinstance(image_url, list) else ([image_url] if image_url else [])
@@ -443,7 +491,7 @@ def _repair_scene(scene, issues, img_w, img_h):
 
 
 def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = None,
-                   progress=None) -> dict:
+                   progress=None, ir_user: "str | None" = None) -> dict:
     """Без HTTP: анализ -> сцена -> IFC + превью (+ петля самокоррекции всех
     сценариев, задача 5 п.44/п.46: вердикт ок=False с issues -> повторный
     анализ с CORRECTIONS -> пересборка -> повторный verify; победитель по
@@ -453,9 +501,12 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
     после раунда — ОДНА эскалационная попытка при провале. progress(stage)
     опционально уведомляет о этапе ("analysis" | "build" | "verify"; ремонт
     и эскалация идут под "analysis") для статуса фоновой задачи.
+    ir_user — владелец задачи (users-режим): каталог результатов и
+    персональный ключ VLM; готовый IFC тегируется владельцем.
     Raises ValueError (роутер даст 422)."""
     if scenario not in SCENARIOS:
         raise ValueError(f"Сценарий «{scenario}» в разработке (доступны: plan, facade, interior, scene, interior3d)")
+    _IR_USER_LOCAL.user = ir_user  # ключ VLM для всех вызовов этой задачи
     _usage_log.clear()
     model, source = _stage_model("analysis")
     stage_models = {st: _stage_model(st)[0] for st in STAGES}
@@ -833,6 +884,7 @@ def _generate_impl(scenario: str, prompt: str, image, out_dir: Path | None = Non
                                if corr_pool else "")
         _run_attempt(esc_prompt, max_iters + 1, esc_model, "escalation")
     _, res, verify_payload, ifc_path, preview_path, raw_head = best
+    _tag_ifc_result(ifc_path.name, ir_user)  # файл виден автору во вкладке IFC
     usage_sum = _usage_summary()
     if usage_sum:
         res["usage"] = usage_sum  # фронт: тост «потрачено $X»
@@ -918,7 +970,9 @@ def _run_job(job: dict, prompt: str, image) -> None:
         try:
             res = _generate_impl(
                 job["scenario"], prompt, image,
-                progress=lambda stage: _job_touch(job, stage=stage))
+                out_dir=Path(job["out_dir"]) if job.get("out_dir") else None,
+                progress=lambda stage: _job_touch(job, stage=stage),
+                ir_user=job.get("user"))
             _job_touch(job, status="done", stage="done", result=res)
         except ValueError as e:
             _job_touch(job, status="error", error=str(e))
@@ -944,6 +998,9 @@ def generate(body: GenerateBody, request: Request = None) -> dict:
             studio_store.tag("threed", job["id"], u)
         except Exception:
             pass
+    # каталог результатов и ключ VLM — владельца задачи (users-режим)
+    job["user"] = u
+    job["out_dir"] = str(user_out_dir(u))
     threading.Thread(target=_run_job, args=(job, body.prompt, image),
                      daemon=True, name=f"threed-{job['id']}").start()
     # статус фиксирован (не из job): поток мог уже перевести его в running
