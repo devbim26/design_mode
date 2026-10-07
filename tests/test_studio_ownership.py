@@ -87,8 +87,11 @@ async def inner(scope, receive, send):
 
 try:
     os.environ["INVOKEAI_ROOT"] = str(tmp)
+    # STUDIO_SESSION_SECRET задаём явно: иначе env_value дотянется до .env
+    # репозитория (кандидат cwd/.env) и подпись тестовых кук не сойдётся
     (tmp / ".env").write_text(
-        f"STUDIO_AUTH_MODE=sso\nSTUDIO_JWT_SECRET={SECRET}\nSTUDIO_SESSION_TTL=3600\n"
+        f"STUDIO_AUTH_MODE=sso\nSTUDIO_JWT_SECRET={SECRET}\nSTUDIO_SESSION_SECRET={SECRET}\n"
+        f"STUDIO_SESSION_TTL=3600\n"
         "SITE_PASSWORD=pw\nSITE_VALID_UNTIL=2030-01-01\n", encoding="utf-8")
     studio_store.init_db()
     studio_store.upsert_user("u1", "u1@x.io", "One", "user")

@@ -764,7 +764,15 @@ class SiteAuthMiddleware:
             return
 
         if path.startswith("/admin"):
-            if role == "admin":
+            if user is None:
+                # без сессии: страницу — на вход (иначе /admin сразу показывал
+                # «Нет доступа», не спросив пароль), API — 401 (fetch не должен
+                # получать HTML логина с кодом 200)
+                if path.startswith("/admin/api/"):
+                    await _send_json(send, {"detail": "not authenticated"}, status=401)
+                else:
+                    await _redirect(send, LOGIN_PATH)
+            elif role == "admin":
                 await self._admin_panel(scope, receive, send, user, role)
             else:
                 await _send_html(send, 403, _page("Нет доступа", "<p>Раздел доступен только администратору.</p>"))

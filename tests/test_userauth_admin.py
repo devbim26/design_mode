@@ -182,6 +182,12 @@ async def main():
     r = await call("GET", "/admin", cookie=plain_cookie)
     assert r.status == 403, r.status
 
+    # --- без сессии: страница /admin -> на вход (не 403 без пароля), API -> 401 ---
+    r = await call("GET", "/admin")
+    assert r.status == 303 and "/auth/login" in r.headers().get("location", ""), r.status
+    r = await call("GET", "/admin/api/users")
+    assert r.status == 401, r.status
+
     # админ-страница рендерится с формой создания
     r = await call("GET", "/admin", cookie=admin_cookie)
     assert r.status == 200 and "Создать пользователя" in r.body().decode("utf-8"), r.status

@@ -20,6 +20,11 @@ site_auth.studio_store = studio_store
 
 tmp = Path(tempfile.mkdtemp(prefix="userauth_login_"))
 os.environ["INVOKEAI_ROOT"] = str(tmp)
+# cwd -> tmp: иначе env_value дотянется до .env репозитория (кандидат
+# cwd/.env; там с 07.10 есть STUDIO_SESSION_SECRET) и сценарий «секрета нет»
+# перестанет быть герметичным
+_saved_cwd = os.getcwd()
+os.chdir(tmp)
 ENV_TEXT = "STUDIO_AUTH_MODE=users\nSITE_PASSWORD=owner-pass\nSTUDIO_SESSION_SECRET=" + "S" * 40 + "\n"
 (tmp / ".env").write_text(ENV_TEXT, encoding="utf-8")
 for k in ("STUDIO_AUTH_MODE", "SITE_PASSWORD", "STUDIO_SESSION_SECRET", "SITE_VALID_UNTIL"):
