@@ -281,7 +281,7 @@ def patch_backend() -> int:
 
 def deploy_banner() -> bool:
     """Баннер «DevBIM — Design» над интерфейсом (devbim_banner.js):
-    кликабельный логотип -> страница регистрации (заглушка), слоган справа,
+    кликабельный логотип -> сайт devbim.com, слоган справа,
     язык слогана следует за языком интерфейса приложения."""
     src = BASE / "devbim_banner.js"
     if not src.exists():
