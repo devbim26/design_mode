@@ -5,8 +5,10 @@
 ## Что это
 
 Локальный InvokeAI 6.2.0 (CPU) с ребрендингом DevBIM, облачной генерацией
-ImageRouter, IFC-вьювером, PDF-вьювером, вьювером сайт-базы дизайн-кода
-(«Design Code»), гейтом сайта по паролю и
+ImageRouter (персональный токен на пользователя), IFC-вьювером,
+PDF-вьювером, вьювером сайт-базы дизайн-кода («Design Code»),
+многопользовательским входом (режим `users`: email/пароль + токен
+ImageRouter; режимы `password`/`sso` сохранены) и
 мультитенантностью «экземпляр на компанию». Скрипты патчат пакет в
 `venv/Lib/site-packages/invokeai/` — после
 `pip install --force-reinstall invokeai==6.2.0` применять в порядке:
@@ -20,9 +22,15 @@ ImageRouter, IFC-вьювером, PDF-вьювером, вьювером сай
 - `launch/` — ВСЕ скрипты запуска системы (главный —
   `start-system-design.bat`: бэкенд+туннель; старт-гайд для человека —
   `launch/START-HERE.txt`). В корне скриптов запуска нет.
-- `siteauth/site_auth.py` — мидлварь входа (SITE_PASSWORD из .env,
-  SITE_VALID_UNTIL — срок лицензии). Деплой: `setup_site_auth.py`.
-- `imagerouter/` — посредник облачной генерации (перехват enqueue_batch).
+- `siteauth/` — мидлварь входа (режимы STUDIO_AUTH_MODE: password/sso/users;
+  users — вход по email/паролю + персональный токен IR, аккаунты в
+  `data/data/studio.sqlite`) + оверлей-хранилище владения. Деплой:
+  `setup_site_auth.py`.
+- `user_manager.py` — CLI пользователей режима users
+  (add/list/set-password/set-token/role/revoke/restore).
+- `imagerouter/` — посредник облачной генерации (перехват enqueue_batch);
+  ключ на пользователя — `effective_key` (users без токена не падают на
+  глобальный ключ).
 - `ifc/` — IFC-вьювер и его роутер.
 - `pdf/` — PDF-вьювер (вкладка «PDF») и его роутер.
 - `design_code/` — вьювер сайта дизайн-кода (вкладка «Design Code»:
