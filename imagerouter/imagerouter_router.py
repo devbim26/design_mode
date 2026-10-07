@@ -57,7 +57,7 @@ from typing import Any, Optional
 from urllib.parse import unquote
 
 import requests
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from invokeai.app.services.config.config_default import get_config
@@ -399,9 +399,13 @@ def _enhancer_model() -> str:
     return (os.environ.get("PROMPT_ENHANCER_MODEL") or "").strip() or DEFAULT_ENHANCER_MODEL
 
 
-def _auth_headers() -> dict[str, str]:
-    key = _load_key()
+def _auth_headers(studio_user: "str | None" = None) -> dict[str, str]:
+    key = effective_key(studio_user)
     if not key:
+        if studio_user and studio_user != "admin-local":
+            raise HTTPException(
+                status_code=401,
+                detail="Персональный токен ImageRouter не задан — обратитесь к администратору.")
         raise HTTPException(status_code=401, detail="API key is not configured")
     return {"Authorization": f"Bearer {key}"}
 
@@ -446,12 +450,14 @@ class GenerateBody(BaseModel):
 
 
 @imagerouter_router.get("/status")
-def get_status() -> dict:
-    key = _load_key()
+def get_status(request: Request = None) -> dict:
+    u = request.headers.get("x-studio-user") if request else None
+    user_tok = _personal_token(u)
+    key = user_tok or _load_key()
     return {
         "has_key": key is not None,
         "hint": f"...{key[-4:]}" if key else None,
-        "key_source": "env" if _env_key() else ("file" if key else None),
+        "key_source": "user" if user_tok else ("env" if _env_key() else ("file" if key else None)),
         "prompt_enhancer_model": _enhancer_model(),
     }
 
@@ -505,8 +511,9 @@ def admin_auth_status() -> dict:
 
 
 @imagerouter_router.get("/credits")
-def get_credits() -> Any:
-    resp = requests.get(CREDITS_URL, headers=_auth_headers(), timeout=TIMEOUT_SHORT)
+def get_credits(request: Request = None) -> Any:
+    u = request.headers.get("x-studio-user") if request else None
+    resp = requests.get(CREDITS_URL, headers=_auth_headers(u), timeout=TIMEOUT_SHORT)
     return _upstream_json(resp)
 
 
@@ -528,7 +535,7 @@ def list_models(
 
 
 @imagerouter_router.post("/generate")
-def generate(body: GenerateBody) -> Any:
+def generate(body: GenerateBody, request: Request = None) -> Any:
     payload: dict[str, Any] = {"model": body.model, "prompt": body.prompt}
     if body.size:
         payload["size"] = body.size
@@ -536,7 +543,8 @@ def generate(body: GenerateBody) -> Any:
         payload["quality"] = body.quality
     if body.output_format:
         payload["output_format"] = body.output_format
-    resp = requests.post(GENERATIONS_URL, headers=_auth_headers(), json=payload, timeout=TIMEOUT_GENERATE)
+    u = request.headers.get("x-studio-user") if request else None
+    resp = requests.post(GENERATIONS_URL, headers=_auth_headers(u), json=payload, timeout=TIMEOUT_GENERATE)
     return _upstream_json(resp)
 
 
@@ -1454,11 +1462,13 @@ def _handle_canvas_generation(queue_id: str, payload: dict, studio_user: str | N
         + (f" types=[{_ref_log}]" if _ref_log else ""),
         flush=True,
     )
-    key = _load_key()
+    key = effective_key(studio_user)
     if not key:
         raise _IRClientError(
-            "Generation service is not configured: no API key. "
-            "Please contact your administrator.",
+            ("Персональный токен ImageRouter не задан — обратитесь к администратору."
+             if studio_user and studio_user != "admin-local" else
+             "Generation service is not configured: no API key. "
+             "Please contact your administrator."),
             401,
         )
 
@@ -1840,11 +1850,13 @@ def _handle_upscale_generation(queue_id: str, payload: dict, studio_user: str | 
         f"structure={info.get('upscale_structure')}",
         flush=True,
     )
-    key = _load_key()
+    key = effective_key(studio_user)
     if not key:
         raise _IRClientError(
-            "Generation service is not configured: no API key. "
-            "Please contact your administrator.",
+            ("Персональный токен ImageRouter не задан — обратитесь к администратору."
+             if studio_user and studio_user != "admin-local" else
+             "Generation service is not configured: no API key. "
+             "Please contact your administrator."),
             401,
         )
     if not _supports_image_input(mid):
@@ -2074,6 +2086,71 @@ def _studio_tag(kind: str, key, user: "str | None") -> None:
         pass
 
 
+def _studio_store():
+    try:
+        from invokeai.app.api.routers import studio_store
+    except ImportError:  # дерево проекта (тесты)
+        import studio_store
+    return studio_store
+
+
+def _personal_token(studio_user: "str | None") -> "str | None":
+    """Персональный токен ImageRouter аккаунта (users-режим); None — нет аккаунта."""
+    if not studio_user or studio_user == "admin-local":
+        return None
+    try:
+        u = _studio_store().get_user(studio_user)
+        if u:
+            return (u.get("ir_token") or "").strip() or None
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def effective_key(studio_user: "str | None") -> Optional[str]:
+    """Ключ ImageRouter для запроса от имени пользователя студии.
+
+    Персональный токен приоритетен. Обычному пользователю (role=user) без
+    токена глобальный ключ НЕ подставляется — иначе тратятся кредиты
+    владельца; генерация завершится понятной ошибкой. admin / admin-local
+    без своего токена работают на глобальном ключе."""
+    tok = _personal_token(studio_user)
+    if tok:
+        return tok
+    if studio_user and studio_user != "admin-local":
+        try:
+            if (_studio_store().effective_role(studio_user) or "user") != "admin":
+                return None
+        except Exception:  # noqa: BLE001 — БД недоступна: работаем на глобальном
+            pass
+    return _load_key()
+
+
+def user_for_session(session_id: str) -> "str | None":
+    """Владелец сессии графа (тегируется на enqueue): облачные ноды (Ask AI,
+    Prompt Enhancer) выполняются вне HTTP-контекста и находят пользователя
+    по session_id."""
+    if not session_id:
+        return None
+    try:
+        return _studio_store().owner("session", session_id)
+    except Exception:
+        return None
+
+
+def _tag_session_owner(payload, studio_user: "str | None") -> None:
+    """Запомнить владельца сессии (graph.id = session_id) на enqueue_batch."""
+    if not studio_user or not isinstance(payload, dict):
+        return
+    try:
+        graph = (payload.get("batch") or {}).get("graph") or {}
+        sid = str(graph.get("id") or "")
+        if sid:
+            _studio_tag("session", sid, studio_user)
+    except Exception:
+        pass
+
+
 class ImageRouterCanvasMiddleware:
     """Добавляет модели ImageRouter в /api/v2/models и перехватывает их генерацию."""
 
@@ -2165,6 +2242,7 @@ class ImageRouterCanvasMiddleware:
                     pass
                 try:
                     studio_user = _studio_user_from_scope(scope)
+                    _tag_session_owner(payload, studio_user)
                     result = await asyncio.to_thread(handler, queue_id, payload, studio_user)
                 except _IRClientError as e:
                     # 06.09: ошибки улетали тостом в UI, не оставляя следа в
@@ -2179,6 +2257,10 @@ class ImageRouterCanvasMiddleware:
                     return
                 await self._send_json(send, result)
                 return
+            # сквозной граф (облачные ноды Ask AI / Prompt Enhancer): запоминаем
+            # владельца сессии — ноды выполняются вне HTTP-контекста и берут
+            # пользователя (и персональный ключ IR) по session_id
+            _tag_session_owner(payload, _studio_user_from_scope(scope))
             await self.app(scope, _replay_receive(body), send)
             return
 

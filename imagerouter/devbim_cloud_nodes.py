@@ -158,11 +158,28 @@ OutputFormat = Literal["png", "jpeg", "webp"]
 
 # --- общий слой API (лениво из роутера: единый источник ключа и URL) ---
 
-def _api() -> tuple[str, Any]:
-    """(key, модуль роутера). Ключа нет — ValueError с EN-текстом."""
+def _session_id(context: "InvocationContext | None") -> "str | None":
+    """session_id выполняемого queue item (graph.id); вне очереди — None."""
+    try:
+        return context._data.queue_item.session_id or None
+    except Exception:
+        return None
+
+
+def _api(context: "InvocationContext | None" = None) -> tuple[str, Any]:
+    """(key, модуль роутера). Ключ — персональный токен владельца сессии
+    (users-режим; сессия тегируется на enqueue), иначе глобальный.
+    Обычному пользователю без токена глобальный ключ НЕ подставляется —
+    ValueError с EN-текстом."""
     from invokeai.app.api.routers import imagerouter as ir
-    key = ir._load_key()
+    user = ir.user_for_session(_session_id(context)) if context is not None else None
+    key = ir.effective_key(user)
     if not key:
+        if user and user != "admin-local":
+            raise ValueError(
+                "Personal ImageRouter token is not set. "
+                "Please contact your administrator."
+            )
         raise ValueError(
             "Generation service is not configured: no API key. "
             "Please contact your administrator."
@@ -213,8 +230,20 @@ def _snap_side(v: int) -> int:
 
 
 def _save(context: InvocationContext, pil: Any, metadata: dict) -> Any:
-    """Сохранить картинку в галерею (GENERAL); метаданные — провенанс ноды."""
+    """Сохранить картинку в галерею (GENERAL); метаданные — провенанс ноды.
+    Картинка и батч тегируются владельцем сессии (users/sso): результат
+    облачной ноды виден своему автору, а не только админу."""
     dto = context.images.save(image=pil, metadata=MetadataField(root=metadata))
+    try:
+        from invokeai.app.api.routers import studio_store
+        u = studio_store.owner("session", _session_id(context) or "")
+        if u:
+            studio_store.tag("image", dto.image_name, u)
+            bid = getattr(context._data.queue_item, "batch_id", None)
+            if bid:
+                studio_store.tag("batch", str(bid), u)
+    except Exception:
+        pass
     print(f"[cloud-node] saved {dto.image_name}", flush=True)
     return dto
 
@@ -244,7 +273,7 @@ class GenerateImageInvocation(BaseInvocation):
     output_format: OutputFormat = InputField(default="png", description="Output file format")
 
     def invoke(self, context: InvocationContext) -> ImageCollectionOutput:
-        key, ir = _api()
+        key, ir = _api(context)
         batch = _prompt_batch(self.prompt, self.prompts)
         w, h = _snap_side(self.width), _snap_side(self.height)
         print(f"[cloud-node] generate: model={self.model} prompts={len(batch)} size={w}x{h}", flush=True)
@@ -294,7 +323,7 @@ class EditImageInvocation(BaseInvocation):
     output_format: OutputFormat = InputField(default="png", description="Output file format")
 
     def invoke(self, context: InvocationContext) -> ImageCollectionOutput:
-        key, ir = _api()
+        key, ir = _api(context)
         batch = _prompt_batch(self.prompt, self.prompts)
         src = context.images.get_pil(self.image.image_name)
         refs_pil = [context.images.get_pil(f.image_name)
@@ -357,7 +386,7 @@ class AskAIInvocation(BaseInvocation):
     question: str = InputField(default="", description="Question about the images")
 
     def invoke(self, context: InvocationContext) -> StringOutput:
-        key, ir = _api()
+        key, ir = _api(context)
         # переиспользуем подготовку картинок Prompt Enhancer (JPEG 1024/q85)
         from invokeai.app.invocations.devbim_prompt_enhancer import prepare_image
         picked = (self.images or [])[:MAX_VLM_IMAGES]
@@ -461,7 +490,7 @@ class UpscaleImageInvocation(BaseInvocation):
     )
 
     def invoke(self, context: InvocationContext) -> ImageOutput:
-        key, ir = _api()
+        key, ir = _api(context)
         src = context.images.get_pil(self.image.image_name)
         body = _upscale_request(self.model, self.mode, src, ir)
         print(f"[cloud-node] upscale: model={self.model} mode={self.mode}", flush=True)

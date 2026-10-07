@@ -227,7 +227,7 @@ def test_generate_node():
     saved = []
     resp = SimpleNamespace(status_code=200, json=lambda: {"data": [{"ok": True}]})
     mod_requests, saved_api = mod.requests, mod._api
-    mod.requests, mod._api = _Capture([resp]), (lambda: ("KEY", fake_ir))
+    mod.requests, mod._api = _Capture([resp]), (lambda *a, **k: ("KEY", fake_ir))
     try:
         node = mod.GenerateImageInvocation(
             prompt="red house", model=mod.GENERATE_MODELS[0], width=1000, height=1000)
@@ -251,7 +251,7 @@ def test_generate_node_batch():
     saved = []
     resps = [SimpleNamespace(status_code=200, json=lambda: {"data": [{"ok": True}]}) for _ in range(2)]
     mod_requests, saved_api = mod.requests, mod._api
-    mod.requests, mod._api = _Capture(resps), (lambda: ("KEY", fake_ir))
+    mod.requests, mod._api = _Capture(resps), (lambda *a, **k: ("KEY", fake_ir))
     try:
         node = mod.GenerateImageInvocation(
             prompts=["a", "b"], model=mod.GENERATE_MODELS[0])
@@ -270,7 +270,7 @@ def test_edit_node():
     saved = []
     resp = SimpleNamespace(status_code=200, json=lambda: {"data": [{"ok": True}]})
     mod_requests, saved_api = mod.requests, mod._api
-    mod.requests, mod._api = _Capture([resp]), (lambda: ("KEY", fake_ir))
+    mod.requests, mod._api = _Capture([resp]), (lambda *a, **k: ("KEY", fake_ir))
     try:
         node = mod.EditImageInvocation(
             image={"image_name": "src.png"},
@@ -299,7 +299,7 @@ def test_edit_node_explicit_size_no_refs():
     saved = []
     resp = SimpleNamespace(status_code=200, json=lambda: {"data": [{"ok": True}]})
     mod_requests, saved_api = mod.requests, mod._api
-    mod.requests, mod._api = _Capture([resp]), (lambda: ("KEY", fake_ir))
+    mod.requests, mod._api = _Capture([resp]), (lambda *a, **k: ("KEY", fake_ir))
     try:
         node = mod.EditImageInvocation(
             image={"image_name": "src.png"}, prompt="p",
@@ -320,7 +320,7 @@ def test_generate_node_fail_en():
     saved = []
     resp = SimpleNamespace(status_code=200, json=lambda: {"error": {"message": "quota"}})
     mod_requests, saved_api = mod.requests, mod._api
-    mod.requests, mod._api = _Capture([resp]), (lambda: ("KEY", fake_ir))
+    mod.requests, mod._api = _Capture([resp]), (lambda *a, **k: ("KEY", fake_ir))
     try:
         node = mod.GenerateImageInvocation(prompt="x", model=mod.GENERATE_MODELS[0])
         try:
@@ -340,7 +340,7 @@ def test_vlm_node():
     resp = SimpleNamespace(status_code=200, json=lambda: {
         "choices": [{"message": {"content": "  It is a brick school.  "}}]})
     mod_requests, saved_api = mod.requests, mod._api
-    mod.requests, mod._api = _Capture([resp]), (lambda: ("KEY", fake_ir))
+    mod.requests, mod._api = _Capture([resp]), (lambda *a, **k: ("KEY", fake_ir))
     try:
         node = mod.AskAIInvocation(
             images=[{"image_name": f"i{k}.png"} for k in range(6)],
@@ -375,7 +375,7 @@ def test_vlm_node_default_question():
     resp = SimpleNamespace(status_code=200, json=lambda: {
         "choices": [{"message": {"content": "desc"}}]})
     mod_requests, saved_api = mod.requests, mod._api
-    mod.requests, mod._api = _Capture([resp]), (lambda: ("KEY", fake_ir))
+    mod.requests, mod._api = _Capture([resp]), (lambda *a, **k: ("KEY", fake_ir))
     try:
         node = mod.AskAIInvocation(images=[{"image_name": "i.png"}], question="")
         node.invoke(_fake_context([]))
@@ -401,7 +401,7 @@ def test_upscale_node_modes():
         out = node.invoke(_fake_context(saved))
         return out, cap.calls[-1]["json"]
 
-    mod._api = lambda: ("KEY", fake_ir)
+    mod._api = lambda *a, **k: ("KEY", fake_ir)
     try:
         out, body = run("2x")                     # исходник 500x333 -> 2x -> 1000x666 -> snap64
         assert body["size"] == "1024x640", body["size"]

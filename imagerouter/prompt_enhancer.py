@@ -105,6 +105,21 @@ def build_body(model: str, system: str, prompt: str, image_urls: list) -> dict:
     }
 
 
+def _context_key(context) -> "str | None":
+    """Ключ ImageRouter владельца сессии (users-режим; сессия тегируется на
+    enqueue). None — глобальный (admin/без пользователя); '' — у пользователя
+    персонального токена нет, глобальный НЕ подставляем."""
+    try:
+        from invokeai.app.api.routers import imagerouter as ir
+        u = ir.user_for_session(context._data.queue_item.session_id)
+        k = ir.effective_key(u)
+        if k:
+            return k
+        return "" if (u and u != "admin-local") else None
+    except Exception:
+        return None
+
+
 def call_vlm(
     system: str, prompt: str, image_urls: list, key: Optional[str] = None, model: Optional[str] = None
 ) -> str:
@@ -181,7 +196,11 @@ class EnhancePromptInvocation(BaseInvocation):
         ]
         if not (self.prompt or "").strip() and not urls:
             raise ValueError("Enter a prompt or attach a reference image")
-        return StringOutput(value=call_vlm(SYSTEM_ENHANCE, self.prompt, urls))
+        key = _context_key(context)
+        if key == "":
+            raise ValueError(
+                "Personal ImageRouter token is not set. Please contact your administrator.")
+        return StringOutput(value=call_vlm(SYSTEM_ENHANCE, self.prompt, urls, key=key))
 
 
 @invocation(
@@ -203,4 +222,8 @@ class AnalyzeImageInvocation(BaseInvocation):
 
     def invoke(self, context: InvocationContext) -> StringOutput:
         url = prepare_image(context.images.get_pil(self.image.image_name))
-        return StringOutput(value=call_vlm(SYSTEM_ANALYZE, "", [url]))
+        key = _context_key(context)
+        if key == "":
+            raise ValueError(
+                "Personal ImageRouter token is not set. Please contact your administrator.")
+        return StringOutput(value=call_vlm(SYSTEM_ANALYZE, "", [url], key=key))
