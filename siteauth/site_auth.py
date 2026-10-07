@@ -420,19 +420,52 @@ class SiteAuthMiddleware:
         if path == "/admin/api/users" and method == "GET":
             users = []
             for u in studio_store.list_users():
-                # админы-операторы (базовая роль admin из devbim.com и локальный
-                # SITE_PASSWORD-админ) в таблице членов студии не показываются;
-                # участники с override-ролью admin остаются видимыми (пометка «*»)
-                if u["user_id"] == studio_store.ADMIN_LOCAL or u["role"] == "admin":
+                # локальный SITE_PASSWORD-админ (admin-local) в таблице не показывается;
+                # в sso-режиме скрываются и админы-операторы devbim.com (базовая роль
+                # admin); в users-режиме аккаунты admin — обычные участники (пометка «*»)
+                if u["user_id"] == studio_store.ADMIN_LOCAL:
+                    continue
+                if u["role"] == "admin" and _mode() == "sso":
                     continue
                 u = dict(u)
                 u["effective_role"] = studio_store.effective_role(u["user_id"])
                 u["counts"] = studio_store.owned_count(u["user_id"])
+                u["has_password"] = bool(u.pop("password_hash", None))
+                u["has_token"] = bool(u.pop("ir_token", None))
                 users.append(u)
             await _send_json(send, {"users": users})
             return
 
-        m = re.match(r"^/admin/api/users/([^/]+)/(role|revoke)$", path)
+        if path == "/admin/api/users" and method == "POST":
+            body = await _read_body(receive)
+            try:
+                data = json.loads(body or b"{}")
+            except ValueError:
+                await _send_json(send, {"detail": "invalid JSON body"}, status=422)
+                return
+            email = str(data.get("email") or "").strip()
+            password = str(data.get("password") or "")
+            if len(password) < 8:
+                await _send_json(send, {"detail": "password must be >= 8 chars"}, status=422)
+                return
+            role_ = data.get("role") or "user"
+            token = str(data.get("token") or "").strip()
+            if token:
+                ok, err = await _validate_ir_token(token)
+                if not ok:
+                    await _send_json(send, {"detail": err}, status=400)
+                    return
+            try:
+                u = studio_store.create_user(email, str(data.get("name") or ""),
+                                             password, role_, token or None)
+            except ValueError as e:
+                status = 409 if "уже есть" in str(e) else 422
+                await _send_json(send, {"detail": str(e)}, status=status)
+                return
+            await _send_json(send, {"user_id": u["user_id"], "email": u["email"]})
+            return
+
+        m = re.match(r"^/admin/api/users/([^/]+)/(role|revoke|password|token)$", path)
         if m and method == "POST":
             body = await _read_body(receive)
             try:
@@ -447,6 +480,20 @@ class SiteAuthMiddleware:
                     await _send_json(send, {"detail": "role must be admin|user|null"}, status=422)
                     return
                 studio_store.set_role_override(uid, r)
+            elif m.group(2) == "password":
+                pw = str(data.get("password") or "")
+                if len(pw) < 8:
+                    await _send_json(send, {"detail": "password must be >= 8 chars"}, status=422)
+                    return
+                studio_store.set_password(uid, pw)
+            elif m.group(2) == "token":
+                tok = str(data.get("token") or "").strip()
+                if tok:
+                    ok, err = await _validate_ir_token(tok)
+                    if not ok:
+                        await _send_json(send, {"detail": err}, status=400)
+                        return
+                studio_store.set_ir_token(uid, tok or None)
             else:
                 studio_store.set_revoked(uid, bool(data.get("revoked")))
             await _send_json(send, {"ok": True})
@@ -786,12 +833,23 @@ _ADMIN_PAGE = """<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8">
   select, button { background:#14161A; color:#E6EAF2; border:1px solid #2A2E37;
         border-radius:6px; padding:5px 8px; font-size:12.5px; cursor:pointer; }
   button:hover { border-color:#38BDF8; }
+  input { background:#14161A; color:#E6EAF2; border:1px solid #2A2E37;
+        border-radius:6px; padding:5px 8px; font-size:12.5px; }
   .revoked { color:#FCA5A5; }
 </style></head><body>
 <h1>Пользователи студии</h1>
 <p><a href="/">← к студии</a></p>
+<h2 style="font-size:15px;margin-top:24px">Создать пользователя</h2>
+<form id="f" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+  <input name="email" placeholder="почта" required>
+  <input name="name" placeholder="имя">
+  <input name="password" placeholder="пароль (8+ символов)" required minlength="8">
+  <select name="role"><option value="user">user</option><option value="admin">admin</option></select>
+  <input name="token" placeholder="токен ImageRouter (необязательно)">
+  <button type="submit">Создать</button>
+</form>
 <table id="t"><thead><tr>
-  <th>Email</th><th>Имя</th><th>Роль</th><th>Картинки</th><th>Борды</th>
+  <th>Email</th><th>Имя</th><th>Роль</th><th>Токен IR</th><th>Картинки</th><th>Борды</th>
   <th>IFC</th><th>PDF</th><th>3D</th><th>Последний вход</th><th>Действия</th>
 </tr></thead><tbody></tbody></table>
 <script>
@@ -800,6 +858,14 @@ function esc(s) {
   d.textContent = s == null ? '' : String(s);
   return d.innerHTML;
 }
+document.getElementById('f').onsubmit = function (e) {
+  e.preventDefault();
+  const b = {};
+  new FormData(e.target).forEach((v, k) => { if (v) b[k] = v; });
+  fetch('/admin/api/users', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(b) }).then(r => r.json().then(j => ({ s: r.status, j })))
+    .then(({ s, j }) => { if (s >= 400) { alert(j.detail || ('HTTP ' + s)); } else { location.reload(); } });
+};
 fetch('/admin/api/users').then(r => r.json()).then(d => {
   const tb = document.querySelector('#t tbody');
   for (const u of d.users) {
@@ -808,10 +874,12 @@ fetch('/admin/api/users').then(r => r.json()).then(d => {
     const when = new Date(u.last_seen * 1000).toLocaleString();
     tr.innerHTML = '<td>' + esc(u.email) + '</td><td>' + esc(u.name || '') + '</td>' +
       '<td>' + u.effective_role + (u.role_override ? ' *' : '') + '</td>' +
+      '<td>' + (u.has_token ? 'есть' : '—') + '</td>' +
       '<td>' + u.counts.images + '</td><td>' + u.counts.boards + '</td>' +
       '<td>' + u.counts.ifc + '</td><td>' + u.counts.pdf + '</td><td>' + u.counts.threed + '</td>' +
       '<td>' + when + '</td><td></td>';
     const td = tr.lastElementChild;
+    const uid = encodeURIComponent(u.user_id);
     const sel = document.createElement('select');
     for (const v of ['—', 'user', 'admin']) {
       const o = document.createElement('option');
@@ -819,13 +887,27 @@ fetch('/admin/api/users').then(r => r.json()).then(d => {
       if ((u.role_override || '') === o.value) o.selected = true;
       sel.appendChild(o);
     }
-    sel.onchange = () => post('/admin/api/users/' + encodeURIComponent(u.user_id) + '/role',
-      { role: sel.value || null });
+    sel.onchange = () => post('/admin/api/users/' + uid + '/role', { role: sel.value || null });
+    const btnPw = document.createElement('button');
+    btnPw.textContent = 'Пароль…';
+    btnPw.onclick = () => {
+      const pw = prompt('Новый пароль (8+ символов) для ' + u.email);
+      if (pw) post('/admin/api/users/' + uid + '/password', { password: pw });
+    };
+    const btnTok = document.createElement('button');
+    btnTok.textContent = 'Токен…';
+    btnTok.onclick = () => {
+      const t = prompt('Токен ImageRouter для ' + u.email + ' (пусто — очистить)');
+      if (t !== null) post('/admin/api/users/' + uid + '/token', { token: t });
+    };
     const btn = document.createElement('button');
     btn.textContent = u.revoked ? 'Разблокировать' : 'Заблокировать';
-    btn.onclick = () => post('/admin/api/users/' + encodeURIComponent(u.user_id) + '/revoke',
-      { revoked: !u.revoked }).then(() => location.reload());
-    td.appendChild(sel); td.appendChild(document.createTextNode(' ')); td.appendChild(btn);
+    btn.onclick = () => post('/admin/api/users/' + uid + '/revoke',
+      { revoked: !u.revoked });
+    td.appendChild(sel); td.appendChild(document.createTextNode(' '));
+    td.appendChild(btnPw); td.appendChild(document.createTextNode(' '));
+    td.appendChild(btnTok); td.appendChild(document.createTextNode(' '));
+    td.appendChild(btn);
     tb.appendChild(tr);
   }
 });
