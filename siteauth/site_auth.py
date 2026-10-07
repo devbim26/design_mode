@@ -1,8 +1,14 @@
 # -*- coding: utf-8 -*-
-"""SiteAuthMiddleware — вход на DevBIM Image Studio. Два режима (STUDIO_AUTH_MODE):
+"""SiteAuthMiddleware — вход на DevBIM Image Studio. Три режима (STUDIO_AUTH_MODE):
 
 password (по умолчанию, локальные компании) — прежнее поведение: одна кука
   devbim_auth = sha256(соль+пароль+срок), форма /auth/login, срок лицензии.
+
+users (многопользовательский, публичный адрес/туннель) — вход по email/паролю
+  из studio.sqlite (аккаунты создаёт админ: /admin или user_manager.py) плюс
+  необязательное поле токена ImageRouter (проверяется на апстриме и
+  сохраняется в профиле). Пустая почта + SITE_PASSWORD — вход владельца
+  (admin-local). Дальше — общая механика sso (см. ниже).
 
 sso (devbim.com) — обмен JWT-токена сайта на сессию студии:
   GET  /auth/sso?t=<JWT HS256>  — validate (подпись/exp/jti) -> пользователь
@@ -73,7 +79,7 @@ def _env(key: str, default: str = "") -> str:
 
 
 def _mode() -> str:
-    return "sso" if _env("STUDIO_AUTH_MODE", "password").strip().lower() == "sso" else "password"
+    return studio_store.auth_mode()
 
 
 def _site_password() -> str:
@@ -148,9 +154,12 @@ def _legacy_cookie_ok(scope) -> bool:
     return False
 
 
-# ---------- sso: сессия ----------
+# ---------- sso/users: сессия ----------
 def _session_user(scope) -> str | None:
-    uid = studio_store.session_user(_cookie_from_scope(scope), _session_secret(), _session_ttl())
+    secret = _session_secret()
+    if not secret:  # пустой секрет сделал бы HMAC-подпись подделываемой — fail closed
+        return None
+    uid = studio_store.session_user(_cookie_from_scope(scope), secret, _session_ttl())
     if uid and studio_store.effective_role(uid):
         return uid
     return None
@@ -158,8 +167,9 @@ def _session_user(scope) -> str | None:
 
 def _session_cookie(user_id: str) -> str:
     v = studio_store.mint_session(user_id, _session_secret())
+    # без Secure: туннель может терминироваться в http (иначе кука не придёт)
     return (f"{COOKIE_NAME}={v}; Max-Age={_session_ttl()}; "
-            "Path=/; HttpOnly; SameSite=Lax; Secure")
+            "Path=/; HttpOnly; SameSite=Lax")
 
 
 # ---------- HTML-страницы ----------
@@ -180,9 +190,10 @@ def _page(title: str, body: str) -> bytes:
   p { color:#A7B0C0; font-size:14px; line-height:1.55; margin-bottom:14px; }
   a { color:#38BDF8; }
   label { display:block; font-size:13px; color:#A7B0C0; margin:6px 0; text-align:left; }
-  input[type=password] { width:100%; padding:11px 13px; border-radius:8px; border:1px solid #2A2E37;
+  input[type=password],input[type=email],input[type=text] { width:100%; padding:11px 13px;
+          border-radius:8px; border:1px solid #2A2E37;
           background:#0B0C0E; color:#E6EAF2; font-size:15px; outline:none; margin-bottom:16px; }
-  input[type=password]:focus { border-color:#38BDF8; }
+  input[type=password]:focus,input[type=email]:focus,input[type=text]:focus { border-color:#38BDF8; }
   button { width:100%; padding:12px; border:0; border-radius:8px; background:#38BDF8;
            color:#06121C; font-size:15px; font-weight:600; cursor:pointer; }
   button:hover { background:#5CC9FA; }
@@ -216,6 +227,43 @@ def _admin_login_page(error: str = "") -> bytes:
 <label for="password">Пароль администратора</label>
 <input id="password" type="password" name="password" autofocus autocomplete="current-password">
 <button type="submit">Войти</button></form>""")
+
+
+def _users_login_page(error: str = "") -> bytes:
+    err = f'<div class="err">{error}</div>' if error else ""
+    return _page("Вход", f"""
+{err}<form method="POST" action="/auth/login">
+<label for="email">Почта</label>
+<input id="email" type="email" name="email" autocomplete="username" autofocus>
+<label for="password">Пароль</label>
+<input id="password" type="password" name="password" autocomplete="current-password">
+<label for="token">Токен ImageRouter <span style="color:#5A6474">(необязательно, если уже сохранён)</span></label>
+<input id="token" type="password" name="token" autocomplete="off" placeholder="sk-...">
+<button type="submit">Войти</button></form>
+<p style="font-size:12px;color:#5A6474;margin-top:14px">Забыли пароль или токен?
+Обратитесь к администратору студии.</p>""")
+
+
+async def _validate_ir_token(token: str) -> tuple[bool, str]:
+    """Проверка токена на апстриме ImageRouter: (ok, текст ошибки).
+    Сетевой сбой/5xx не запирают пользователя: токен сохраняется,
+    предупреждение уходит в лог. Переопределяется в тестах."""
+    def _call():
+        import requests
+        return requests.post("https://api.imagerouter.io/v1/auth/test",
+                             headers={"Authorization": f"Bearer {token}"}, timeout=15)
+
+    try:
+        resp = await asyncio.to_thread(_call)
+    except Exception as e:  # noqa: BLE001
+        print(f"[studio] IR token check unreachable: {e}", file=sys.stderr)
+        return True, ""
+    if resp.status_code == 200:
+        return True, ""
+    if 400 <= resp.status_code < 500:
+        return False, "Токен ImageRouter отклонён — проверьте ключ"
+    print(f"[studio] IR token check HTTP {resp.status_code}", file=sys.stderr)
+    return True, ""
 
 
 def _expired_page() -> bytes:
@@ -318,14 +366,52 @@ class SiteAuthMiddleware:
         return (f"{LEGACY_COOKIE}={_legacy_token(password)}; Max-Age={LEGACY_MAX_AGE}; "
                 "Path=/; HttpOnly; SameSite=Lax")
 
+    async def _handle_users_login(self, scope, receive, send) -> None:
+        """Режим users: форма «почта + пароль + токен IR (необязательно)».
+        Пустая почта + SITE_PASSWORD — вход владельца (admin-local)."""
+        if scope.get("method", "GET").upper() == "GET":
+            await _send_html(send, 200, _users_login_page())
+            return
+        body = await _read_body(receive)
+        form = parse_qs(body.decode("utf-8", "replace"))
+        email = (form.get("email") or [""])[0].strip()
+        password = (form.get("password") or [""])[0]
+        token = (form.get("token") or [""])[0].strip()
+        if not _session_secret():
+            await _send_html(send, 500, _users_login_page(
+                "Сервер не настроен: задайте STUDIO_SESSION_SECRET в .env и перезапустите"))
+            return
+        if not email:  # вход владельца-администратора
+            if password and password == _site_password():
+                await _redirect(send, "/", set_cookie=_session_cookie(studio_store.ADMIN_LOCAL))
+            else:
+                await _send_html(send, 401, _users_login_page("Неверный пароль администратора"))
+            return
+        studio_store.init_db()
+        u = studio_store.find_user_by_email(email)
+        if not u or not studio_store.check_password(u["user_id"], password):
+            await asyncio.sleep(0.3)  # замедлить перебор
+            await _send_html(send, 401, _users_login_page("Неверная почта или пароль"))
+            return
+        if u.get("revoked"):
+            await _send_html(send, 403, _users_login_page("Учётная запись заблокирована"))
+            return
+        if token:
+            ok, err = await _validate_ir_token(token)
+            if not ok:
+                await _send_html(send, 401, _users_login_page(err))
+                return
+            studio_store.set_ir_token(u["user_id"], token)
+        await _redirect(send, "/", set_cookie=_session_cookie(u["user_id"]))
+
     async def _handle_me(self, send, user: str) -> None:
         if user == studio_store.ADMIN_LOCAL:
-            await _send_json(send, {"mode": "sso", "user_id": user,
+            await _send_json(send, {"mode": _mode(), "user_id": user,
                                     "email": "admin@local", "name": "Administrator",
                                     "role": "admin"})
             return
         u = studio_store.get_user(user) or {}
-        await _send_json(send, {"mode": "sso", "user_id": user,
+        await _send_json(send, {"mode": _mode(), "user_id": user,
                                 "email": u.get("email", ""), "name": u.get("name", ""),
                                 "role": studio_store.effective_role(user) or "user"})
 
@@ -575,7 +661,7 @@ class SiteAuthMiddleware:
     async def __call__(self, scope, receive, send):
         if scope["type"] == "websocket":
             ok = (not _expired()) and (
-                _session_user(scope) if _mode() == "sso" else _legacy_cookie_ok(scope))
+                _session_user(scope) if _mode() in ("sso", "users") else _legacy_cookie_ok(scope))
             if ok:
                 await self.app(scope, receive, send)
             else:
@@ -595,7 +681,7 @@ class SiteAuthMiddleware:
             return
 
         if path == LOGOUT_PATH:
-            if _mode() == "sso":
+            if _mode() in ("sso", "users"):
                 await _redirect(send, LOGIN_PATH,
                                 clear_cookie=f"{COOKIE_NAME}=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax")
             else:
@@ -607,13 +693,16 @@ class SiteAuthMiddleware:
             await self._password_flow(scope, receive, send, path, method)
             return
 
-        # ===================== sso =====================
+        # ===================== sso / users =====================
         if path == SSO_PATH and method == "GET":
             await self._handle_sso(scope, receive, send)
             return
 
         if path == LOGIN_PATH:
-            await self._handle_admin_login(scope, receive, send)
+            if _mode() == "users":
+                await self._handle_users_login(scope, receive, send)
+            else:
+                await self._handle_admin_login(scope, receive, send)
             return
 
         user = _session_user(scope)
