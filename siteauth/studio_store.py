@@ -103,6 +103,20 @@ def init_db() -> None:
                 c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(lower(email))")
             except Exception as e:  # noqa: BLE001 — дубли в легаси-БД не должны ронять старт
                 print(f"[studio_store] email index skipped: {e}", file=sys.stderr)
+            # журнал генераций для админ-панели (деньги/успех-ошибка/время)
+            c.execute(
+                """CREATE TABLE IF NOT EXISTS gen_log(
+                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                     ts INTEGER NOT NULL,
+                     user_id TEXT NOT NULL DEFAULT '',
+                     kind TEXT NOT NULL DEFAULT '',
+                     model TEXT NOT NULL DEFAULT '',
+                     status TEXT NOT NULL DEFAULT 'ok',
+                     images INTEGER NOT NULL DEFAULT 0,
+                     cost_usd REAL,
+                     duration_s REAL NOT NULL DEFAULT 0,
+                     error TEXT)"""
+            )
         _ready = True
 
 
@@ -307,6 +321,76 @@ def owned_count(user_id: str) -> dict:
             return out
     except Exception:
         return {"images": 0, "boards": 0, "ifc": 0, "pdf": 0, "threed": 0}
+
+
+# --- журнал генераций (админ-панель: деньги, успех/ошибка, время) ---
+GEN_LOG_CAP = 20000  # мягкий лимит строк; читается в рантайме (переопределяется тестами)
+
+
+def log_generation(user_id: str, kind: str, model: str, status: str = "ok",
+                   images: int = 0, cost_usd: "float | None" = None,
+                   duration_s: float = 0.0, error: "str | None" = None) -> None:
+    try:
+        if not _ready:
+            init_db()
+        err_txt = str(error)[:500] if error else None
+        with _LOCK, _conn() as c:
+            c.execute(
+                "INSERT INTO gen_log(ts,user_id,kind,model,status,images,cost_usd,duration_s,error)"
+                " VALUES(?,?,?,?,?,?,?,?,?)",
+                (int(time.time()), user_id or "", kind or "", model or "",
+                 "error" if status == "error" else "ok",
+                 max(0, int(images or 0)),
+                 float(cost_usd) if isinstance(cost_usd, (int, float)) else None,
+                 max(0.0, float(duration_s or 0)), err_txt),
+            )
+            # прун — журнал не должен расти бесконечно
+            c.execute(
+                "DELETE FROM gen_log WHERE id <= (SELECT MAX(id) FROM gen_log) - ?",
+                (GEN_LOG_CAP,),
+            )
+    except Exception as e:  # noqa: BLE001 — учёт не должен ломать генерацию
+        print(f"[studio_store] log_generation failed: {e}", file=sys.stderr)
+
+
+def gen_stats(user_id: str) -> dict:
+    """Сводка по пользователю для таблицы /admin (cost_usd=None — цен не знаем)."""
+    try:
+        with _conn() as c:
+            r = c.execute(
+                """SELECT COUNT(*) total,
+                          COALESCE(SUM(status='ok'), 0) ok,
+                          COALESCE(SUM(status='error'), 0) failed,
+                          COALESCE(SUM(images), 0) images,
+                          SUM(cost_usd) cost_usd,
+                          AVG(CASE WHEN status='ok' THEN duration_s END) avg_s,
+                          MAX(ts) last_ts
+                   FROM gen_log WHERE user_id=?""",
+                (user_id,),
+            ).fetchone()
+            return {"total": r["total"] or 0, "ok": r["ok"], "failed": r["failed"],
+                    "images": r["images"], "cost_usd": r["cost_usd"],
+                    "avg_s": r["avg_s"], "last_ts": r["last_ts"]}
+    except Exception:
+        return {"total": 0, "ok": 0, "failed": 0, "images": 0,
+                "cost_usd": None, "avg_s": None, "last_ts": None}
+
+
+def gen_log_list(user_id: "str | None" = None, limit: int = 200) -> list[dict]:
+    """Последние записи журнала (новые сверху); user_id=None — все пользователи."""
+    try:
+        q = "SELECT id,ts,user_id,kind,model,status,images,cost_usd,duration_s,error FROM gen_log"
+        args: list = []
+        if user_id:
+            q += " WHERE user_id=?"
+            args.append(user_id)
+        q += " ORDER BY id DESC LIMIT ?"
+        args.append(max(1, min(int(limit or 200), 1000)))
+        with _conn() as c:
+            return [dict(r) for r in c.execute(q, args)]
+    except Exception as e:  # noqa: BLE001
+        print(f"[studio_store] gen_log_list failed: {e}", file=sys.stderr)
+        return []
 
 
 # --- JWT (HS256) ---

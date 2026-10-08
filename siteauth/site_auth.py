@@ -428,10 +428,23 @@ class SiteAuthMiddleware:
                 u = dict(u)
                 u["effective_role"] = studio_store.effective_role(u["user_id"])
                 u["counts"] = studio_store.owned_count(u["user_id"])
+                u["gen"] = studio_store.gen_stats(u["user_id"])
                 u["has_password"] = bool(u.pop("password_hash", None))
                 u["has_token"] = bool(u.pop("ir_token", None))
                 users.append(u)
-            await _send_json(send, {"users": users})
+            # генерации владельца (admin-local, глобальный ключ = деньги владельца)
+            await _send_json(send, {"users": users,
+                                    "owner_gen": studio_store.gen_stats(studio_store.ADMIN_LOCAL)})
+            return
+
+        if path == "/admin/api/genlog" and method == "GET":
+            q = _query(scope)
+            uid = q.get("user") or None
+            try:
+                limit = int(q.get("limit") or "200")
+            except ValueError:
+                limit = 200
+            await _send_json(send, {"items": studio_store.gen_log_list(uid, limit)})
             return
 
         if path == "/admin/api/users" and method == "POST":
@@ -850,7 +863,7 @@ def _password_login_page(error: str = "") -> bytes:
 <button type="submit">Войти</button></form>""")
 
 
-# --- админ-панель /admin (задача 7) ---
+# --- админ-панель /admin (задача 7; журнал генераций — п.67) ---
 _ADMIN_PAGE = """<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Пользователи — DevBIM Image Studio</title>
@@ -866,9 +879,26 @@ _ADMIN_PAGE = """<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8">
   input { background:#14161A; color:#E6EAF2; border:1px solid #2A2E37;
         border-radius:6px; padding:5px 8px; font-size:12.5px; }
   .revoked { color:#FCA5A5; }
+  .owner { margin-top:18px; font-size:13.5px; color:#A7B0C0; display:flex;
+        gap:10px; align-items:center; flex-wrap:wrap; }
+  .totals { margin-top:10px; font-size:13.5px; color:#7C8598; }
+  .ok { color:#4ADE80; } .err { color:#FCA5A5; }
+  #genmodal { position:fixed; inset:0; background:rgba(0,0,0,.65); display:none;
+        align-items:center; justify-content:center; z-index:50; }
+  #genmodal .box { background:#14161A; border:1px solid #2A2E37; border-radius:12px;
+        padding:20px 22px; max-width:min(1100px, calc(100vw - 40px));
+        max-height:calc(100vh - 80px); overflow:auto;
+        box-shadow:0 12px 40px rgba(0,0,0,.5); }
+  #genmodal h3 { font-size:15px; margin-bottom:12px; }
+  #genmodal table { font-size:12.5px; margin-top:0; }
+  #genmodal .close { float:right; }
+  #genmodal td.errtext { max-width:260px; overflow:hidden; text-overflow:ellipsis;
+        white-space:nowrap; color:#FCA5A5; }
 </style></head><body>
 <h1>Пользователи студии</h1>
-<p><a href="/">← к студии</a></p>
+<p><a href="/">← к студии</a> · <button id="alllogs" style="margin-left:6px">Журнал всех генераций</button></p>
+<div class="owner" id="owner"></div>
+<div class="totals" id="totals"></div>
 <h2 style="font-size:15px;margin-top:24px">Создать пользователя</h2>
 <form id="f" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
   <input name="email" placeholder="почта" required>
@@ -879,15 +909,87 @@ _ADMIN_PAGE = """<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8">
   <button type="submit">Создать</button>
 </form>
 <table id="t"><thead><tr>
-  <th>Email</th><th>Имя</th><th>Роль</th><th>Токен IR</th><th>Картинки</th><th>Борды</th>
+  <th>Email</th><th>Имя</th><th>Роль</th><th>Токен IR</th><th>Генерации ок/ош</th><th>~$</th>
+  <th>Картинки</th><th>Борды</th>
   <th>IFC</th><th>PDF</th><th>3D</th><th>Последний вход</th><th>Действия</th>
 </tr></thead><tbody></tbody></table>
+<div id="genmodal"><div class="box">
+  <button class="close" onclick="document.getElementById('genmodal').style.display='none'">✕ Закрыть</button>
+  <h3 id="genmodal-title">Логи генераций</h3>
+  <table><thead><tr>
+    <th>Время</th><th class="u">Пользователь</th><th>Тип</th><th>Модель</th><th>Статус</th>
+    <th>Карт.</th><th>~$</th><th>Длит.</th><th>Ошибка</th>
+  </tr></thead><tbody></tbody></table>
+</div></div>
 <script>
 function esc(s) {
   const d = document.createElement('div');
   d.textContent = s == null ? '' : String(s);
   return d.innerHTML;
 }
+const KINDS = { txt2img: 'генерация', inpaint: 'правка', outpaint: 'правка',
+                img2img: 'правка', upscale: 'апскейл' };
+function kindLabel(k) { return KINDS[k] || k || '—'; }
+function fmtUsd(v) {
+  if (v == null) return '—';
+  v = +v;
+  return '$' + v.toFixed(v >= 10 ? 2 : 4);
+}
+function fmtDur(s) {
+  if (s == null) return '—';
+  s = +s;
+  return s >= 90 ? Math.round(s / 60) + 'м ' + Math.round(s % 60) + 'с' : s.toFixed(1) + 'с';
+}
+function genCellHtml(g) {
+  const tip = g.total ? ' картинок: ' + g.images +
+    (g.avg_s != null ? '; среднее время успешных: ' + fmtDur(g.avg_s) : '') : '';
+  return '<td title="' + esc(tip) + '">' +
+    '<span class="ok">' + g.ok + '</span> / <span class="err">' + g.failed + '</span></td>' +
+    '<td>' + fmtUsd(g.cost_usd) + '</td>';
+}
+function statLine(g) {
+  return g.total ? g.total + ' генераций (<span class="ok">' + g.ok + ' ок</span> / ' +
+    '<span class="err">' + g.failed + ' ош</span>) · ~' + fmtUsd(g.cost_usd) +
+    (g.avg_s != null ? ' · ср. ' + fmtDur(g.avg_s) : '') : 'нет генераций';
+}
+function openLogs(user, title) {
+  const m = document.getElementById('genmodal');
+  document.getElementById('genmodal-title').textContent = title;
+  const tb = m.querySelector('tbody');
+  tb.innerHTML = '<tr><td colspan="9">Загрузка…</td></tr>';
+  m.querySelector('.u').style.display = user ? 'none' : '';
+  m.style.display = 'flex';
+  const qs = (user ? 'user=' + encodeURIComponent(user) + '&' : '') + 'limit=200';
+  fetch('/admin/api/genlog?' + qs).then(r => r.json()).then(d => {
+      tb.innerHTML = '';
+      if (!d.items.length) {
+        tb.innerHTML = '<tr><td colspan="9">Записей нет</td></tr>';
+        return;
+      }
+      for (const it of d.items) {
+        const tr = document.createElement('tr');
+        const err = it.error ? '<td class="errtext" title="' + esc(it.error) + '">' +
+          esc(String(it.error).slice(0, 120)) + '</td>' : '<td></td>';
+        tr.innerHTML = '<td>' + new Date(it.ts * 1000).toLocaleString() + '</td>' +
+          '<td class="u">' + esc(it.user_id) + '</td>' +
+          '<td>' + esc(kindLabel(it.kind)) + '</td>' +
+          '<td title="' + esc(it.model) + '">' + esc(String(it.model || '—').split('/').pop()) + '</td>' +
+          '<td>' + (it.status === 'ok' ? '<span class="ok">ок</span>' :
+                    '<span class="err">ошибка</span>') + '</td>' +
+          '<td>' + (it.images || 0) + '</td>' +
+          '<td>' + fmtUsd(it.cost_usd) + '</td>' +
+          '<td>' + fmtDur(it.duration_s) + '</td>' + err;
+        tb.appendChild(tr);
+      }
+    });
+}
+document.getElementById('genmodal').addEventListener('mousedown', function (e) {
+  if (e.target === this) this.style.display = 'none';
+});
+document.addEventListener('keydown', function (e) {
+  if (e.key === 'Escape') document.getElementById('genmodal').style.display = 'none';
+});
+document.getElementById('alllogs').onclick = () => openLogs(null, 'Журнал всех генераций');
 document.getElementById('f').onsubmit = function (e) {
   e.preventDefault();
   const b = {};
@@ -898,18 +1000,24 @@ document.getElementById('f').onsubmit = function (e) {
 };
 fetch('/admin/api/users').then(r => r.json()).then(d => {
   const tb = document.querySelector('#t tbody');
+  let tot = 0, tok = 0, tf = 0, tc = 0;
   for (const u of d.users) {
     const tr = document.createElement('tr');
     if (u.revoked) tr.className = 'revoked';
     const when = new Date(u.last_seen * 1000).toLocaleString();
     tr.innerHTML = '<td>' + esc(u.email) + '</td><td>' + esc(u.name || '') + '</td>' +
       '<td>' + u.effective_role + (u.role_override ? ' *' : '') + '</td>' +
-      '<td>' + (u.has_token ? 'есть' : '—') + '</td>' +
+      '<td>' + (u.has_token ? 'есть' : '—') + '</td>' + genCellHtml(u.gen) +
       '<td>' + u.counts.images + '</td><td>' + u.counts.boards + '</td>' +
       '<td>' + u.counts.ifc + '</td><td>' + u.counts.pdf + '</td><td>' + u.counts.threed + '</td>' +
       '<td>' + when + '</td><td></td>';
     const td = tr.lastElementChild;
     const uid = encodeURIComponent(u.user_id);
+    tot += u.gen.total; tok += u.gen.ok; tf += u.gen.failed;
+    tc += (u.gen.cost_usd || 0);
+    const btnLog = document.createElement('button');
+    btnLog.textContent = 'Логи';
+    btnLog.onclick = () => openLogs(u.user_id, 'Логи генераций — ' + u.email);
     const sel = document.createElement('select');
     for (const v of ['—', 'user', 'admin']) {
       const o = document.createElement('option');
@@ -934,12 +1042,24 @@ fetch('/admin/api/users').then(r => r.json()).then(d => {
     btn.textContent = u.revoked ? 'Разблокировать' : 'Заблокировать';
     btn.onclick = () => post('/admin/api/users/' + uid + '/revoke',
       { revoked: !u.revoked });
+    td.appendChild(btnLog); td.appendChild(document.createTextNode(' '));
     td.appendChild(sel); td.appendChild(document.createTextNode(' '));
     td.appendChild(btnPw); td.appendChild(document.createTextNode(' '));
     td.appendChild(btnTok); td.appendChild(document.createTextNode(' '));
     td.appendChild(btn);
     tb.appendChild(tr);
   }
+  document.getElementById('totals').innerHTML = tot
+    ? 'Итого по пользователям: ' + tot + ' генераций (<span class="ok">' + tok +
+      ' ок</span> / <span class="err">' + tf + ' ош</span>) · ~' + fmtUsd(tc)
+    : '';
+  const own = document.getElementById('owner');
+  own.innerHTML = 'Владелец (вход по паролю, глобальный ключ): ' + statLine(d.owner_gen || {});
+  const ownLog = document.createElement('button');
+  ownLog.textContent = 'Логи';
+  ownLog.onclick = () => openLogs('admin-local', 'Логи генераций — владелец');
+  own.appendChild(document.createTextNode(' '));
+  own.appendChild(ownLog);
 });
 function post(url, body) {
   return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },

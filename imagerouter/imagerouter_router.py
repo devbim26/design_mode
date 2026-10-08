@@ -2094,6 +2094,55 @@ def _studio_store():
     return studio_store
 
 
+def _gen_log(studio_user, kind, model, status, images=0, cost_usd=None,
+             duration_s=0.0, error=None) -> None:
+    """Журнал генераций для админ-панели (кто/что/деньги/время/ошибка).
+    Любой сбой записи глотается — учёт не должен ломать генерацию."""
+    if not studio_user:
+        return
+    try:
+        _studio_store().log_generation(studio_user, kind, model, status,
+                                       images, cost_usd, duration_s, error)
+    except Exception:
+        pass
+
+
+def _catalog_price(mid: str) -> Optional[float]:
+    """Оценка цены картинки по каталогу ImageRouter (~$/img). Читает ТОЛЬКО
+    кэш: журнал пишется из async-мидлвари, и сетевой запрос здесь на срок
+    до TIMEOUT_SHORT замораживал бы event loop всего сервера. Каталога в
+    кэше нет (холодный старт) -> None («—» в панели); кэш греется любым
+    запросом списка моделей (пикер UI делает это постоянно)."""
+    try:
+        for m in _ir_models_cache.get("items") or []:
+            if m.get("id") == mid:
+                return _avg_price(m)
+    except Exception:
+        pass
+    return None
+
+
+def _gen_log_entry(studio_user, info: dict, status: str, images: int,
+                   duration_s: float, error=None) -> None:
+    """Запись журнала по info перехваченного enqueue_batch: kind/model из
+    графа, стоимость — цена каталога × картинок (только успех)."""
+    if not studio_user:
+        return
+    key = info.get("upscale_model_key") if info.get("is_upscale") else info.get("model_key")
+    kind = "upscale" if info.get("is_upscale") else (info.get("mode") or "txt2img")
+    mid = str(key or "")
+    if mid.startswith(IR_UPSCALE_KEY_PREFIX):
+        mid = mid[len(IR_UPSCALE_KEY_PREFIX):]
+    elif mid.startswith(IR_KEY_PREFIX):
+        mid = mid[len(IR_KEY_PREFIX):]
+    cost = None
+    if status == "ok" and images and mid:
+        price = _catalog_price(mid)
+        if price is not None:
+            cost = round(price * images, 6)
+    _gen_log(studio_user, kind, mid, status, images, cost, duration_s, error)
+
+
 def _personal_token(studio_user: "str | None") -> "str | None":
     """Персональный токен ImageRouter аккаунта (users-режим); None — нет аккаунта."""
     if not studio_user or studio_user == "admin-local":
@@ -2240,21 +2289,30 @@ class ImageRouterCanvasMiddleware:
                     )
                 except Exception:
                     pass
+                studio_user = _studio_user_from_scope(scope)
+                _tag_session_owner(payload, studio_user)
+                t0 = time.monotonic()
                 try:
-                    studio_user = _studio_user_from_scope(scope)
-                    _tag_session_owner(payload, studio_user)
                     result = await asyncio.to_thread(handler, queue_id, payload, studio_user)
                 except _IRClientError as e:
                     # 06.09: ошибки улетали тостом в UI, не оставляя следа в
                     # ir_server.log — при разборе «что реально ушло» приходилось
                     # гадать; теперь каждое падение пишется в лог
                     print(f"[imagerouter] FAILED: {e}", flush=True)
+                    _gen_log_entry(studio_user, info, "error", 0,
+                                   time.monotonic() - t0, str(e))
                     await self._send_json(send, _ir_error_body(str(e)), status=422)
                     return
                 except Exception as e:  # noqa: BLE001
                     traceback.print_exc()
+                    _gen_log_entry(studio_user, info, "error", 0,
+                                   time.monotonic() - t0, f"{e}")
                     await self._send_json(send, _ir_error_body(f"ImageRouter: {e}"), status=422)
                     return
+                # журнал генераций админ-панели: картинок = длина item_ids
+                _gen_log_entry(studio_user, info, "ok",
+                               len((result or {}).get("item_ids") or []),
+                               time.monotonic() - t0)
                 await self._send_json(send, result)
                 return
             # сквозной граф (облачные ноды Ask AI / Prompt Enhancer): запоминаем
