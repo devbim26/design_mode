@@ -2019,7 +2019,8 @@ def main() -> None:
     patch_nodes_allowlist()
     patch_index_html()
     print("Готово. Перезапустите сервер: ключ и пароль подтянутся из .env.")
-    print("Далее: Меню → «Настройки» → пароль → «Менеджер моделей» → вкладка ImageRouter.")
+    print("Далее: Меню → «Model Manager» (admin/users-режим — без пароля, "
+          "password-режим — пароль ADMIN_PASSWORD).")
 
 
 if __name__ == "__main__":

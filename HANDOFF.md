@@ -3351,6 +3351,40 @@ invokeai==6.2.0` их нужно запускать повторно в поря
       владельца (пустая почта + SITE_PASSWORD), кириллица в телах curl
       из консоли Windows ЛОМАЕТСЯ — проверять python-клиентом.
 
+71. **Шестерёнка «Настройки» и «Model Manager» — только для админов**
+    (08.10, ветка `user`; запрос пользователя «шестерёнку с настройками
+    скрыть от пользователей, открыть для админов, новую не создавать»).
+    Правка ТОЛЬКО `imagerouter/devbim_admin.js` (деплой штатным
+    `setup_imagerouter.py` → dist/devbim-admin.js; бандлы не тронуты —
+    F5 достаточно). Роль сессии теперь читается в режимах users И sso
+    (раньше — только sso, в users все получали окно пароля):
+    - **role=admin** — гейт снят сразу: клик «Settings» открывает
+      настройки, «Model Manager» — вкладку models, БЕЗ пароля
+      (unlocked=true ставит applyRole по ответу /api/v1/studio/me).
+    - **role=user** — пункты «Settings» и «Model Manager» СКРЫТЫ из
+      меню (MutationObserver на body: `[role=menuitem]` с текстом из
+      SETTINGS_LABELS/«Model Manager» получает display:none + атрибут
+      data-devbim-admin-hidden; обёртка с единственным пунктом тоже
+      прячется — шестерёнка обёрнута в YTe). Обходной клик (гейт
+      вкладки models при восстановлении таба) — ненавязчивое
+      уведомление notifyBlocked внизу экрана.
+    - **password-режим** (компании, /me отдаёт 404 → роль null) —
+      прежняя логика ADMIN_PASSWORD без изменений.
+    - ГРАБЛИ (найдено E2E): НЕ использовать блокирующий alert() в
+      ensureUnlocked — гейт срабатывает в фоне при загрузке (восстанов-
+      ление вкладки «models» из localStorage) и alert замораживал ВСЁ
+      приложение («Loading» навсегда, evaluate не отвечает); заменили
+      на DOM-уведомление. Тот же морок: панель IAB иногда тормозит
+      загрузку на десятки секунд при переключении сессий — не спешить
+      с выводами о «зависшем сервере», проверять API python-клиентом
+      (у пользователя все запросы <0.2 с).
+    - E2E 08.10: владелец (admin-local) — Settings/MM в меню видны,
+      открываются без пароля; тестовый user gear-test — оба пункта
+      hiddenAttr+display:none (скриншот docs/admin-gear-user-menu.png),
+      восстановленный таб models спрыгнул на generate; после проверки
+      аккаунт отозван (user_manager revoke). Тесты:
+      `tests/test_admin_gear_role.py` (5 блоков).
+
 
 ```powershell
 cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
