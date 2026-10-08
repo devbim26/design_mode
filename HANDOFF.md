@@ -3122,6 +3122,28 @@ invokeai==6.2.0` их нужно запускать повторно в поря
       не извлекает, спор невозможен (осознанный дескоп).
     - Деплой: `setup_threed.py` + рестарт; UI/роутер не менялись.
 
+65. **Фикс изоляции: списки ИМЁН картинок уходили без фильтра владения**
+    (08.10, ветка `user`; жалоба «новый пользователь видит все картинки
+    админа»). Причина: UI 6.2.0 строит галерею не только через
+    `GET /api/v1/images/` (фильтровался), но и через эндпоинты
+    optimistic-updates — `GET /api/v1/images/names` (getImageNames ×5 в
+    бандле), `GET /api/v1/boards/{id}/image_names` и пакет DTO
+    `POST /api/v1/images/images_by_names`; regex-ы мидлвари
+    (`^/api/v1/images/?$`, `^/api/v1/boards/([^/]+)$`) их не покрывали —
+    не-админ получал ВСЕ имена инстанса (проверено живьём: 868 из 868,
+    после фикса — 1 своя). Фикс в `siteauth/site_auth.py`: три новых
+    regex + `_filter_name_list` (голый list[str] и {image_names:[...]});
+    images_by_names — существующим `_filter_list(image_name)`.
+    ГРАБЛИ: (а) total в списках правится только в пределах видимой
+    страницы (мутатор не знает общее число чужих) — пагинация показывает
+    пустые страницы, утечки нет; (б) «отдельной папки на пользователя»
+    в архитектуре НЕТ — изоляция = ownership-теги overlay-БД + фильтры
+    API, легаси без владельца видит только админ; (в)live-проверка —
+    mint_session кукой из .env секретов (STUDIO_SESSION_SECRET).
+    Тесты: `test_studio_ownership.py` блок 10 (names/board-names/
+    by-names + админ). Деплой: `setup_site_auth.py` + рестарт; JS
+    не менялся.
+
 ```powershell
 cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
 .\venv\Scripts\python.exe .\setup_imagerouter.py        # применить патчи

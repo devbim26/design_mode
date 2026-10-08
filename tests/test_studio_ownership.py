@@ -273,6 +273,40 @@ try:
     run(mw(scope("/api/v1/board_images/", "DELETE", c1), idle(body), r))
     assert r.status == 200 and r.json() == {"upstream": True}
 
+    # 10. списки ИМЁН и пакет DTO по именам (optimistic updates UI 6.2.0) —
+    #     раньше уходили без фильтра: не-админ получал все имена инстанса
+    async def names_inner(scope, receive, send):
+        p = scope["path"]
+        if p == "/api/v1/images/names":
+            payload = {"image_names": ["new-upload.png", "u2.png", "legacy.png"]}
+        elif p == "/api/v1/boards/none/image_names":
+            payload = ["new-upload.png", "u2.png", "legacy.png"]
+        else:  # POST images_by_names -> list[ImageDTO]
+            payload = [{"image_name": "new-upload.png"}, {"image_name": "u2.png"},
+                       {"image_name": "legacy.png"}]
+        raw = json.dumps(payload).encode()
+        await send({"type": "http.response.start", "status": 200,
+                    "headers": [(b"content-type", b"application/json")]})
+        await send({"type": "http.response.body", "body": raw})
+
+    mwn = site_auth.SiteAuthMiddleware(names_inner)
+    r = Rec()
+    run(mwn(scope("/api/v1/images/names", "GET", c1), idle(), r))
+    assert r.json()["image_names"] == ["new-upload.png"], r.json()
+    r = Rec()
+    run(mwn(scope("/api/v1/boards/none/image_names", "GET", c1), idle(), r))
+    assert r.json() == ["new-upload.png"], r.json()
+    r = Rec()
+    run(mwn(scope("/api/v1/images/images_by_names", "POST", c1),
+            idle(json.dumps({"image_names": ["u2.png"]}).encode()), r))
+    assert [i["image_name"] for i in r.json()] == ["new-upload.png"], r.json()
+    r = Rec()  # админ не фильтруется
+    run(mwn(scope("/api/v1/images/names", "GET", cadm), idle(), r))
+    assert r.json()["image_names"] == ["new-upload.png", "u2.png", "legacy.png"]
+    r = Rec()
+    run(mwn(scope("/api/v1/boards/none/image_names", "GET", cadm), idle(), r))
+    assert r.json() == ["new-upload.png", "u2.png", "legacy.png"]
+
     print("OK")
 finally:
     for k, v in saved.items():

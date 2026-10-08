@@ -55,6 +55,12 @@ _RE_IMAGES = re.compile(r"^/api/v1/images/?$")
 _RE_IMAGE_ITEM = re.compile(r"^/api/v1/images/i/([^/]+)(?:/.*)?$")
 _RE_UPLOAD = re.compile(r"^/api/v1/images/upload/?$")
 _RE_IMAGES_BODY = re.compile(r"^/api/v1/images/(delete|download|star|unstar)/?$")
+# списки ИМЁН картинок (optimistic updates UI 6.2.0): имена без DTO идут
+# отдельными эндпоинтами мимо _RE_IMAGES — фильтровать и их, иначе не-админ
+# получает полный список картинок инстанса
+_RE_IMAGE_NAMES = re.compile(r"^/api/v1/images/names/?$")
+_RE_BOARD_IMAGE_NAMES = re.compile(r"^/api/v1/boards/[^/]+/image_names/?$")
+_RE_IMAGES_BY_NAMES = re.compile(r"^/api/v1/images/images_by_names/?$")
 # очередь 6.2.0: /api/v1/queue/{id}/list -> {items:[...]}, list_all -> [...]
 _RE_QUEUE_LIST = re.compile(r"^/api/v1/queue/[^/]+/list(?:_all)?$")
 # destructive-эндпоинты без собственных гейтов (финальное ревью I1)
@@ -549,6 +555,17 @@ class SiteAuthMiddleware:
         await send({"type": "http.response.start", "status": status_code, "headers": headers})
         await send({"type": "http.response.body", "body": raw})
 
+    def _filter_name_list(self, uid: str, data):
+        """Фильтрует списки ИМЁН картинок: голый list[str] или {image_names:[...]}."""
+        def visible(name):
+            return self._visible(uid, studio_store.owner("image", str(name)))
+
+        if isinstance(data, list):
+            return [n for n in data if visible(n)]
+        if isinstance(data, dict) and isinstance(data.get("image_names"), list):
+            data["image_names"] = [n for n in data["image_names"] if visible(n)]
+        return data
+
     def _filter_list(self, uid: str, data, kind: str, id_field: str):
         """Фильтрует список (или items в словаре) по владению; поправляет total."""
         if isinstance(data, list):
@@ -654,6 +671,19 @@ class SiteAuthMiddleware:
             # _filter_list умеет обе формы
             await self._proxy_json(scope, receive, send,
                                    lambda d: self._filter_list(uid, d, "batch", "batch_id"))
+            return
+
+        # --- списки имён (optimistic updates UI) и пакет DTO по именам ---
+        if method == "GET" and (_RE_IMAGE_NAMES.match(path)
+                                or _RE_BOARD_IMAGE_NAMES.match(path)):
+            await self._proxy_json(scope, receive, send,
+                                   lambda d: self._filter_name_list(uid, d))
+            return
+
+        if method == "POST" and _RE_IMAGES_BY_NAMES.match(path):
+            # ответ — list[ImageDTO] (голый список), фильтр как для картинок
+            await self._proxy_json(scope, receive, send,
+                                   lambda d: self._filter_list(uid, d, "image", "image_name"))
             return
 
         # --- единичный доступ: борды ---
