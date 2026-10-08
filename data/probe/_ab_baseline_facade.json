@@ -1,0 +1,45 @@
+{
+ "label": "baseline",
+ "scenario": "facade",
+ "image": "data\\probe\\vlm_test_house.png",
+ "runs": [
+  {
+   "name": "3D_facade_20260926-191444_r2.ifc",
+   "score": 38,
+   "match": false,
+   "content_fraction": 0.3643,
+   "cost_usd": 0.2271,
+   "structural_ok": true,
+   "contract_issues": 0,
+   "agree_rate": null
+  },
+  {
+   "name": "3D_facade_20260926-192109_r2.ifc",
+   "score": 38,
+   "match": false,
+   "content_fraction": 0.5232,
+   "cost_usd": 0.2376,
+   "structural_ok": true,
+   "contract_issues": 0,
+   "agree_rate": null
+  },
+  {
+   "name": "3D_facade_20260926-192702_r2.ifc",
+   "score": 44,
+   "match": false,
+   "content_fraction": 0.3588,
+   "cost_usd": 0.2622,
+   "structural_ok": true,
+   "contract_issues": 0,
+   "agree_rate": null
+  }
+ ],
+ "summary": {
+  "n": 3,
+  "median_score": 38,
+  "median_cost_usd": 0.2376,
+  "structural_clean_rate": 1.0,
+  "median_contract_issues": 0,
+  "agree_rate": null
+ }
+}
