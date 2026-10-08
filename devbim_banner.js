@@ -90,11 +90,36 @@
   }
 
   // --- язык интерфейса: IndexedDB «invoke» / «invoke-store» / «@@invokeai-system» ---
-  function readLanguage(cb) {
+  // ВАЖНО (грабля 08.10): открывать базу БЕЗ создания. Простой
+  // indexedDB.open('invoke') на свежем профиле браузера создаёт пустую
+  // базу версии 1 РАНЬШЕ приложения — и redux-remember навсегда теряет
+  // хранилище (upgrade при равной версии не выполняется). Поэтому при
+  // создании базы откатываем транзакцию, а без стора «invoke-store»
+  // просто читаем null (язык возьмётся после загрузки приложения).
+  function openInvoke(cb) {
     var req;
     try { req = indexedDB.open('invoke'); } catch (e) { cb(null); return; }
+    req.onupgradeneeded = function (ev) {
+      if (ev.oldVersion === 0) {          // базу создаём мы — не надо
+        try { req.transaction.abort(); } catch (e) { /* ничего */ }
+      }
+    };
     req.onsuccess = function () {
       var db = req.result;
+      if (!db.objectStoreNames.contains('invoke-store')) {
+        db.close();
+        cb(null);
+        return;
+      }
+      cb(db);
+    };
+    req.onerror = function () { cb(null); };
+    req.onblocked = function () { cb(null); };
+  }
+
+  function readLanguage(cb) {
+    openInvoke(function (db) {
+      if (!db) { cb(null); return; }
       var get;
       try {
         get = db.transaction('invoke-store', 'readonly')
@@ -105,17 +130,14 @@
         catch (e) { cb(null); }
       };
       get.onerror = function () { cb(null); };
-    };
-    req.onerror = function () { cb(null); };
+    });
   }
 
   // фолбэк переключателя, когда стор ещё не готов: пишем язык прямо в
   // persisted-стейт — приложение подхватит его при следующей загрузке
   function writeLanguage(l) {
-    var req;
-    try { req = indexedDB.open('invoke'); } catch (e) { return; }
-    req.onsuccess = function () {
-      var db = req.result;
+    openInvoke(function (db) {
+      if (!db) return;
       var os;
       try { os = db.transaction('invoke-store', 'readwrite').objectStore('invoke-store'); }
       catch (e) { return; }
@@ -128,7 +150,7 @@
           os.put(JSON.stringify(doc), '@@invokeai-system');
         } catch (e) { /* не критично */ }
       };
-    };
+    });
   }
 
   // сменить язык интерфейса приложения: диспатч в редакс-стор приложения
