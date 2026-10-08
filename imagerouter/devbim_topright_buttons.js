@@ -21,6 +21,10 @@
  * Фоновые задачи — фикс 524: конвейер 2–6 мин не влезает в ~100-секундный
  * лимит Cloudflare-туннеля на длинный HTTP-ответ.
  *
+ * Тултипы кнопок (title при наведении) — по языку интерфейса (peTip/tdTip).
+ * В модалке 3D — до 2 поясняющих фото с подписями (контент загружает
+ * администратор в менеджере моделей: GET /api/v1/threed/modal-media).
+ *
  * Ряд очереди ищется локале-независимо: жёлтая (invokeYellow) кнопка
  * ~36px в верхней части панели → её контейнер 200px → родительский ряд
  * (flex, рядом chakra-numberinput — счётчик очереди). Группа вставляется
@@ -63,7 +67,15 @@
       stageBuild: 'Сборка IFC-модели', stageVerify: 'Самопроверка VLM',
       jobLost: 'Задача потеряна (перезапуск сервера?) — готовые модели во вкладке IFC',
       spent: 'потрачено',
-      needTab: 'Откройте вкладку Generate или Холст и повторите'
+      needTab: 'Откройте вкладку Generate или Холст и повторите',
+      // тултипы кнопок (title при наведении)
+      peTip: 'Улучшение промта: ваш текст и картинка (если приложена) ' +
+        'отправляются в специальную ИИ-модель — она перепишет промт ' +
+        'подробнее и на английском для более качественной генерации. ' +
+        'Результат можно отредактировать перед применением.',
+      tdTip: 'Из вашей картинки строится 3D-модель сцены. Измените ракурс ' +
+        'камеры в 3D-вьювере, затем верните изначальное фото — ИИ-рендер ' +
+        'восстановит сцену с новым ракурсом.'
     },
     en: {
       soon: '3D Design — coming soon',
@@ -84,7 +96,15 @@
       stageBuild: 'Building IFC model', stageVerify: 'VLM self-check',
       jobLost: 'Job lost (server restart?) — finished models in the IFC tab',
       spent: 'spent',
-      needTab: 'Open the Generate or Canvas tab and try again'
+      needTab: 'Open the Generate or Canvas tab and try again',
+      // button tooltips (hover title)
+      peTip: 'Prompt assistant: your text and image (if attached) are sent ' +
+        'to a special AI model that rewrites the prompt in rich English ' +
+        'detail for higher-quality generation. You can edit the result ' +
+        'before applying it.',
+      tdTip: 'Builds a 3D model of the scene from your image. Change the ' +
+        'camera angle in the 3D viewer, then bring back the original ' +
+        'photo — the AI render will restore the scene from the new angle.'
     }
   };
   var lang = 'ru';
@@ -139,7 +159,14 @@
     '#devbim-3d-go{height:36px;border:none;border-radius:4px;background:#A78BFA;color:#0B0C0E;' +
     'font:600 13px/1 inherit;cursor:pointer}' +
     '#devbim-3d-go:disabled{opacity:.55;cursor:default}' +
-    '#devbim-3d-status{min-height:16px;font-size:12px;color:#9aa3ad}';
+    '#devbim-3d-status{min-height:16px;font-size:12px;color:#9aa3ad}' +
+    /* поясняющие фото (загружаются админом в менеджере моделей) */
+    '.devbim-3d-photos{display:flex;gap:8px}' +
+    '.devbim-3d-photos figure{flex:1;margin:0;min-width:0;' +
+    'display:flex;flex-direction:column;gap:3px}' +
+    '.devbim-3d-photos img{width:100%;height:64px;object-fit:cover;' +
+    'display:block;border-radius:6px;border:1px solid #2b2f35;cursor:zoom-in}' +
+    '.devbim-3d-photos figcaption{color:#9aa3ad;font-size:11px;line-height:1.25}';
 
   var SPARK_SVG =
     '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">' +
@@ -180,17 +207,25 @@
     group = document.createElement('div');
     group.id = GROUP_ID;
 
-    var pe = mkBtn('devbim-tr-pe', 'Prompt Assistant', SPARK_SVG, 'Prompt Enhance');
+    var pe = mkBtn('devbim-tr-pe', 'Prompt Assistant', SPARK_SVG, t().peTip);
     pe.addEventListener('click', function () {
       var fn = window.__devbimPromptEnhance;
       if (typeof fn !== 'function' || !fn()) toast(t().needTab);
     });
 
-    var td = mkBtn('devbim-tr-3d', '3D Design', '', '3D Design', '3D');
+    var td = mkBtn('devbim-tr-3d', '3D Design', '', t().tdTip, '3D');
     td.addEventListener('click', function () { open3D(); });
 
     group.appendChild(pe);
     group.appendChild(td);
+  }
+
+  // Тултипы живут по языку интерфейса: обновляются вместе с lang.
+  function applyTitles() {
+    var pe = document.getElementById('devbim-tr-pe');
+    var td = document.getElementById('devbim-tr-3d');
+    if (pe) { pe.title = t().peTip; pe.setAttribute('aria-label', t().peTip); }
+    if (td) { td.title = t().tdTip; td.setAttribute('aria-label', t().tdTip); }
   }
 
   // Жёлтая кнопка Generate («Добавить в очередь» на холсте): invokeYellow —
@@ -270,7 +305,9 @@
   }
 
   function pollLanguage() {
-    readLanguage(function (l) { if (l && TEXTS[l]) lang = l; });
+    readLanguage(function (l) {
+      if (l && TEXTS[l] && l !== lang) { lang = l; applyTitles(); }
+    });
   }
 
   function init() {
@@ -382,6 +419,7 @@
       '<button class="devbim-3d-tile" data-s="scene"><span>🌇</span>' + t().scene + '</button>' +
       '</div>' +
       '<div class="devbim-3d-src"><img alt=""><span class="devbim-3d-badge">—</span></div>' +
+      '<div class="devbim-3d-photos" id="devbim-3d-photos" style="display:none"></div>' +
       '<div id="devbim-3d-hint" style="display:none">' + t().noSource + '</div>' +
       '<textarea id="devbim-3d-prompt" rows="3" placeholder="' + t().promptPhPlan.replace(/"/g, '&quot;') + '"></textarea>' +
       '<button id="devbim-3d-go">' + t().generate + '</button>' +
@@ -409,6 +447,35 @@
     S3.escHandler = function (e) { if (e.key === 'Escape') close3D(); };
     document.addEventListener('keydown', S3.escHandler);
     refresh3DSource();
+    load3DPhotos();
+  }
+
+  // Поясняющие фото модалки: до 2 штук с подписями, контент задаёт
+  // администратор в менеджере моделей (GET /api/v1/threed/modal-media).
+  // Нет фото / ошибка сети — блок остаётся скрытым, модалка как была.
+  function load3DPhotos() {
+    fetch('/api/v1/threed/modal-media').then(function (r) {
+      return r.ok ? r.json() : null;
+    }).then(function (j) {
+      var box = document.getElementById('devbim-3d-photos');
+      if (!box || box.children.length) return;
+      ((j && j.items) || []).slice(0, 2).forEach(function (it) {
+        if (!it || !it.url) return;
+        var fig = document.createElement('figure');
+        var img = document.createElement('img');
+        img.src = it.url;
+        img.alt = it.caption || '';
+        img.addEventListener('click', function () { window.open(it.url, '_blank'); });
+        fig.appendChild(img);
+        if (it.caption) {
+          var cap = document.createElement('figcaption');
+          cap.textContent = it.caption;
+          fig.appendChild(cap);
+        }
+        box.appendChild(fig);
+      });
+      if (box.children.length) box.style.display = 'flex';
+    }).catch(function () { /* без фото модалка не хуже */ });
   }
 
   var STAGE_KEYS = { analysis: 'stageAnalysis', build: 'stageBuild', verify: 'stageVerify' };

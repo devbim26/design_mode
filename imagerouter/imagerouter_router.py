@@ -13,6 +13,14 @@
     GET  /api/v1/imagerouter/upscale-models — модели апскейлинга, доступные
                                              пользователям (выбор администратора)
     PUT  /api/v1/imagerouter/upscale-models — сохранить выбор
+    GET  /api/v1/imagerouter/enhancer-model — модель улучшителя промтов
+                                              (Prompt Assistant) + каталог VLM
+    PUT  /api/v1/imagerouter/enhancer-model — сохранить выбор модели
+    POST /api/v1/imagerouter/enhance-test   — проверка улучшителя в менеджере
+                                              (промт + картинка -> улучшенный)
+    GET  /api/v1/imagerouter/model-marks   — пометки моделей (звёзды 1–5,
+                                             баннеры) и каталог баннеров
+    PUT  /api/v1/imagerouter/model-marks   — сохранить пометки
 
 Секреты читаются из .env в корне проекта (см. _load_env_file):
     IMAGEROUTER_API_KEY — ключ ImageRouter; имеет приоритет над ключом,
@@ -550,8 +558,78 @@ def _load_key() -> Optional[str]:
 
 
 def _enhancer_model() -> str:
+    return _load_enhancer_choice()[0]
+
+
+# --- Модель улучшителя промтов: выбор администратора в менеджере моделей ---
+# Цепочка (как THREED_MODEL): data/imagerouter_prompt_model.json ->
+# .env PROMPT_ENHANCER_MODEL -> дефолт. Читается при КАЖДОМ вызове — смена
+# модели в менеджере действует без перезапуска и без F5.
+
+def _prompt_model_store_path() -> Path:
+    return Path(get_config().root_path) / "data" / "imagerouter_prompt_model.json"
+
+
+def _load_enhancer_choice() -> "tuple[str, str]":
+    """(model, source): file — сохранённый выбор менеджера, env —
+    PROMPT_ENHANCER_MODEL, default — DEFAULT_ENHANCER_MODEL."""
+    try:
+        m = json.loads(
+            _prompt_model_store_path().read_text(encoding="utf-8")).get("model")
+        if isinstance(m, str) and m.strip():
+            return m.strip(), "file"
+    except Exception:
+        pass
     _ensure_env()
-    return (os.environ.get("PROMPT_ENHANCER_MODEL") or "").strip() or DEFAULT_ENHANCER_MODEL
+    env = (os.environ.get("PROMPT_ENHANCER_MODEL") or "").strip()
+    if env:
+        return env, "env"
+    return DEFAULT_ENHANCER_MODEL, "default"
+
+
+def _save_enhancer_choice(model: str) -> None:
+    p = _prompt_model_store_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"model": model}, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+# Каталог VLM (вход image, выход text) — СВОЙ запрос к /v3/models с
+# модальными фильтрами: основной GET /models фильтрует output=image
+# (генерация) и VLM не отдаёт (та же грабля, что у threed).
+# /v3/models отвечает ГОЛЫМ списком; {"data":[…]} принимаем как запасной
+# вариант. Кэш 10 минут.
+
+VLM_CATALOG_TTL_S = 600
+_vlm_catalog_cache: dict[str, Any] = {"ts": 0.0, "ids": []}
+
+
+def _fetch_vlm_ids(force: bool = False) -> list[str]:
+    now = time.time()
+    if not force and _vlm_catalog_cache["ids"] and now - _vlm_catalog_cache["ts"] < VLM_CATALOG_TTL_S:
+        return _vlm_catalog_cache["ids"]
+    ids: list[str] = []
+    try:
+        resp = requests.get(
+            MODELS_URL,
+            params={"input_modalities": "image", "output_modalities": "text",
+                    "limit": 500},
+            timeout=TIMEOUT_SHORT,
+        )
+        data = resp.json() if resp.status_code == 200 else []
+        items = data.get("data", []) if isinstance(data, dict) else \
+            (data if isinstance(data, list) else [])
+        for m in items:
+            arch = m.get("architecture") or {}
+            if "image" in (arch.get("input_modalities") or []) and \
+                    "text" in (arch.get("output_modalities") or []):
+                mid = m.get("id")
+                if isinstance(mid, str) and mid:
+                    ids.append(mid)
+    except Exception:
+        traceback.print_exc()
+    if ids:
+        _vlm_catalog_cache.update(ts=now, ids=ids)
+    return _vlm_catalog_cache["ids"]
 
 
 def _auth_headers(studio_user: "str | None" = None) -> dict[str, str]:
@@ -886,6 +964,111 @@ def put_main_models(body: MainModelsBody) -> dict:
             valid.append(mid)
     _save_main_selection(valid)
     return {"models": valid, "skipped": skipped}
+
+
+# --- Улучшитель промтов: модель VLM и проверка в менеджере моделей ---
+
+
+class EnhancerModelBody(BaseModel):
+    model: str = Field(min_length=1, max_length=200)
+
+
+class EnhanceTestBody(BaseModel):
+    prompt: str = Field(default="", max_length=8000)
+    image: Optional[str] = Field(default=None, max_length=14_000_000)  # dataURL
+
+
+@imagerouter_router.get("/enhancer-model")
+def get_enhancer_model() -> dict:
+    """Модель улучшителя промтов (кнопка «Prompt Assistant») + каталог VLM
+    для селектора менеджера (вход image, выход text)."""
+    model, source = _load_enhancer_choice()
+    return {"model": model, "source": source, "vlms": _fetch_vlm_ids()}
+
+
+@imagerouter_router.put("/enhancer-model")
+def put_enhancer_model(body: EnhancerModelBody) -> dict:
+    """Сохранить выбор (валидация по каталогу VLM; каталог недоступен —
+    сохраняем как есть, ошибка всплывёт при первом вызове)."""
+    m = body.model.strip()
+    ids = _fetch_vlm_ids(force=True)
+    if ids and m not in ids:
+        raise HTTPException(
+            status_code=400,
+            detail=f"{m} — не VLM (нужен вход image и выход text) или нет в каталоге")
+    _save_enhancer_choice(m)
+    return {"ok": True, "model": m}
+
+
+@imagerouter_router.post("/enhance-test")
+def enhance_test(body: EnhanceTestBody) -> dict:
+    """Проверка улучшателя в менеджере: промт (+опциональная картинка) ->
+    улучшенный промт ТЕМИ ЖЕ системным промтом, моделью и ключом, что у
+    пользователей (глобальный ключ инстанса). Ленивый импорт модуля
+    инвокций: тесты подменяют его в sys.modules, сервер берёт развёрнутый."""
+    if not body.prompt.strip() and not body.image:
+        raise HTTPException(status_code=400, detail="Введите промт или приложите картинку")
+    try:
+        from invokeai.app.invocations.devbim_prompt_enhancer import (
+            SYSTEM_ENHANCE, call_vlm, prepare_image)
+    except ImportError:
+        raise HTTPException(
+            status_code=503, detail="Модуль улучшителя не развёрнут (setup_imagerouter.py)")
+    urls: list[str] = []
+    if body.image:
+        from PIL import Image
+        try:
+            raw = base64.b64decode(body.image.split(",", 1)[-1])
+            urls = [prepare_image(Image.open(io.BytesIO(raw)))]
+        except Exception:
+            raise HTTPException(status_code=400, detail="Не удалось прочитать изображение")
+    try:
+        text = call_vlm(SYSTEM_ENHANCE, body.prompt, urls)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"prompt": text}
+
+
+# --- Пометки моделей (звёзды/баннеры): эндпоинты менеджера ---
+
+
+class ModelMarksBadgeBody(BaseModel):
+    label: str = Field(min_length=1, max_length=24)
+    color: str = "#4a5568"
+    title: str = Field(default="", max_length=200)
+
+
+class ModelMarksBody(BaseModel):
+    badges: dict[str, ModelMarksBadgeBody] = Field(default_factory=dict)
+    marks: dict[str, dict] = Field(default_factory=dict)
+
+
+@imagerouter_router.get("/model-marks")
+def get_model_marks() -> dict:
+    """Действующие пометки (звёзды 1–5 + баннеры) и каталог баннеров.
+    source: defaults — файл ещё не сохранялся, показаны встроенные дефолты."""
+    loaded = _load_marks()
+    if loaded is None:
+        return {
+            "badges": dict(_DEFAULT_BADGES),
+            "marks": {k: dict(v) for k, v in _DEFAULT_MARKS.items()},
+            "source": "defaults",
+        }
+    return {**loaded, "source": "file"}
+
+
+@imagerouter_router.put("/model-marks")
+def put_model_marks(body: ModelMarksBody) -> dict:
+    """Сохранить пометки и каталог баннеров (менеджер моделей). Валидация —
+    как при чтении файла: звёзды 0–5, баннеры только из каталога, пустые
+    записи отбрасываются. Идентификаторы моделей НЕ проверяются по каталогу
+    (модель может временно пропасть — пометка переживёт)."""
+    badges = _sanitize_badges_catalog({k: v.model_dump() for k, v in body.badges.items()})
+    if not badges:
+        badges = dict(_DEFAULT_BADGES)
+    marks = _sanitize_marks(body.marks, badges)
+    _save_marks(badges, marks)
+    return {"badges": badges, "marks": marks, "source": "file"}
 
 
 # ============================================================================

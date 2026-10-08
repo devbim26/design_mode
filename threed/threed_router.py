@@ -7,6 +7,11 @@
     GET  /api/v1/threed/jobs/{id} {jobId, status, stage, elapsed_s[, result|error]}
     GET  /api/v1/threed/model     {model, source, vlms:[...]}
     PUT  /api/v1/threed/model     {model} -> {ok}
+    GET  /api/v1/threed/modal-media            {items:[{slot, caption, url}]}
+    PUT  /api/v1/threed/modal-media            {items:[{slot, caption}]} -> {ok}
+    POST /api/v1/threed/modal-media/{slot}/image   {image: dataURL} -> {ok, url}
+    DELETE /api/v1/threed/modal-media/{slot}/image -> {ok}
+    GET  /api/v1/threed/modal-media/{slot}/image   — файл фото (для модалки)
 
 Модель-аналитик: data/imagerouter_threed_model.json -> .env THREED_MODEL ->
 дефолт openai/gpt-6-astra. Список VLM — свой запрос к /v3/models с модальным
@@ -1046,3 +1051,154 @@ def put_model(body: ModelBody, request: Request = None) -> dict:
         raise HTTPException(status_code=422, detail=str(e))
     _save_model_choice(body.model)
     return {"ok": True}
+
+
+# --- Поясняющие фото модалки 3D Design (загружает администратор в
+# менеджере моделей): до 2 картинок с подписями. Хранилище:
+# <root>/imagerouter_threed_modal.json {items:[{slot:1|2, caption, file}]}
+# + файлы <root>/threed_modal/<slot>.jpg (даунскейл до 1024, JPEG q85,
+# альфа на белый — как prepare_image энхансера). Чтение — всем (модалку
+# видят пользователи), запись — только админ (гейт как у PUT /model).
+
+MODAL_MEDIA_SLOTS = (1, 2)
+MODAL_PHOTO_SIDE = 1024
+MODAL_PHOTO_QUALITY = 85
+
+
+def _modal_media_store() -> Path:
+    return _data_dir() / "imagerouter_threed_modal.json"
+
+
+def _modal_media_dir() -> Path:
+    return _data_dir() / "threed_modal"
+
+
+def _load_modal_media() -> list[dict]:
+    """Записи хранилища (без проверки файлов): [{slot, caption, file}]."""
+    try:
+        items = json.loads(
+            _modal_media_store().read_text(encoding="utf-8")).get("items")
+    except Exception:
+        items = None
+    out: list[dict] = []
+    if isinstance(items, list):
+        for it in items:
+            if isinstance(it, dict) and it.get("slot") in MODAL_MEDIA_SLOTS:
+                out.append({"slot": int(it["slot"]),
+                            "caption": str(it.get("caption") or "")[:300],
+                            "file": str(it.get("file") or "")})
+    return sorted(out, key=lambda x: x["slot"])
+
+
+def _save_modal_media(items: list[dict]) -> None:
+    p = _modal_media_store()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"items": items}, ensure_ascii=False, indent=1),
+                 encoding="utf-8")
+
+
+def _modal_media_admin(request: "Request | None") -> None:
+    u = _studio_user(request)
+    if u is None:
+        return
+    from invokeai.app.api.routers import studio_store
+    if studio_store.effective_role(u) != "admin":
+        raise HTTPException(status_code=403, detail="Administrator only")
+
+
+class ModalMediaBody(BaseModel):
+    items: list[dict] = Field(default_factory=list, max_length=8)
+
+
+class ModalImageBody(BaseModel):
+    image: str = Field(min_length=32, max_length=14_000_000)  # dataURL ~10 МБ
+
+
+@threed_router.get("/modal-media")
+def get_modal_media() -> dict:
+    """Фото+подписи для модалки 3D (только слоты с реально существующим
+    файлом); url — путь эндпоинта картинки для <img> модалки."""
+    items = []
+    for it in _load_modal_media():
+        if it["file"] and (_modal_media_dir() / it["file"]).is_file():
+            items.append({"slot": it["slot"], "caption": it["caption"],
+                          "url": f"/api/v1/threed/modal-media/{it['slot']}/image"})
+    return {"items": items}
+
+
+@threed_router.put("/modal-media")
+def put_modal_media(body: ModalMediaBody, request: Request = None) -> dict:
+    """Сохранить подписи (файлы не трогает): [{slot, caption}]."""
+    _modal_media_admin(request)
+    cur = {it["slot"]: it for it in _load_modal_media()}
+    for it in body.items:
+        try:
+            slot = int(it.get("slot"))
+        except (TypeError, ValueError):
+            continue
+        if slot not in MODAL_MEDIA_SLOTS:
+            continue
+        cur.setdefault(slot, {"slot": slot, "file": "", "caption": ""})
+        cur[slot]["caption"] = str(it.get("caption") or "")[:300]
+    _save_modal_media([cur[s] for s in sorted(cur)])
+    return {"ok": True}
+
+
+@threed_router.post("/modal-media/{slot}/image")
+def post_modal_media_image(slot: int, body: ModalImageBody,
+                           request: Request = None) -> dict:
+    """Загрузить/заменить фото слота (dataURL png/jpeg/webp); подпись слота
+    сохраняется. Картинка приводится к JPEG <=1024px (место и трафик)."""
+    _modal_media_admin(request)
+    if slot not in MODAL_MEDIA_SLOTS:
+        raise HTTPException(status_code=400, detail="slot must be 1 or 2")
+    from PIL import Image
+    try:
+        raw = base64.b64decode(body.image.split(",", 1)[-1])
+        img = Image.open(io.BytesIO(raw))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Не удалось прочитать изображение")
+    img = img.convert("RGBA")
+    if img.width > MODAL_PHOTO_SIDE or img.height > MODAL_PHOTO_SIDE:
+        img.thumbnail((MODAL_PHOTO_SIDE, MODAL_PHOTO_SIDE))
+    bg = Image.new("RGBA", img.size, (255, 255, 255, 255))
+    d = _modal_media_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    fname = f"{slot}.jpg"
+    Image.alpha_composite(bg, img).convert("RGB").save(
+        d / fname, format="JPEG", quality=MODAL_PHOTO_QUALITY)
+    cur = {it["slot"]: it for it in _load_modal_media()}
+    cur[slot] = {"slot": slot, "file": fname,
+                 "caption": (cur.get(slot) or {}).get("caption", "")}
+    _save_modal_media([cur[s] for s in sorted(cur)])
+    return {"ok": True, "url": f"/api/v1/threed/modal-media/{slot}/image"}
+
+
+@threed_router.delete("/modal-media/{slot}/image")
+def delete_modal_media_image(slot: int, request: Request = None) -> dict:
+    """Убрать фото слота (подпись тоже — слот исчезает из модалки)."""
+    _modal_media_admin(request)
+    if slot not in MODAL_MEDIA_SLOTS:
+        raise HTTPException(status_code=400, detail="slot must be 1 or 2")
+    items = [it for it in _load_modal_media() if it["slot"] != slot]
+    for it in _load_modal_media():
+        if it["slot"] == slot and it["file"]:
+            try:
+                (_modal_media_dir() / it["file"]).unlink()
+            except OSError:
+                pass
+    _save_modal_media(items)
+    return {"ok": True}
+
+
+@threed_router.get("/modal-media/{slot}/image")
+def get_modal_media_image(slot: int):
+    """Само фото (для <img> модалки и превью менеджера)."""
+    for it in _load_modal_media():
+        if it["slot"] == slot and it["file"]:
+            p = _modal_media_dir() / it["file"]
+            if p.is_file():
+                from fastapi.responses import FileResponse
+                return FileResponse(p, media_type="image/jpeg",
+                                    headers={"Cache-Control": "max-age=120"})
+    raise HTTPException(status_code=404, detail="Нет фото для слота")

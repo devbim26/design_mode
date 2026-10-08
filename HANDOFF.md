@@ -3296,6 +3296,62 @@ invokeai==6.2.0` их нужно запускать повторно в поря
       `setup_navbar_labels.py` + node-import App-бандла + рестарт +
       F5 в браузере.
 
+70. **Тултипы кнопок ✨/3D Design + улучшитель промтов в менеджере +
+    фото в 3D-модалке** (08.10, ветка `user`; план
+    `docs/superpowers/plans/2026-10-08-pe-tooltips-manager-3dmedia.md`).
+    Запрос: при наведении на кнопки у Generate — внятные пояснения;
+    в менеджере моделей — выбор модели улучшателя и вывод улучшенного
+    промта для редактирования; в модалку 3D — 2 поясняющих фото,
+    загружаемых через менеджер.
+    - **Тултипы** (`devbim_topright_buttons.js`): title/aria-label кнопок
+      живут по языку интерфейса (peTip/tdTip в TEXTS, обновление в
+      pollLanguage — как тосты). ✨: текст+картинка уходят в спец.
+      ИИ-модель, промт переписывается подробнее/на английском для более
+      качественной генерации, результат редактируется (проверено по коду:
+      claude_expand_prompt шлёт промт + до 4 референсов в VLM). 3D:
+      строится 3D-модель сцены, ракурс камеры меняется во вьювере, затем
+      изначальное фото возвращается — ИИ-рендер восстанавливает сцену с
+      новым ракурсом.
+    - **Модель энхансера** (`imagerouter_router.py`): цепочка
+      `data/imagerouter_prompt_model.json` → .env PROMPT_ENHANCER_MODEL →
+      дефолт zai/glm-5.3-flash (паттерн THREED_MODEL; `_load_enhancer_
+      choice`, `_enhancer_model()` следует цепочке при каждом вызове —
+      смена в менеджере без F5/рестарта). GET/PUT
+      `/api/v1/imagerouter/enhancer-model` {model, source, vlms} — свой
+      запрос /v3/models (вход image/выход text, голый список ИЛИ
+      {"data":[…]}, кэш 10 мин — грабля как у threed); PUT валидирует,
+      пустой каталог не блокирует. POST `/enhance-test` {prompt, image?}
+      → {prompt} — ленивый импорт SYSTEM_ENHANCE/call_vlm/prepare_image
+      из развёрнутого модуля инвокций (тесты подменяют в sys.modules),
+      глобальный ключ инстанса, выбранная модель.
+    - **Менеджер** (`imagerouter.html`, sidecol): секция `#pesec`
+      «Улучшение промтов» — select+Save (как #threedsec) + тест-зона:
+      черновик-textarea, опциональная картинка (file→dataURL),
+      «Улучшить» → результат в РЕДАКТИРУЕМОМ textarea + «Копировать».
+      Секция `#mediasec` «3D Design — фото в модалке» — 2 слота
+      (upload/подпись/удалить, подписи — «Сохранить подписи»).
+    - **Медиа модалки 3D** (`threed_router.py`): хранилище
+      `<root>/imagerouter_threed_modal.json` {items:[{slot 1|2,
+      caption, file}]} + файлы `<root>/threed_modal/<slot>.jpg`
+      (даунскейл до 1024, JPEG q85, альфа на белый). GET /modal-media —
+      всем (модалка пользователя), POST/PUT/DELETE — гейт админа (как
+      PUT /model); GET /modal-media/{slot}/image — FileResponse
+      (Cache-Control 120 с). Слот без файла в списке НЕ отдаётся, но
+      подпись хранится (появится с фото). Виджет: `load3DPhotos()` в
+      open3D — `.devbim-3d-photos` (2 мини-фото 64px + подписи, клик —
+      открыть полноразмерно), нет фото/ошибка — блок скрыт.
+    - Проверено вживую 08.10: GET enhancer-model (реальный каталог VLM),
+      PUT валидацию, загрузка тестового фото → отдача image/jpeg →
+      удаление (дефолтные подписи «3D-модель — новый ракурс камеры» /
+      «ИИ-рендер по изначальному фото» оставлены в сторе), enhance-test
+      «дом у моря, закат» → полный английский промт от glm-5.3-flash.
+      Тесты: `tests/test_enhancer_media.py` (цепочка, PUT-валидация,
+      стаб enhance-test, медиа-слоты, статика). Бандлы НЕ тронуты —
+      F5 достаточно. Отладка: DOM `#devbim-3d-photos`; curl — вход
+      владельца (пустая почта + SITE_PASSWORD), кириллица в телах curl
+      из консоли Windows ЛОМАЕТСЯ — проверять python-клиентом.
+
+
 ```powershell
 cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
 .\venv\Scripts\python.exe .\setup_imagerouter.py        # применить патчи
