@@ -175,56 +175,70 @@ async def main():
     studio_store.set_setting("design_code_access_code", "tmp")
     assert studio_store.get_setting("design_code_access_code") == "tmp"
 
-    # --- цепочки design_code_router: персональный > общий > .env ---
+    # --- цепочки design_code_router (п.74: один дизайн-код = один клиент) ---
     studio_store.set_setting("design_code_url", "https://common.dev-bim.com/")
     studio_store.set_setting("design_code_access_code", "commoncode")
     studio_store.set_design_code(uid, "https://nw.dev-bim.com/", "nw2026")
 
-    assert dcr._access_code(uid) == "nw2026"          # персональный
+    # обычный пользователь: ТОЛЬКО персональные настройки
+    assert dcr._access_code(uid) == "nw2026"
     assert dcr._default_url(uid) == "https://nw.dev-bim.com/"
-    assert dcr._access_code() == "commoncode"         # аноним: общий
+    assert dcr._denied(uid) is False
+    # аноним и admin-local (владелец): общая цепочка settings → .env
+    assert dcr._access_code() == "commoncode"
     assert dcr._default_url() == "https://common.dev-bim.com/"
+    assert dcr._denied() is False and dcr._denied("admin-local") is False
+    assert dcr._access_code("admin-local") == "commoncode"
 
-    studio_store.set_design_code(uid, "", "")         # персональных нет — общие
-    assert dcr._access_code(uid) == "commoncode"
-    assert dcr._default_url(uid) == "https://common.dev-bim.com/"
+    # аккаунт-админ в users-режиме — тоже общая цепочка, не «закрыто»
+    studio_store.create_user("adm@x.ru", "", "admpass1234", "admin")
+    auid = studio_store.find_user_by_email("adm@x.ru")["user_id"]
+    assert dcr._denied(auid) is False and dcr._access_code(auid) == "commoncode"
 
-    studio_store.set_setting("design_code_url", "")   # общих нет — .env
+    # персональных нет → обычному пользователю вкладка ЗАКРЫТА (общие не подставляются)
+    studio_store.set_design_code(uid, "", "")
+    assert dcr._denied(uid) is True
+    assert dcr._access_code(uid) is None and dcr._default_url(uid) is None
+    st = dcr.auth_status(None)
+    assert st == {"protected": True, "default_url": "https://common.dev-bim.com/"}, st
+    st = dcr.auth_status(uid)
+    assert st == {"denied": True, "protected": True, "default_url": None}, st
+    try:
+        dcr.auth(dcr.AuthBody(url="https://nw.dev-bim.com/", code="commoncode"), x_studio_user=uid)
+        raise AssertionError("denied пользователь не должен открыть сайт")
+    except Exception as e:
+        assert getattr(e, "status_code", None) == 403, e
+
+    # settings пусты → админ/аноним на .env
+    studio_store.set_setting("design_code_url", "")
     studio_store.set_setting("design_code_access_code", "")
-    assert dcr._access_code(uid) == "envcode"
-    assert dcr._default_url(uid) == "https://env-site.dev-bim.com/"
     assert dcr._access_code() == "envcode"
+    assert dcr._default_url() == "https://env-site.dev-bim.com/"
+    assert dcr._access_code(auid) == "envcode"
 
-    # поля независимы: персональный код без персонального URL
-    studio_store.set_design_code(uid, "", "personal-code")
-    assert dcr._access_code(uid) == "personal-code"
-    assert dcr._default_url(uid) == "https://env-site.dev-bim.com/"
-
-    # --- password-режим: персональных настроек нет (заголовок не инжектится) ---
+    # password-режим: персональных нет (заголовок не инжектится), denied не бывает
     (tmp / ".env").write_text(
         "STUDIO_AUTH_MODE=password\nSITE_PASSWORD=p\nDESIGN_CODE_ACCESS_CODE=envcode\n",
         encoding="utf-8")
     studio_store.set_design_code(uid, "https://nw.dev-bim.com/", "nw2026")
     assert dcr._user_cfg(uid) is None, "в password-режиме персональные настройки не действуют"
-    assert dcr._access_code(uid) == "envcode"
+    assert dcr._denied(uid) is False and dcr._access_code(uid) == "envcode"
     (tmp / ".env").write_text(
         "STUDIO_AUTH_MODE=users\nSITE_PASSWORD=p\nDESIGN_CODE_ACCESS_CODE=envcode\n",
         encoding="utf-8")
 
-    # --- admin-local без строки в users — работает на общих ---
-    assert dcr._user_cfg("admin-local") is None
-    assert dcr._access_code("admin-local") == "envcode"
-
     # --- POST /auth с заголовком пользователя: персональный код проверяется ---
     studio_store.set_design_code(uid, "", "personal-code")
-    body = dcr.AuthBody(url="https://nw.dev-bim.com/", code="personal-code")
-    r = dcr.auth(body, x_studio_user=uid)
+    r = dcr.auth(dcr.AuthBody(url="https://nw.dev-bim.com/", code="personal-code"),
+                 x_studio_user=uid)
     assert r["ok"] is True and r["protected"] is True, r
     try:
-        dcr.auth(dcr.AuthBody(url="https://nw.dev-bim.com/", code="commoncode"), x_studio_user=uid)
+        dcr.auth(dcr.AuthBody(url="https://nw.dev-bim.com/", code="envcode"), x_studio_user=uid)
         raise AssertionError("чужой код не должен проходить")
     except Exception as e:
         assert getattr(e, "status_code", None) == 401, e
+    # поля независимы в пределах пользователя: персональный код без URL — URL пуст
+    assert dcr._default_url(uid) is None
 
     # --- admin-панель: ключевые конструкции страницы ---
     page = site_auth._ADMIN_PAGE

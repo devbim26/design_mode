@@ -99,6 +99,11 @@ def main():
                  'id="btnReload"', 'id="btnTab"', 'id="btnChange"', "sessionStorage"):
         assert frag in page, frag
 
+    # --- п.74: пользователь без персонального дизайн-кода — карточка вместо формы ---
+    assert 'id="deniedCard"' in page and "showDenied" in page and "status.denied" in page, \
+        "GET /auth c denied:true должен показывать «доступ не выдан» без формы"
+    assert "form.hidden = true" in page, "карточка «не выдан» скрывает форму ввода"
+
     # --- нижняя панель: фрагмент сайта -> холст/ассеты (как в PDF-вьювере) ---
     for frag in ('id="capbar"', 'id="btnCapture"', 'id="btnToCanvas"', 'id="btnToAssets"',
                  'id="btnCapCancel"', 'id="freeze"', 'id="freezeCanvas"', 'id="selLayer"',

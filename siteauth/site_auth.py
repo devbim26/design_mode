@@ -1011,8 +1011,9 @@ _ADMIN_PAGE = """<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8">
     <input id="dcCode" class="narrow" placeholder="код доступа (пусто — без кода)">
     <button id="dcSave">Сохранить</button>
   </div>
-  <div class="hint">Адрес и код вкладки «Design Code» по умолчанию — для владельца и пользователей
-    без персональных настроек. Пустой код — вкладка не спрашивает код.</div>
+  <div class="hint">Действуют для владельца и админов (и password-компаний). Обычным
+    пользователям дизайн-код выдаётся только персонально — без персональных настроек
+    вкладка закрыта. Пустой код — вкладка не спрашивает код.</div>
   <div class="srow">
     <b>Пароль владельца (вход):</b>
     <input id="pw1" class="narrow" type="password" placeholder="новый пароль (8+ символов)">
@@ -1150,9 +1151,9 @@ function openDcModal(u) {
   dcUser = u;
   document.getElementById('dcmodal-title').textContent = 'Design Code — ' + u.email;
   document.getElementById('dcmodal-hint').textContent =
-    'Общие настройки сейчас: ' + (dcGlobal.url || 'адрес не задан') +
-    ' · код ' + (dcGlobal.code ? 'задан' : 'не задан') +
-    '. Пустые поля — пользователь работает на общих.';
+    'Персональный дизайн-код этого клиента: без персонального кода вкладка «Design Code» ' +
+    'у него закрыта. Общие (для владельца/админов): ' + (dcGlobal.url || 'адрес не задан') +
+    ' · код ' + (dcGlobal.code ? 'задан' : 'не задан') + '.';
   document.getElementById('dcMUrl').value = u.dc_url || '';
   document.getElementById('dcMCode').value = u.dc_code || '';
   dcModal.style.display = 'flex';
@@ -1169,10 +1170,10 @@ document.getElementById('dcMClear').onclick = function () {
 // ============ Общие настройки (Design Code / пароль владельца / ключ IR) ============
 fetch('/admin/api/settings/designcode').then(r => r.json()).then(s => {
   dcGlobal = s;
-  // тултипы «— общие —» могут отрисоваться раньше этого ответа — обновляем
+  // тултипы «— общие —» (админы) могут отрисоваться раньше этого ответа — обновляем
   document.querySelectorAll('#t .dccell button').forEach(function (b) {
-    if (b._u && !b._u.dc_url && !b._u.dc_code)
-      b.title = 'Персональных настроек нет, действуют общие: ' + (s.url || 'адрес не задан') +
+    if (b._u && !b._u.dc_url && !b._u.dc_code && b._u.effective_role === 'admin')
+      b.title = 'Админ: действуют общие настройки: ' + (s.url || 'адрес не задан') +
         ' · код ' + (s.code ? 'задан' : 'не задан');
   });
   document.getElementById('dcUrl').value = s.url || '';
@@ -1222,10 +1223,14 @@ fetch('/admin/api/users').then(r => r.json()).then(d => {
       btnDc.className = 'dc-personal';
       btnDc.title = (u.dc_url || 'персональный URL не задан') +
         ' · персональный код ' + (u.dc_code ? 'задан' : 'не задан');
-    } else {
+    } else if (u.effective_role === 'admin') {
       btnDc.textContent = '— общие —';
-      btnDc.title = 'Персональных настроек нет, действуют общие: ' +
+      btnDc.title = 'Админ: действуют общие настройки: ' +
         (dcGlobal.url || 'адрес не задан') + ' · код ' + (dcGlobal.code ? 'задан' : 'не задан');
+    } else {
+      btnDc.textContent = '— закрыто —';
+      btnDc.title = 'Дизайн-код не выдан: вкладка «Design Code» у пользователя закрыта. ' +
+        'Задайте персональные URL и код, чтобы открыть.';
     }
     btnDc.onclick = () => openDcModal(u);
     btnDc._u = u;
