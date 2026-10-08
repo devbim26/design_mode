@@ -14,7 +14,9 @@ ImageRouter; режимы `password`/`sso` сохранены) и
 `pip install --force-reinstall invokeai==6.2.0` применять в порядке:
 `rebrand_devbim.py` → `setup_imagerouter.py` → `setup_ifcviewer.py` →
 `setup_pdfviewer.py` → `setup_designcode.py` → `setup_threed.py` →
-`setup_site_auth.py` → `setup_style_presets.py`.
+`setup_site_auth.py` → `setup_style_presets.py` →
+`setup_navbar_labels.py` (строго последним: прячет кнопку Workflows —
+якорь вставки вкладки IFC).
 Все — идемпотентны.
 
 ## Где что
@@ -39,6 +41,8 @@ ImageRouter; режимы `password`/`sso` сохранены) и
 - `threed/` — 3D-генерация по картинке (кнопка «3D Design»: VLM-аналитик
   → JSON-сцена → сборка IFC4) — роутер/сценарии/сборщик + `setup_threed.py`
   (деплой после designcode).
+- `setup_navbar_labels.py` — подписи под пиктограммами левой рейки +
+  поясняющие тултипы; прячет Workflows (деплой строго последним).
 - `company_manager.py`, `create_company.py`, `start_company.bat`,
   `stop_company.py`, `list_companies.py` — компании-лицензиаты
   (экземпляр на компанию, порты 9100+).
