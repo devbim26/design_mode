@@ -4,9 +4,10 @@
 с ребрендингом под **DevBIM** («Dev» — чёрный, «BIM» — голубой `#38BDF8`,
 ссылки — на `devbim.com`).
 
-Корневая папка проекта (далее `<ROOT>`):
-`C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI`.
-Проект перенесён 19.08.2026 из `C:\InvokeAI` — см. «Перенос проекта».
+Корневая папка проекта (далее `<ROOT>`): `C:\PROJECTS\InvokeAI`.
+Проект перенесён 19.08.2026 из `C:\InvokeAI`, а 07.10.2026 — на новый
+сервер (в `C:\PROJECTS\InvokeAI`); см. «Перенос проекта» и
+«Переезд на другой сервер».
 
 ## Компании (лицензии)
 
@@ -106,7 +107,7 @@
 ## Установка (с нуля)
 
 ```powershell
-cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI"
+cd "C:\PROJECTS\InvokeAI"
 python -m venv venv                     # Python 3.11
 .\venv\Scripts\python.exe -m pip install --upgrade pip
 .\venv\Scripts\python.exe -m pip install "invokeai[cpu]" --use-pep517
@@ -157,8 +158,8 @@ InvokeAI не поддерживается и отвергается валид�
 ### Запуск бэкенда напрямую
 
 ```powershell
-cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI"
-$env:INVOKEAI_ROOT="C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\data"
+cd "C:\PROJECTS\InvokeAI"
+$env:INVOKEAI_ROOT="C:\PROJECTS\InvokeAI\data"
 .\venv\Scripts\python.exe -u -c "from invokeai.app.run_app import run_app; run_app()"
 ```
 
@@ -169,8 +170,8 @@ $env:INVOKEAI_ROOT="C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\Inv
 стандартный вариант:
 
 ```powershell
-cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI"
-$env:INVOKEAI_ROOT="C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\data"
+cd "C:\PROJECTS\InvokeAI"
+$env:INVOKEAI_ROOT="C:\PROJECTS\InvokeAI\data"
 .\venv\Scripts\invokeai-web.exe
 ```
 
@@ -178,9 +179,13 @@ $env:INVOKEAI_ROOT="C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\Inv
 
 ## Перенос проекта
 
-19.08.2026 проект перенесён из `C:\InvokeAI` в текущую папку
+19.08.2026 проект перенесён из `C:\InvokeAI` в папку на рабочем ПК
 (`venv`, `data`, `.git`, `dist_original_backup` — всё целиком).
-Последствия и что с этим делать:
+07.10.2026 — переезд на новый сервер: проект живёт в `C:\PROJECTS\InvokeAI`,
+`venv` пересоздан с нуля (exe-заглушки в `venv\Scripts\` живы), патчи пакета
+перегнаны setup-скриптами. Опыт и грабли — `docs/MIGRATION.md`.
+
+Последствия первого переноса и что с ними делать:
 
 - **Exe-заглушки в `venv\Scripts\` сломаны.** В Windows venv непереносим:
   в каждом `*.exe` (invokeai-web.exe и т.п.) зашит абсолютный путь к
@@ -193,6 +198,37 @@ $env:INVOKEAI_ROOT="C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\Inv
   из любого расположения проекта.
 - `INVOKEAI_ROOT` теперь указывает на новую папку `data` (см. «Запуск»).
 
+## Переезд на другой сервер
+
+Полный чек-лист с командами — **`docs/MIGRATION.md`** (написан по факту
+переезда 07.10.2026, включая восстановление туннелей). Кратко:
+
+**Что переносится вручную** (в git не входит):
+
+| Что | Зачем |
+|---|---|
+| `data\` целиком (~3 ГБ) | БД пользователей `data\data\studio.sqlite` (не перепутать с пустым огрызком `data\studio.sqlite`), галерея, IFC/PDF по пользователям, `invokeai.yaml` |
+| `.env` корня | Все секреты: ключ ImageRouter, `ADMIN_PASSWORD`, `SITE_PASSWORD`, секреты сессий, код Design Code |
+| `%USERPROFILE%\.cloudflared\` | Туннель design.dev-bim.com: `cert.pem`, `config-design.yml`, credentials-JSON |
+| `companies.json` + `companies\` | Только если есть компании-лицензиаты (сейчас пусто) |
+
+**Что пересоздаётся на новом сервере**: `venv\` (в Windows venv непереносим —
+пути зашиты в exe; Python 3.11, `pip install invokeai==6.2.0 ifcopenshell
+shapely matplotlib`) и `.git` (клонируется заново с рабочей веткой `user`).
+Затем к свежему пакету применяются setup-скрипты строго по порядку:
+`rebrand_devbim.py` → `setup_imagerouter.py` → `setup_ifcviewer.py` →
+`setup_pdfviewer.py` → `setup_designcode.py` → `setup_threed.py` →
+`setup_site_auth.py` → `setup_style_presets.py` →
+`setup_navbar_labels.py` (**строго последним** — прячет Workflows, якорь
+вкладки IFC).
+
+Порядок переезда: закоммитить и запушить всё → остановить стек
+(`launch\stop-system-design.bat`) → выгрузить данные → поднять на новом
+сервере и прогнать смоук-тесты (`tests\test_threed.py`,
+`tests\test_userauth_login.py`) → убедиться, что design.dev-bim.com отвечает
+с нового сервера, и только потом выключать старый (два живых экземпляра на
+одном туннеле = расхождение БД пользователей).
+
 ## Ребрендинг
 
 Скрипт правит собранный фронтенд в `venv/Lib/site-packages/invokeai/frontend/web/dist`
@@ -201,7 +237,7 @@ $env:INVOKEAI_ROOT="C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\Inv
 так что команда одна и та же из любого расположения проекта:
 
 ```powershell
-cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI"
+cd "C:\PROJECTS\InvokeAI"
 .\venv\Scripts\python.exe .\rebrand_devbim.py
 ```
 
@@ -403,7 +439,7 @@ API бэкенда (Swagger: `/docs`): `GET /api/v1/imagerouter/status`,
 ### Применение и откат
 
 ```powershell
-cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI"
+cd "C:\PROJECTS\InvokeAI"
 .\venv\Scripts\python.exe .\setup_imagerouter.py   # применить (идемпотентно)
 ```
 
@@ -765,7 +801,7 @@ web-ifc 0.0.77 + camera-controls 3.1.2. Ассеты в `ifc/assets/`:
 ### Применение и откат
 
 ```powershell
-cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI"
+cd "C:\PROJECTS\InvokeAI"
 .\venv\Scripts\python.exe .\setup_ifcviewer.py   # применить (идемпотентно)
 ```
 
@@ -848,7 +884,7 @@ PDF-документов и нарезка фрагментов в картин�
 ### Применение и откат
 
 ```powershell
-cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI"
+cd "C:\PROJECTS\InvokeAI"
 .\venv\Scripts\python.exe .\setup_pdfviewer.py   # применить (идемпотентно)
 ```
 
@@ -935,7 +971,7 @@ PDF/IFC) или **«💾 To Assets»** (вкладка «Assets» галереи
 ### Применение и откат
 
 ```powershell
-cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI"
+cd "C:\PROJECTS\InvokeAI"
 .\venv\Scripts\python.exe .\setup_designcode.py   # применить (идемпотентно)
 ```
 
@@ -1099,7 +1135,7 @@ IfcFurnishingElement с типом и цветом (кровать, диван, 
 ### Применение и откат
 
 ```powershell
-cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI"
+cd "C:\PROJECTS\InvokeAI"
 .\venv\Scripts\python.exe .\setup_threed.py   # применить (идемпотентно)
 ```
 

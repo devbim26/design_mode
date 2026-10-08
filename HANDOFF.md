@@ -3385,9 +3385,28 @@ invokeai==6.2.0` их нужно запускать повторно в поря
       аккаунт отозван (user_manager revoke). Тесты:
       `tests/test_admin_gear_role.py` (5 блоков).
 
+72. **Миграционная готовность после переезда 07.10** (08.10; запрос
+    пользователя «подготовь систему к переезду на другой сервер»).
+    README: новый раздел «Переезд на другой сервер» (что переносится
+    вручную / что пересоздаётся / порядок setup-скриптов), все команды
+    переведены с мёртвого пути Lenovo на текущий корень
+    `C:\PROJECTS\InvokeAI` (12 вхождений), «Перенос проекта» дополнен
+    фактом переезда 07.10. docs/MIGRATION.md актуализирован по живому
+    состоянию сервера: рабочая ветка теперь `user` (user_control
+    заморожена), в pip-строку добавлен `shapely==2.1.2`, в цепочку
+    патчей добавлен `setup_navbar_labels.py` СТРОГО последним (документ
+    писался до появления скрипта — переезд по старому списку остался бы
+    без подписей рейки и со скрытым якорем IFC), размер data 2.9 ГБ,
+    новый раздел «Соседние сервисы»: в `~/.cloudflared` 13 конфигов
+    туннелей других сервисов хоста (nw:8030, drawings-analyzer:8020,
+    docx-gen, credits и пр.) — при переезде всего сервера нести папку
+    целиком и не менять origin-порты. Версии пакетов сверены с живым
+    venv 08.10 (invokeai 6.2.0, torch 2.7.1, numpy 1.26.4,
+    pillow 12.3.0, ifcopenshell 0.8.5, shapely 2.1.2, matplotlib 3.11.1).
+
 
 ```powershell
-cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
+cd "C:\PROJECTS\InvokeAI"
 .\venv\Scripts\python.exe .\setup_imagerouter.py        # применить патчи
 .\venv\Scripts\python.exe .\setup_ifcviewer.py          # вкладка IFC (идемпотентно)
 .\venv\Scripts\python.exe .\setup_pdfviewer.py          # вкладка PDF (идемпотентно)
@@ -3414,7 +3433,7 @@ cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
 #   venv\Scripts\python.exe -c "import re,pathlib;s=pathlib.Path('ifc/ifcviewer.html').read_text(encoding='utf-8');pathlib.Path('ifc/_chk.mjs').write_text(re.search(r'<script type=\"module\">(.*?)</script>',s,re.S).group(1),encoding='utf-8')"
 #   node --check ifc/_chk.mjs && del ifc\_chk.mjs
 # проверить, что index-бандл парсится (после патчей навигации!):
-node -e "import('file:///C:/Users/Lenovo/Desktop/проект SOFT_2/Дизайн/InvokeAI/InvokeAI/venv/Lib/site-packages/invokeai/frontend/web/dist/assets/index-BFW2ubNY.js').catch(e=>console.log(e.message))"
+node -e "import('file:///C:/PROJECTS/InvokeAI/venv/Lib/site-packages/invokeai/frontend/web/dist/assets/index-BFW2ubNY.js').catch(e=>console.log(e.message))"
 # перезапустить сервер (launch/_restart_server.ps1), затем:
 # 1) GET http://127.0.0.1:9090/api/v2/models/ — модели imagerouter/ в списке
 # 2) GET /api/v1/imagerouter/status — key_source:env; POST admin-auth — пароль

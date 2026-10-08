@@ -7,10 +7,10 @@
 
 | Переносится вручную | Почему |
 |---|---|
-| `data\` целиком (~2.8 ГБ) | БД пользователей `data\data\studio.sqlite`, файлы IFC/PDF по пользователям (`data\ifc\<слаг>\`, `data\pdf\<слаг>\`), галерея `outputs\`, локальные модели `models\`, конфиг `invokeai.yaml` |
+| `data\` целиком (~2.9 ГБ) | БД пользователей `data\data\studio.sqlite`, файлы IFC/PDF по пользователям (`data\ifc\<слаг>\`, `data\pdf\<слаг>\`), галерея `outputs\`, локальные модели `models\`, конфиг `invokeai.yaml` |
 | `.env` корня | Секреты (в git не входит): `IMAGEROUTER_API_KEY`, `ADMIN_PASSWORD`, `SITE_PASSWORD`, `DESIGN_CODE_ACCESS_CODE`, `DESIGN_CODE_URL`, `STUDIO_AUTH_MODE`, `STUDIO_SESSION_TTL`, `STUDIO_FRAME_ANCESTORS`, `STUDIO_SESSION_SECRET` |
-| `%USERPROFILE%\.cloudflared\` | Туннель design.dev-bim.com: `cert.pem`, `config-design.yml`, credentials-JSON туннелей, `cloudflared.exe` |
-| `companies.json` + `companies\` | Только если созданы компании-лицензиаты (на 07.10.2026 — пусто, `[]`) |
+| `%USERPROFILE%\.cloudflared\` | Туннель design.dev-bim.com: `cert.pem`, `config-design.yml`, credentials-JSON туннелей, `cloudflared.exe`. ВАЖНО: в папке лежат конфиги и креды ВСЕХ туннелей хоста (см. ниже «Соседние сервисы») |
+| `companies.json` + `companies\` | Только если созданы компании-лицензиаты (на 08.10.2026 — пусто, `[]`) |
 
 Пересоздаётся на новом сервере (не переносить): `venv\` (пути зашиты),
 `.git` (клонируется заново), `logs\`, `__pycache__`.
@@ -29,7 +29,8 @@
 ### Старый сервер
 
 1. Убедиться, что всё закоммичено и запушено:
-   `git status` — чисто; запушить ветки `main` и `user_control`
+   `git status` — чисто; запушить ветки `main` и `user`
+   (рабочая ветка с 07.10; прежняя `user_control` заморожена)
    в `origin` (https://github.com/devbim26/design_mode.git).
 2. Остановить систему: `launch\stop-system-design.bat`
    (threed-джобы живут в памяти — их статусы при переезде теряются,
@@ -46,18 +47,21 @@
 4. Клонировать репозиторий и встать на рабочую ветку:
    ```
    git clone https://github.com/devbim26/design_mode.git InvokeAI
-   cd InvokeAI && git switch user_control
+   cd InvokeAI && git switch user
    ```
-5. Создать venv и поставить зависимости (версии — как на старом сервере):
+5. Создать venv и поставить зависимости (версии — как на старом сервере,
+   проверено 08.10.2026):
    ```
    py -3.11 -m venv venv
-   venv\Scripts\pip install invokeai==6.2.0 ifcopenshell==0.8.5 matplotlib==3.11.1
+   venv\Scripts\pip install invokeai==6.2.0 ifcopenshell==0.8.5 shapely==2.1.2 matplotlib==3.11.1
    ```
    (torch 2.7.1 CPU, numpy 1.26.4, pillow 12.3.0 подтянутся по зависимостям;
    при расхождении свериться со старым сервером: `pip freeze`.)
 6. Вернуть данные: `data\`, `.env` — в корень клона;
    `.cloudflared` — в `%USERPROFILE%`.
-7. Применить патчи к пакету в venv (идемпотентны, порядок обязателен):
+7. Применить патчи к пакету в venv (идемпотентны, порядок обязателен;
+   `setup_navbar_labels.py` — СТРОГО последним: прячет кнопку Workflows —
+   якорь вставки вкладки IFC):
    ```
    venv\Scripts\python rebrand_devbim.py
    venv\Scripts\python setup_imagerouter.py
@@ -67,6 +71,7 @@
    venv\Scripts\python setup_threed.py
    venv\Scripts\python setup_site_auth.py
    venv\Scripts\python setup_style_presets.py
+   venv\Scripts\python setup_navbar_labels.py
    ```
 8. Смоук-проверка перед стартом:
    ```
@@ -108,6 +113,20 @@
   — допустима только рантайм-ошибка, не SyntaxError.
 - Старый сервер держать выключенным после переключения: два живых
   экземпляра на одном туннеле = расхождение БД пользователей.
+
+## Соседние сервисы на этом хосте (переезд ВСЕГО сервера)
+
+Кроме DevBIM Image Studio (:9090), на хосте живут другие сервисы со
+своими Cloudflare-туннелями (конфиги `%USERPROFILE%\.cloudflared\config-*.yml`):
+сайт «Северный Берег» nw.dev-bim.com (репозиторий `..\North waterfront`,
+порт 8030, перезапуск `_restart_nw.ps1` оттуда), Drawings Analyzer (8020),
+а также chat-doc-v2, credits, devbim-reg, documents-qa, docx-gen,
+drawings-chat, expertise-qa, glm-poster, zsearch. Переезд только DevBIM —
+нести `cert.pem` + `config-design.yml` + credentials туннеля design
+(+ nw, если сайт дизайн-кода должен остаться рядом). Переезд всего сервера —
+нести всю папку `.cloudflared` и репозитории сервисов; origin-порты не
+менять (зашиты в конфиги туннелей), проверить, что на новом хосте они
+свободны.
 
 ## Восстановление при неполной переноске (опыт переезда 2026-10-07)
 
