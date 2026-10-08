@@ -243,10 +243,8 @@ def _users_login_page(error: str = "") -> bytes:
 <input id="email" type="email" name="email" autocomplete="username" autofocus>
 <label for="password">Пароль</label>
 <input id="password" type="password" name="password" autocomplete="current-password">
-<label for="token">Токен ImageRouter <span style="color:#5A6474">(необязательно, если уже сохранён)</span></label>
-<input id="token" type="password" name="token" autocomplete="off" placeholder="sk-...">
 <button type="submit">Войти</button></form>
-<p style="font-size:12px;color:#5A6474;margin-top:14px">Забыли пароль или токен?
+<p style="font-size:12px;color:#5A6474;margin-top:14px">Забыли пароль?
 Обратитесь к администратору студии.</p>""")
 
 
@@ -373,7 +371,8 @@ class SiteAuthMiddleware:
                 "Path=/; HttpOnly; SameSite=Lax")
 
     async def _handle_users_login(self, scope, receive, send) -> None:
-        """Режим users: форма «почта + пароль + токен IR (необязательно)».
+        """Режим users: форма «почта + пароль». Токен ImageRouter пользователь
+        НЕ вводит — его задаёт администратор (CLI user_manager.py / админ-панель).
         Пустая почта + SITE_PASSWORD — вход владельца (admin-local)."""
         if scope.get("method", "GET").upper() == "GET":
             await _send_html(send, 200, _users_login_page())
@@ -382,7 +381,6 @@ class SiteAuthMiddleware:
         form = parse_qs(body.decode("utf-8", "replace"))
         email = (form.get("email") or [""])[0].strip()
         password = (form.get("password") or [""])[0]
-        token = (form.get("token") or [""])[0].strip()
         if not _session_secret():
             await _send_html(send, 500, _users_login_page(
                 "Сервер не настроен: задайте STUDIO_SESSION_SECRET в .env и перезапустите"))
@@ -402,12 +400,6 @@ class SiteAuthMiddleware:
         if u.get("revoked"):
             await _send_html(send, 403, _users_login_page("Учётная запись заблокирована"))
             return
-        if token:
-            ok, err = await _validate_ir_token(token)
-            if not ok:
-                await _send_html(send, 401, _users_login_page(err))
-                return
-            studio_store.set_ir_token(u["user_id"], token)
         await _redirect(send, "/", set_cookie=_session_cookie(u["user_id"]))
 
     async def _handle_me(self, send, user: str) -> None:

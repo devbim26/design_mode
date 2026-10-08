@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""Режим users: страница входа, логин по email/паролю, токен IR, сессия.
+"""Режим users: страница входа, логин по email/паролю, сессия.
+Токен IR через форму входа не вводится (только администратор).
 
 Запуск: venv\\Scripts\\python.exe tests\\test_userauth_login.py
 """
@@ -94,23 +95,13 @@ async def main():
     studio_store.create_user("rev@x.ru", "Рев", "parol12345", "user")
     studio_store.set_revoked(studio_store.find_user_by_email("rev@x.ru")["user_id"], True)
 
-    # подмена сетевой проверки токена
-    saved_val = site_auth._validate_ir_token
-
-    async def fake_ok(t):
-        return True, ""
-
-    async def fake_bad(t):
-        return False, "Токен ImageRouter отклонён — проверьте ключ"
-
-    site_auth._validate_ir_token = fake_ok
-
-    # 1) страница входа: три поля
+    # 1) страница входа: два поля, поля токена НЕТ
     r = await call("GET", "/auth/login")
     assert r.status == 200, r.status
     page = r.body().decode("utf-8")
-    for label in ("Почта", "Пароль", "Токен ImageRouter"):
+    for label in ("Почта", "Пароль"):
         assert label in page, label
+    assert "Токен ImageRouter" not in page and 'name="token"' not in page, page
 
     # 2) неверный пароль
     r = await call("POST", "/auth/login", form(email="user@x.ru", password="nope"))
@@ -154,17 +145,13 @@ async def main():
     r = await call("POST", "/auth/login", form(email="rev@x.ru", password="parol12345"))
     assert r.status == 403 and "заблокирована" in r.body().decode("utf-8"), r.status
 
-    # 7) токен: отклонён -> 401; принят -> сохранён в профиле
-    site_auth._validate_ir_token = fake_bad
+    # 7) токен из формы входа игнорируется: вход проходит, токен НЕ сохраняется
+    #    (токен задаёт только администратор — CLI / админ-панель)
     r = await call("POST", "/auth/login",
                    form(email="tok@x.ru", password="parol12345", token="sk-bad"))
-    assert r.status == 401 and "Токен" in r.body().decode("utf-8"), r.status
-    site_auth._validate_ir_token = fake_ok
-    r = await call("POST", "/auth/login",
-                   form(email="tok@x.ru", password="parol12345", token="sk-good"))
     assert r.status == 303, r.status
     assert studio_store.get_ir_token(
-        studio_store.find_user_by_email("tok@x.ru")["user_id"]) == "sk-good"
+        studio_store.find_user_by_email("tok@x.ru")["user_id"]) is None
 
     # 8) вход владельца: пустая почта + SITE_PASSWORD -> admin-local
     r = await call("POST", "/auth/login", form(email="", password="owner-pass"))
@@ -189,7 +176,6 @@ async def main():
     assert r.status == 500 and "STUDIO_SESSION_SECRET" in r.body().decode("utf-8"), r.status
     (tmp / ".env").write_text(ENV_TEXT, encoding="utf-8")
 
-    site_auth._validate_ir_token = saved_val
     print("OK")
 
 

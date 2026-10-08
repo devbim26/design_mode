@@ -78,7 +78,8 @@ def main() -> None:
         print(f"Создан пользователь: {u['email']} (роль {u['role']}, id {u['user_id']})")
         if not args.password:
             print(f"Сгенерированный пароль: {pw}")
-        print("Передайте пользователю пароль и его токен ImageRouter.")
+        print("Передайте пользователю пароль. Токен ImageRouter пользователю не нужен "
+              "(хранится на сервере, вход — только почта и пароль).")
     elif args.cmd == "list":
         rows = studio_store.list_users()
         if not rows:
