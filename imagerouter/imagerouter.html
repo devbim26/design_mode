@@ -104,6 +104,18 @@
   }
   .model.up .up-move{padding:1px 7px; font-size:12px; line-height:1.4}
   .model .id .desc{display:block; color:var(--muted); font-size:11px; line-height:1.3; margin-top:1px; white-space:normal}
+  /* Звёзды и баннеры моделей */
+  #marks-models .model{cursor:default; align-items:center; flex-wrap:wrap}
+  #marks-models .model .id{flex:1 1 160px}
+  #marks-models .model .chk{font-size:11px}
+  .mk-stars{padding:3px 6px; font-size:13px; color:var(--free)}
+  .mk-badge{display:inline-flex; gap:3px; align-items:center}
+  .mk-badge input[type=text]{padding:3px 6px; font-size:11px}
+  .mk-badge input[type=color]{
+    width:28px; height:26px; padding:0; border:1px solid var(--border);
+    border-radius:4px; background:var(--bg); cursor:pointer;
+  }
+  .mk-badge button{padding:2px 7px; font-size:12px}
   .hint{color:var(--muted); font-size:11px}
   .hidden{display:none !important}
   @media (max-width:1100px){
@@ -193,6 +205,36 @@
   </section>
 
   <div id="sidecol">
+    <section id="pesec">
+      <h2>Улучшение промтов</h2>
+      <p class="hint" style="margin:0 0 8px">VLM для кнопки «Prompt
+        Assistant» (✨): переписывает промт пользователя (и картинку-референс,
+        если приложена) для более качественной генерации. Смена без F5 —
+        модель читается при каждом вызове.</p>
+      <div class="row">
+        <select id="pe-model" style="flex:1; min-width:0"></select>
+        <button id="pe-save">Сохранить</button>
+      </div>
+      <div id="pe-status" class="hint"></div>
+      <div class="hint" style="margin:10px 0 6px">Проверка: черновик (любой
+        язык) и, по желанию, картинка → улучшенный промт. Текст ниже можно
+        редактировать и копировать — как в оверлее у пользователей.</div>
+      <textarea id="pe-prompt" placeholder="Черновик промта…"></textarea>
+      <div class="row" style="margin-top:6px">
+        <input type="file" id="pe-file" accept="image/*">
+        <span class="spacer"></span>
+        <button id="pe-run">Улучшить</button>
+      </div>
+      <div id="pe-file-note" class="hint"></div>
+      <textarea id="pe-result" rows="4" style="margin-top:6px"
+        placeholder="Улучшенный промт (можно редактировать)…"></textarea>
+      <div class="row" style="margin-top:6px">
+        <span class="msg" id="pe-msg"></span>
+        <span class="spacer"></span>
+        <button id="pe-copy" class="ghost">Копировать</button>
+      </div>
+    </section>
+
     <section id="threedsec">
       <h2>3D-генерация — модель аналитики</h2>
       <p class="hint" style="margin:0 0 8px">VLM, которая анализирует картинку
@@ -203,6 +245,37 @@
         <button id="threed-save">Сохранить</button>
       </div>
       <div id="threed-status" class="hint"></div>
+    </section>
+
+    <section id="mediasec">
+      <h2>3D Design — фото в модалке</h2>
+      <p class="hint" style="margin:0 0 8px">До двух поясняющих фото с
+        подписями в модалке кнопки «3D Design» (например: сцена в 3D с новым
+        ракурсом и ИИ-рендер по изначальному фото). JPG/PNG, длинная сторона
+        уменьшается до 1024.</p>
+      <div id="media-slots"></div>
+      <div class="row" style="margin-top:6px">
+        <button id="media-save">Сохранить подписи</button>
+        <span class="msg" id="media-msg"></span>
+      </div>
+    </section>
+
+    <section id="markssec">
+      <h2>Звёзды и баннеры моделей</h2>
+      <p class="hint" style="margin:0 0 8px">
+        Пометки в списке моделей генерации: ★ 1–5 — сила модели именно
+        в правке картинок, баннеры — спец-возможности (вырезание фона
+        и т.п.). «—» = без звёзд (останутся только баннеры). Звёзды и
+        баннеры видны пользователям в списке моделей и под селектором.
+        После сохранения пользователям нужен F5.</p>
+      <div class="models-toolbar">
+        <input type="text" id="marks-search" placeholder="Поиск модели…">
+        <button id="marks-save">Сохранить</button>
+        <span class="count" id="marks-count"></span>
+      </div>
+      <div id="marks-badges" class="row" style="margin-bottom:6px; align-items:flex-start"></div>
+      <div id="marks-models" style="max-height:340px; overflow:auto; display:flex; flex-direction:column; gap:4px"></div>
+      <div class="msg" id="marks-msg"></div>
     </section>
 
     <section id="gensec">
@@ -242,7 +315,7 @@
 <script>
 "use strict";
 var API = "/api/v1/imagerouter";
-var state = { models: [], selected: null, hasKey: false, upscale: [], main: null };
+var state = { models: [], selected: null, hasKey: false, upscale: [], main: null, marksData: null };
 
 function $(id){ return document.getElementById(id); }
 function setMsg(id, text, cls){
@@ -310,6 +383,7 @@ function loadModels(){
     renderModels();
     renderUpscale();
     renderMainModels();
+    renderMarks();
   }).catch(function(e){
     $("models").innerHTML = "";
     setMsg("models-msg", "Не удалось загрузить список моделей: " + e.message, "err");
@@ -705,6 +779,205 @@ $("main-save").addEventListener("click", function(){
   }).catch(function(e){ setMsg("main-msg", "Ошибка: " + e.message, "err"); });
 });
 
+/* ---------- звёзды и баннеры моделей ---------- */
+
+// state.marksData: {badges: {ключ:{label,color,title}}, marks: {id:{stars,badges[]}}}
+// (GET/PUT /api/v1/imagerouter/model-marks). Метки длиной ≤24, цвет #rrggbb.
+
+function loadMarks(){
+  api("/model-marks").then(function(data){
+    state.marksData = { badges: data.badges || {}, marks: data.marks || {} };
+    if (data.source === "defaults")
+      setMsg("marks-msg", "Показаны встроенные пометки — первое «Сохранить» зафиксирует их как ваши настройки", "");
+    renderBadgeEditor();
+    renderMarks();
+  }).catch(function(e){
+    setMsg("marks-msg", "Не удалось загрузить пометки: " + e.message, "err");
+  });
+}
+
+function markOf(id){
+  return (state.marksData && state.marksData.marks[id]) || null;
+}
+
+// предпросмотр строки, которую увидит пользователь в списке моделей
+function marksPreview(mk, badges){
+  if (!mk) return "";
+  var parts = [];
+  if (mk.stars > 0)
+    parts.push(new Array(mk.stars + 1).join("★") + new Array(6 - mk.stars).join("☆"));
+  (mk.badges || []).forEach(function(b){ if (badges[b]) parts.push(badges[b].label); });
+  return parts.join(" · ");
+}
+
+function setMark(id, field, value){
+  var mk = state.marksData.marks[id];
+  if (!mk){ mk = { stars: 0, badges: [] }; state.marksData.marks[id] = mk; }
+  mk[field] = value;
+  if (!mk.stars && !(mk.badges || []).length) delete state.marksData.marks[id];
+  updateMarksCount();
+}
+
+function toggleMarkBadge(id, key, on){
+  var mk = state.marksData.marks[id];
+  if (!mk){ mk = { stars: 0, badges: [] }; state.marksData.marks[id] = mk; }
+  var i = (mk.badges || []).indexOf(key);
+  if (on && i === -1) mk.badges.push(key);
+  if (!on && i !== -1) mk.badges.splice(i, 1);
+  if (!mk.stars && !mk.badges.length) delete state.marksData.marks[id];
+  updateMarksCount();
+}
+
+function updateMarksCount(){
+  if (!state.marksData) return;
+  $("marks-count").textContent = "помечено: " + Object.keys(state.marksData.marks).length +
+    " из " + state.models.length;
+}
+
+// редактор каталога баннеров: цвет + метка + подсказка + удалить
+function renderBadgeEditor(){
+  var box = $("marks-badges");
+  box.innerHTML = "";
+  if (!state.marksData) return;
+  Object.keys(state.marksData.badges).forEach(function(key){
+    var b = state.marksData.badges[key];
+    var wrap = document.createElement("span");
+    wrap.className = "mk-badge";
+    wrap.title = "Ключ баннера: " + key;
+    var col = document.createElement("input");
+    col.type = "color"; col.value = b.color || "#4a5568"; col.title = "Цвет баннера";
+    col.addEventListener("input", function(){ b.color = col.value; });
+    var lab = document.createElement("input");
+    lab.type = "text"; lab.value = b.label; lab.maxLength = 24;
+    lab.style.width = "76px"; lab.title = "Метка баннера (текст в списке моделей)";
+    lab.addEventListener("input", function(){
+      var v = lab.value.trim();
+      if (v) b.label = v;
+      renderMarks();            // обновить чекбоксы и предпросмотры
+    });
+    var ttl = document.createElement("input");
+    ttl.type = "text"; ttl.value = b.title || ""; ttl.maxLength = 200;
+    ttl.style.width = "110px"; ttl.placeholder = "подсказка"; ttl.title = "Подсказка (tooltip чипа)";
+    ttl.addEventListener("input", function(){ b.title = ttl.value; });
+    var del = document.createElement("button");
+    del.className = "ghost"; del.textContent = "✕";
+    del.title = "Удалить баннер (у всех моделей снимется)";
+    del.addEventListener("click", function(){
+      delete state.marksData.badges[key];
+      Object.keys(state.marksData.marks).forEach(function(id){
+        var mk = state.marksData.marks[id];
+        mk.badges = (mk.badges || []).filter(function(x){ return x !== key; });
+        if (!mk.stars && !mk.badges.length) delete state.marksData.marks[id];
+      });
+      renderBadgeEditor(); renderMarks();
+    });
+    wrap.append(col, lab, ttl, del);
+    box.appendChild(wrap);
+  });
+  var add = document.createElement("button");
+  add.className = "ghost"; add.textContent = "+ баннер";
+  add.title = "Добавить свой баннер";
+  add.addEventListener("click", function(){
+    var i = 1;
+    while (state.marksData.badges["b" + i]) i++;
+    state.marksData.badges["b" + i] = { label: "NEW", color: "#4a5568", title: "" };
+    renderBadgeEditor(); renderMarks();
+  });
+  box.appendChild(add);
+}
+
+function renderMarks(){
+  var box = $("marks-models");
+  if (!state.models.length){
+    box.innerHTML = '<div class="hint">Каталог ещё не загружен…</div>';
+    return;
+  }
+  if (!state.marksData){
+    box.innerHTML = '<div class="hint">Загрузка пометок…</div>';
+    return;
+  }
+  var q = $("marks-search").value.trim().toLowerCase();
+  var list = state.models.filter(function(m){
+    return !q || m.id.toLowerCase().indexOf(q) !== -1;
+  });
+  // помеченные выше, больше звёзд выше, дальше по имени
+  list.sort(function(a, b){
+    var sa = (markOf(a.id) || {}).stars || -1;
+    var sb = (markOf(b.id) || {}).stars || -1;
+    if (sa !== sb) return sb - sa;
+    var na = a.id.split("/").pop(), nb = b.id.split("/").pop();
+    return na.localeCompare(nb);
+  });
+  updateMarksCount();
+  if (!list.length){
+    box.innerHTML = '<div class="hint">Ничего не найдено</div>';
+    return;
+  }
+  box.innerHTML = "";
+  var badges = state.marksData.badges;
+  var keys = Object.keys(badges);
+  list.forEach(function(m){
+    var mk = markOf(m.id) || { stars: 0, badges: [] };
+    var el = document.createElement("div");
+    el.className = "model";
+    var slash = m.id.indexOf("/");
+    var prov = slash > 0 ? m.id.slice(0, slash) : "";
+    var name = slash > 0 ? m.id.slice(slash + 1) : m.id;
+    var idSpan = document.createElement("span");
+    idSpan.className = "id";
+    idSpan.innerHTML = (prov ? '<span class="prov">' + prov + '</span>/' : '') + "<b>" + name + "</b>";
+    var prev = document.createElement("span");
+    prev.className = "desc";
+    prev.textContent = marksPreview(markOf(m.id), badges) || "без пометок";
+    idSpan.appendChild(prev);
+    el.appendChild(idSpan);
+    var sel = document.createElement("select");
+    sel.className = "mk-stars";
+    sel.title = "Звёзды: сила модели именно в правке картинок";
+    for (var s = 0; s <= 5; s++){
+      var o = document.createElement("option");
+      o.value = s;
+      o.textContent = s === 0 ? "—" : new Array(s + 1).join("★");
+      sel.appendChild(o);
+    }
+    sel.value = String(mk.stars || 0);
+    sel.addEventListener("change", function(){ setMark(m.id, "stars", parseInt(sel.value, 10)); });
+    el.appendChild(sel);
+    keys.forEach(function(key){
+      var b = badges[key];
+      var lab = document.createElement("label");
+      lab.className = "chk";
+      if (b.title) lab.title = b.title;
+      var cb = document.createElement("input");
+      cb.type = "checkbox";
+      cb.checked = (mk.badges || []).indexOf(key) !== -1;
+      cb.addEventListener("change", function(){ toggleMarkBadge(m.id, key, cb.checked); });
+      lab.appendChild(cb);
+      lab.appendChild(document.createTextNode(b.label));
+      el.appendChild(lab);
+    });
+    box.appendChild(el);
+  });
+}
+
+$("marks-search").addEventListener("input", renderMarks);
+
+$("marks-save").addEventListener("click", function(){
+  if (!state.marksData) return;
+  setMsg("marks-msg", "Сохранение…");
+  api("/model-marks", {
+    method: "PUT",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ badges: state.marksData.badges, marks: state.marksData.marks })
+  }).then(function(data){
+    state.marksData = { badges: data.badges || {}, marks: data.marks || {} };
+    setMsg("marks-msg", "Сохранено: помечено " + Object.keys(state.marksData.marks).length +
+      ". Пользователям нужно обновить страницу (F5)", "ok");
+    renderBadgeEditor();
+    renderMarks();
+  }).catch(function(e){ setMsg("marks-msg", "Ошибка: " + e.message, "err"); });
+});
+
 /* ---------- генерация ---------- */
 
 $("gen").addEventListener("click", function(){
@@ -761,6 +1034,7 @@ $("gen").addEventListener("click", function(){
 refreshStatus();
 loadUpscale();
 loadMainModels();
+loadMarks();
 
 // --- 3D-генерация: выбор VLM-аналитика (GET/PUT /api/v1/threed/model) ---
 (function () {
@@ -792,6 +1066,149 @@ loadMainModels();
           "Ошибка: " + (res.j.detail || "?");
       }).catch(function () { st.textContent = "Ошибка сети"; });
   });
+})();
+
+// --- Улучшение промтов: модель VLM (GET/PUT /enhancer-model) + проверка
+// (POST /enhance-test): промт и опциональная картинка -> улучшенный промт
+// в редактируемом поле (вывод для редактирования, как в оверлее приложения)
+(function () {
+  var sel = $("pe-model"), st = $("pe-status"), imgData = null;
+  fetch("/api/v1/imagerouter/enhancer-model").then(function (r) { return r.json(); })
+    .then(function (d) {
+      sel.innerHTML = "";
+      (d.vlms || []).forEach(function (id) {
+        var o = document.createElement("option");
+        o.value = id; o.textContent = id;
+        sel.appendChild(o);
+      });
+      if (!(d.vlms || []).some(function (id) { return id === d.model; })) {
+        var o = document.createElement("option");
+        o.value = d.model; o.textContent = d.model + " (не в каталоге)";
+        sel.appendChild(o);
+      }
+      sel.value = d.model;
+      st.textContent = "Источник: " + (d.source === "file" ? "сохранённый выбор" :
+        d.source === "env" ? ".env PROMPT_ENHANCER_MODEL" : "по умолчанию");
+    }).catch(function () { st.textContent = "Не удалось загрузить список VLM"; });
+  $("pe-save").addEventListener("click", function () {
+    st.textContent = "Сохранение…";
+    fetch("/api/v1/imagerouter/enhancer-model", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model: sel.value })
+    }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        st.textContent = res.ok ? "Сохранено: " + sel.value :
+          "Ошибка: " + (res.j.detail || "?");
+      }).catch(function () { st.textContent = "Ошибка сети"; });
+  });
+  $("pe-file").addEventListener("change", function () {
+    var f = this.files && this.files[0];
+    imgData = null;
+    $("pe-file-note").textContent = "";
+    if (!f) return;
+    var fr = new FileReader();
+    fr.onload = function () { imgData = fr.result; $("pe-file-note").textContent = "Картинка: " + f.name; };
+    fr.readAsDataURL(f);
+  });
+  $("pe-run").addEventListener("click", function () {
+    var p = $("pe-prompt").value.trim();
+    if (!p && !imgData) { setMsg("pe-msg", "Введите промт или приложите картинку", "err"); return; }
+    $("pe-run").disabled = true;
+    setMsg("pe-msg", "Улучшение… 5–30 с");
+    var body = { prompt: p };
+    if (imgData) body.image = imgData;
+    fetch("/api/v1/imagerouter/enhance-test", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        $("pe-run").disabled = false;
+        if (!res.ok) { setMsg("pe-msg", "Ошибка: " + (res.j.detail || "?"), "err"); return; }
+        $("pe-result").value = res.j.prompt || "";
+        setMsg("pe-msg", "Готово — текст можно отредактировать", "ok");
+      }).catch(function () {
+        $("pe-run").disabled = false;
+        setMsg("pe-msg", "Ошибка сети", "err");
+      });
+  });
+  $("pe-copy").addEventListener("click", function () {
+    $("pe-result").select();
+    try { document.execCommand("copy"); setMsg("pe-msg", "Скопировано", "ok"); } catch (e) {}
+  });
+})();
+
+// --- 3D Design: поясняющие фото модалки (GET/PUT/POST/DELETE /threed/modal-media)
+(function () {
+  var SLOTS = [1, 2];
+  function load() {
+    fetch("/api/v1/threed/modal-media").then(function (r) { return r.json(); })
+      .catch(function () { return { items: [] }; })
+      .then(function (d) {
+        var items = {};
+        ((d && d.items) || []).forEach(function (it) { items[it.slot] = it; });
+        var box = $("media-slots");
+        box.innerHTML = "";
+        SLOTS.forEach(function (s) {
+          var it = items[s];
+          var row = document.createElement("div");
+          row.className = "row";
+          row.style.marginBottom = "6px";
+          var img = document.createElement("img");
+          if (it && it.url) {
+            img.src = it.url;
+            img.title = "фото " + s;
+            img.style.cssText = "max-height:48px;max-width:72px;border-radius:4px;border:1px solid var(--border)";
+          }
+          var cap = document.createElement("input");
+          cap.type = "text"; cap.id = "media-cap-" + s; cap.style.flex = "1"; cap.style.minWidth = "0";
+          cap.placeholder = "Подпись к фото " + s;
+          cap.value = (it && it.caption) || "";
+          var up = document.createElement("input");
+          up.type = "file"; up.accept = "image/*"; up.title = "Загрузить/заменить фото " + s;
+          var del = document.createElement("button");
+          del.className = "ghost"; del.textContent = "Удалить";
+          if (!it) del.disabled = true;
+          del.addEventListener("click", function () {
+            setMsg("media-msg", "Удаление…");
+            fetch("/api/v1/threed/modal-media/" + s + "/image", { method: "DELETE" })
+              .then(function () { setMsg("media-msg", "Фото " + s + " удалено", "ok"); load(); })
+              .catch(function () { setMsg("media-msg", "Ошибка сети", "err"); });
+          });
+          up.addEventListener("change", function () {
+            var f = up.files && up.files[0];
+            if (!f) return;
+            setMsg("media-msg", "Загрузка фото " + s + "…");
+            var fr = new FileReader();
+            fr.onload = function () {
+              fetch("/api/v1/threed/modal-media/" + s + "/image", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ image: fr.result })
+              }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+                .then(function (res) {
+                  if (!res.ok) { setMsg("media-msg", "Ошибка: " + (res.j.detail || "?"), "err"); return; }
+                  setMsg("media-msg", "Фото " + s + " загружено", "ok");
+                  load();
+                }).catch(function () { setMsg("media-msg", "Ошибка сети", "err"); });
+            };
+            fr.readAsDataURL(f);
+          });
+          row.appendChild(img); row.appendChild(cap); row.appendChild(up); row.appendChild(del);
+          box.appendChild(row);
+        });
+      });
+  }
+  $("media-save").addEventListener("click", function () {
+    setMsg("media-msg", "Сохранение…");
+    fetch("/api/v1/threed/modal-media", {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: SLOTS.map(function (s) { return { slot: s, caption: $("media-cap-" + s).value }; }) })
+    }).then(function (r) { return r.json().then(function (j) { return { ok: r.ok, j: j }; }); })
+      .then(function (res) {
+        setMsg("media-msg", res.ok ? "Подписи сохранены" : "Ошибка: " + (res.j.detail || "?"),
+               res.ok ? "ok" : "err");
+      }).catch(function () { setMsg("media-msg", "Ошибка сети", "err"); });
+  });
+  load();
 })();
 </script>
 </body>

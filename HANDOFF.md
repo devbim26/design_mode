@@ -3208,6 +3208,57 @@ invokeai==6.2.0` их нужно запускать повторно в поря
       фолбэк). Деплой: `setup_imagerouter.py` + `setup_site_auth.py` +
       рестарт; JS-бандлы не тронуты.
 
+68. **Пометки моделей: звёзды 1–5 + мини-баннеры в списке генерации**
+    (08.10, ветка `user`; запрос пользователя «звёзды 1–5 — сила модели
+    в редактировании, мини-баннеры спец-моделям (вырезание фона), баннер
+    edit; проставить самому, настройки — в менеджере»). Спека/план:
+    `docs/superpowers/{specs,plans}/2026-10-08-model-marks*`.
+    - **Механика БЕЗ патчей бандлов**: опция дропдауна «Модель»
+      (ModelPicker `Sv`/`Xte` в App-бандле) рендерит поле конфига
+      `usage_info` серым суб-текстом рядом с именем (в отличие от
+      description — всегда, и в компактном виде); список
+      `/api/v2/models/` кладётся в RTK-стор БЕЗ zod-вырезания
+      (`getModelConfigs.transformResponse` = entity adapter). Инъекция:
+      `_ir_fake_config` добавляет `usage_info` = «★★★★☆ · EDIT · BG CUT»
+      (звёзды = «★»×n+«☆»×(5−n), метки баннеров через « · »; пусто =
+      поля нет). ГРАБЛЯ: zod `VJ` режет поля только в `params.model`
+      (диспетч выбора) — списку не мешает; description НЕ трогать —
+      на нём гейт Generate-фолбэка («editing»).
+    - **Хранилище**: `data/data/imagerouter_model_marks.json`
+      (per-company): `{badges:{ключ:{label≤24,color #rrggbb,title}},
+      marks:{model_id:{stars 0..5,badges:[ключи]}}}`. Файла нет →
+      встроенные дефолты `_DEFAULT_BADGES`/`_DEFAULT_MARKS` (edit/bg/
+      erase/fast + 25 моделей: выбор владельца и популярные редакторы
+      каталога; nano-banana-pro=5, nano-banana-2=4, midjourney=2,
+      bria/remove-background=BG CUT без звёзд…); файл есть → ТОЛЬКО он
+      (первое «Сохранить» в менеджере фиксирует снапшот). Кэш по mtime
+      файла (`_marks_cache`) — правка файла подхватывается без рестарта.
+      Санитизация на чтение/PUT: ключи `[a-z0-9_-]{1,24}`, звёзды кламп
+      0–5, баннеры только из каталога, пустые записи отбрасываются;
+      model_id по каталогу НЕ проверяются (модель может вернуться).
+      Эндпоинты `GET/PUT /api/v1/imagerouter/model-marks` (GET отдаёт
+      `source: defaults|file`).
+    - **UI**: `devbim_model_info.js` (расширен, тот же деплой
+      `deploy_model_info`, F5): (а) в блоке под селектором — строка
+      «★×n жёлтым + цветные чипы баннеров» над description; (б) в
+      открытом дропдауне MutationObserver-раскраска тех же строк
+      `p.extra-info` (формат распознаётся по ★/☆-префиксу или набору
+      известных меток; guard `data-devbim-marks`; без JS строка
+      остаётся читаемым серым текстом). Отладка:
+      `window.__devbimModelInfo.{marks,refreshMarks()}`.
+    - **Менеджер** (`imagerouter.html`): секция «Звёзды и баннеры
+      моделей» в правой колонке — поиск по каталогу (144), помеченные/
+      звёздные выше; per-model select «—/★…★★★★★» + чекбоксы баннеров +
+      предпросмотр строки; редактор каталога баннеров (цвет/метка/
+      подсказка/✕/«+ баннер», ключ b1..bN). PUT шлёт весь стейт.
+    - E2E 08.10 (браузер, вход владельца): GET defaults → /api/v2/models
+      с usage_info у всех 12 выбранных; дропдаун — звёзды/чипы у всех
+      опций (midjourney ★★, remove-background только BG CUT), блок под
+      селектором; менеджер: смена звёзд → «Сохранить» → файл со
+      снапшотом 25 пометок; PUT-фильтрация мусорных ключей; удаление
+      файла возвращает дефолты. Тесты: `tests/test_model_marks.py`
+      (8 блоков). Деплой: `setup_imagerouter.py` + рестарт.
+
 ```powershell
 cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
 .\venv\Scripts\python.exe .\setup_imagerouter.py        # применить патчи
@@ -3230,6 +3281,7 @@ cd "C:\Users\Lenovo\Desktop\проект SOFT_2\Дизайн\InvokeAI\InvokeAI"
 .\venv\Scripts\python.exe .\tests\test_upscale_cloud.py # облачный апскейлинг
 .\venv\Scripts\python.exe .\tests\test_panel_layout.py  # Генерация выше Изображения, без Seed, описание модели
 .\venv\Scripts\python.exe .\tests\test_main_models.py   # выбор основных моделей
+.\venv\Scripts\python.exe .\tests\test_model_marks.py   # звёзды/баннеры моделей (п.68)
 .\venv\Scripts\python.exe .\tests\test_reference_types.py # типы референсов + Weight в промте
 # синтаксис module-скрипта вьювера после правок ifcviewer.html:
 #   venv\Scripts\python.exe -c "import re,pathlib;s=pathlib.Path('ifc/ifcviewer.html').read_text(encoding='utf-8');pathlib.Path('ifc/_chk.mjs').write_text(re.search(r'<script type=\"module\">(.*?)</script>',s,re.S).group(1),encoding='utf-8')"

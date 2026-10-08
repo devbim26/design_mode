@@ -330,6 +330,161 @@ def _selected_main_models() -> list[dict]:
     return [by_id[mid] for mid in sel if mid in by_id]
 
 
+# --- Пометки моделей (звёзды 1–5 + мини-баннеры): настройки владельца ---
+#
+# Файл <INVOKEAI_ROOT>/data/imagerouter_model_marks.json (per-company):
+#   {"badges": {ключ: {"label", "color", "title"}},
+#    "marks": {model_id: {"stars": 0..5, "badges": [ключи]}}}
+# Файла нет → действуют встроенные дефолты; файл есть → ТОЛЬКО он
+# (первое сохранение в менеджере фиксирует снапшот, дальше владелец
+# меняет сам). Звёзды — сила модели именно в ПРАВКЕ картинок; строка
+# инъектируется полем usage_info (★-серия + метки баннеров) и рендерится
+# пикером модели без патчей бандла; devbim-model-info.js раскрашивает.
+
+_DEFAULT_BADGES: dict[str, dict] = {
+    "edit": {"label": "EDIT", "color": "#2f855a", "title": "правка фото по описанию"},
+    "bg": {"label": "BG CUT", "color": "#2b6cb0", "title": "вырезание фона"},
+    "erase": {"label": "ERASE", "color": "#805ad5", "title": "удаление объектов"},
+    "fast": {"label": "FAST", "color": "#c05621", "title": "быстрая генерация"},
+}
+
+# Дефолты 08.10: текущий выбор владельца + популярные редакторы каталога.
+_DEFAULT_MARKS: dict[str, dict] = {
+    "google/nano-banana-pro": {"stars": 5, "badges": ["edit"]},
+    "google/nano-banana-2": {"stars": 4, "badges": ["edit"]},
+    "google/nano-banana": {"stars": 3, "badges": ["edit"]},
+    "google/nano-banana-2-lite": {"stars": 2, "badges": ["edit", "fast"]},
+    "openai/gpt-image-2.5-sunburst": {"stars": 5, "badges": ["edit"]},
+    "openai/gpt-image-2.5-flare": {"stars": 4, "badges": ["edit"]},
+    "openai/gpt-image-1.5": {"stars": 4, "badges": ["edit"]},
+    "openai/gpt-image-1": {"stars": 3, "badges": ["edit"]},
+    "qwen/qwen-image-2512": {"stars": 4, "badges": ["edit"]},
+    "bytedance/seedream-5.0-pro": {"stars": 4, "badges": ["edit"]},
+    "bytedance/seedream-4.5": {"stars": 3, "badges": ["edit"]},
+    "bytedance/seedream-4": {"stars": 3, "badges": ["edit"]},
+    "microsoft/mai-image-2.5": {"stars": 4, "badges": ["edit"]},
+    "xAI/grok-imagine-image-2": {"stars": 3, "badges": ["edit"]},
+    "midjourney/midjourney": {"stars": 2, "badges": ["edit"]},
+    "bria/remove-background": {"stars": 0, "badges": ["bg"]},
+    "bria/erase-foreground": {"stars": 0, "badges": ["erase"]},
+    "bria/blur-background": {"stars": 0, "badges": ["bg"]},
+    "bria/enhance": {"stars": 3, "badges": ["edit"]},
+    "black-forest-labs/flux-kontext-max": {"stars": 4, "badges": ["edit"]},
+    "black-forest-labs/flux-kontext-pro": {"stars": 4, "badges": ["edit"]},
+    "black-forest-labs/flux-kontext-dev": {"stars": 3, "badges": ["edit"]},
+    "black-forest-labs/FLUX-1-schnell": {"stars": 1, "badges": ["fast"]},
+    "fal/flux-2-dev-turbo": {"stars": 2, "badges": ["fast", "edit"]},
+    "google/imagen-4-ultra": {"stars": 2, "badges": ["edit"]},
+}
+
+
+def _marks_store_path() -> Path:
+    return Path(get_config().root_path) / "data" / "imagerouter_model_marks.json"
+
+
+def _sanitize_badges_catalog(raw: Any) -> dict[str, dict]:
+    """Каталог баннеров: ключ [a-z0-9_-]{1,24} → {label ≤24, #rrggbb, title}."""
+    out: dict[str, dict] = {}
+    if not isinstance(raw, dict):
+        return out
+    for key, val in raw.items():
+        if not isinstance(key, str) or not re.fullmatch(r"[a-z0-9_-]{1,24}", key):
+            continue
+        if not isinstance(val, dict):
+            continue
+        label = str(val.get("label") or "").strip()
+        if not label or len(label) > 24:
+            continue
+        color = str(val.get("color") or "").strip()
+        if not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+            color = "#4a5568"
+        out[key] = {"label": label, "color": color, "title": str(val.get("title") or "").strip()}
+    return out
+
+
+def _sanitize_marks(raw: Any, badges: dict[str, dict]) -> dict[str, dict]:
+    """Пометки: {model_id: {stars 0..5, badges только из каталога}};
+    пустые записи (0 звёзд и без баннеров) отбрасываются."""
+    out: dict[str, dict] = {}
+    if not isinstance(raw, dict):
+        return out
+    for mid, val in raw.items():
+        if not isinstance(mid, str) or not mid or len(mid) > 200:
+            continue
+        if not isinstance(val, dict):
+            continue
+        try:
+            stars = int(val.get("stars") or 0)
+        except (TypeError, ValueError):
+            stars = 0
+        stars = max(0, min(5, stars))
+        kept: list[str] = []
+        bl = val.get("badges")
+        if isinstance(bl, list):
+            for b in bl:
+                if isinstance(b, str) and b in badges and b not in kept:
+                    kept.append(b)
+        if stars == 0 and not kept:
+            continue
+        out[mid] = {"stars": stars, "badges": kept}
+    return out
+
+
+def _load_marks() -> Optional[dict]:
+    """None = файла нет (действуют дефолты); иначе — разобранный файл."""
+    p = _marks_store_path()
+    try:
+        raw = json.loads(p.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    badges = _sanitize_badges_catalog(raw.get("badges"))
+    if not badges:
+        badges = dict(_DEFAULT_BADGES)
+    return {"badges": badges, "marks": _sanitize_marks(raw.get("marks"), badges)}
+
+
+def _save_marks(badges: dict, marks: dict) -> None:
+    p = _marks_store_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(json.dumps({"badges": badges, "marks": marks}, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+_marks_cache: dict[str, Any] = {"key": None, "data": None}
+
+
+def _effective_marks() -> dict:
+    """Действующие пометки: файл (если есть) или дефолты. Кэш по mtime —
+    _ir_fake_config зовёт это на каждую модель каталога."""
+    p = _marks_store_path()
+    try:
+        key: Any = (str(p), p.stat().st_mtime)
+    except OSError:
+        key = (str(p), None)
+    if _marks_cache["key"] != key:
+        loaded = _load_marks()
+        _marks_cache["key"] = key
+        _marks_cache["data"] = (
+            {"badges": dict(_DEFAULT_BADGES), "marks": {k: dict(v) for k, v in _DEFAULT_MARKS.items()}}
+            if loaded is None
+            else loaded
+        )
+    return _marks_cache["data"]
+
+
+def _marks_usage_info(m: dict) -> str:
+    """Строка пометок модели для списка генерации: «★★★★☆ · EDIT · BG CUT»
+    (usage_info в конфиге; пустая строка = без пометок)."""
+    data = _effective_marks()
+    mark = data["marks"].get(m.get("id") or "")
+    if not mark:
+        return ""
+    parts: list[str] = []
+    if mark["stars"] > 0:
+        parts.append("★" * mark["stars"] + "☆" * (5 - mark["stars"]))
+    parts += [data["badges"][b]["label"] for b in mark["badges"] if b in data["badges"]]
+    return " · ".join(parts)
+
+
 # --- Хранение ключа: .env (IMAGEROUTER_API_KEY) > data/imagerouter.json ---
 
 def _load_env_file() -> None:
@@ -826,7 +981,7 @@ def _ir_fake_config(m: dict) -> dict:
     size_part = _ir_size_digest(m)
     if size_part:
         desc += " · " + size_part
-    return {
+    cfg = {
         "key": IR_KEY_PREFIX + mid,
         # hash обязателен (zod: min(1)) — стабильный псевдохеш от id
         "hash": hashlib.md5(mid.encode("utf-8")).hexdigest(),
@@ -842,6 +997,12 @@ def _ir_fake_config(m: dict) -> dict:
         "variant": "normal",
         "cover_image": None,
     }
+    # Пометки владельца (звёзды/баннеры): серый суб-текст опции списка;
+    # клиентский скрипт devbim-model-info.js раскрашивает их в чипы
+    usage = _marks_usage_info(m)
+    if usage:
+        cfg["usage_info"] = usage
+    return cfg
 
 
 # Фейковая модель IP-Adapter для референсных изображений: локальных моделей
