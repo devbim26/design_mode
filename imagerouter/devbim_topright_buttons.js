@@ -107,7 +107,7 @@
         'photo — the AI render will restore the scene from the new angle.'
     }
   };
-  var lang = 'ru';
+  var lang = 'en';   // до первого чтения настроек — английский (дефолт продукта)
 
   // --- стили: как chakra-кнопки приложения (высота Generate = 36px) ---
   var CSS =

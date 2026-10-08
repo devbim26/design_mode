@@ -6,7 +6,14 @@
  *     (SITE_URL);
  *   - слоган справа; язык слогана следует за языком интерфейса приложения
  *     (срез system персистится redux-remember в IndexedDB «invoke» /
- *     «invoke-store», ключ «@@invokeai-system», поле language).
+ *     «invoke-store», ключ «@@invokeai-system», поле language);
+ *   - переключатель языка EN|RU: диспатчит system/languageChanged в стор
+ *     приложения (глобал window.__devbimPEStore из патча App-бандла,
+ *     фолбэк — мост холста / прямая запись в IndexedDB);
+ *   - SSO/users: email пользователя + «Выйти» (локализуется).
+ *
+ * Дефолт языка — английский (как у приложения: system.language='en');
+ * русский показывается, только когда он выбран в настройках/переключателе.
  *
  * Баннер — обычный блок перед #root; высота приложения (100dvh) компенсируется
  * в CSS ниже, поэтому интерфейс не уезжает вниз и не обрезается.
@@ -23,11 +30,13 @@
   var TEXTS = {
     ru: {
       tagline: 'Создавай реалистичные AI-рендеры интерьеров и фасадов зданий с высочайшей точностью…',
-      site: 'Сайт DevBIM'
+      site: 'Сайт DevBIM',
+      logout: 'Выйти'
     },
     en: {
       tagline: 'Create realistic AI renders of interiors and building facades with the highest precision…',
-      site: 'DevBIM website'
+      site: 'DevBIM website',
+      logout: 'Log out'
     }
   };
 
@@ -46,6 +55,13 @@
     '#devbim-banner .devbim-word .design{color:#f2f4f6;font-weight:600}' +
     '#devbim-banner .devbim-tagline{flex:1;min-width:0;font-size:12.5px;color:#aab3ba;' +
     'white-space:nowrap;overflow:hidden;text-overflow:ellipsis}' +
+    '#devbim-banner .devbim-lang{display:flex;align-items:center;border:1px solid #2b2f35;' +
+    'border-radius:6px;overflow:hidden;white-space:nowrap}' +
+    '#devbim-banner .devbim-lang button{background:transparent;color:#aab3ba;border:0;' +
+    'padding:3px 10px;font-size:11.5px;font-weight:600;cursor:pointer;line-height:1.4}' +
+    '#devbim-banner .devbim-lang button+button{border-left:1px solid #2b2f35}' +
+    '#devbim-banner .devbim-lang button[data-active="1"]{background:#38BDF8;color:#06121C}' +
+    '#devbim-banner .devbim-lang button:not([data-active="1"]):hover{color:#e6eaf2}' +
     '#devbim-banner .devbim-user{display:flex;align-items:center;gap:10px;white-space:nowrap;' +
     'font-size:12.5px;color:#E6EAF2}' +
     '#devbim-banner .devbim-user button{background:#38BDF8;color:#06121C;border:0;border-radius:6px;' +
@@ -58,7 +74,7 @@
 
   // --- эмблема «devBIM - Design» (без иконки: чистый текстовый вордмарк) ---
 
-  var lang = 'ru';   // до первого чтения настроек — русский
+  var lang = 'en';   // до первого чтения настроек — английский (дефолт продукта)
   var els = {};
 
   function texts() { return TEXTS[lang] || TEXTS.en; }
@@ -68,6 +84,9 @@
     els.tagline.textContent = t.tagline;
     els.link.title = t.site;
     els.link.setAttribute('aria-label', t.site);
+    if (els.out) els.out.textContent = t.logout;
+    if (els.swEn) els.swEn.setAttribute('data-active', lang === 'en' ? '1' : '0');
+    if (els.swRu) els.swRu.setAttribute('data-active', lang === 'ru' ? '1' : '0');
   }
 
   // --- язык интерфейса: IndexedDB «invoke» / «invoke-store» / «@@invokeai-system» ---
@@ -90,13 +109,66 @@
     req.onerror = function () { cb(null); };
   }
 
+  // фолбэк переключателя, когда стор ещё не готов: пишем язык прямо в
+  // persisted-стейт — приложение подхватит его при следующей загрузке
+  function writeLanguage(l) {
+    var req;
+    try { req = indexedDB.open('invoke'); } catch (e) { return; }
+    req.onsuccess = function () {
+      var db = req.result;
+      var os;
+      try { os = db.transaction('invoke-store', 'readwrite').objectStore('invoke-store'); }
+      catch (e) { return; }
+      var get = os.get('@@invokeai-system');
+      get.onsuccess = function () {
+        if (!get.result) return;
+        try {
+          var doc = JSON.parse(get.result);
+          doc.language = l;
+          os.put(JSON.stringify(doc), '@@invokeai-system');
+        } catch (e) { /* не критично */ }
+      };
+    };
+  }
+
+  // сменить язык интерфейса приложения: диспатч в редакс-стор приложения
+  // (глобал держит патч DevbimPEWatch в App-бандле; там же, где очередь)
+  function appStore() {
+    if (window.__devbimPEStore && window.__devbimPEStore.dispatch) {
+      return window.__devbimPEStore;
+    }
+    try {
+      var m = window.__devbimCanvasBridge && window.__devbimCanvasBridge.getManager();
+      if (m && m.stateApi && m.stateApi.store && m.stateApi.store.dispatch) {
+        return m.stateApi.store;
+      }
+    } catch (e) { /* моста нет — не страшно */ }
+    return null;
+  }
+
+  function setLanguage(l) {
+    if (!TEXTS[l]) return;
+    lang = l;
+    render();
+    var st = appStore();
+    if (st) {
+      try {
+        // App слушает system.language и зовёт i18n.changeLanguage —
+        // интерфейс переводится сразу; redux-remember сам персистит выбор
+        st.dispatch({ type: 'system/languageChanged', payload: l });
+        return;
+      } catch (e) { /* ниже — фолбэк */ }
+    }
+    writeLanguage(l);
+  }
+
   function pollLanguage() {
     readLanguage(function (l) {
       if (l && l !== lang) { lang = l; render(); }
     });
   }
 
-  // --- SSO/users: email пользователя + «Выйти» ---
+  // --- SSO/users: email пользователя + «Выйти»/«Log out» ---
   function loadUser(banner) {
     fetch('/api/v1/studio/me', { credentials: 'same-origin' })
       .then(function (r) { return r.ok ? r.json() : null; })
@@ -109,11 +181,12 @@
         if (d.role === 'admin') who.textContent += ' · admin';
         var out = document.createElement('button');
         out.type = 'button';
-        out.textContent = 'Выйти';
+        out.textContent = texts().logout;
         out.onclick = function () { location.href = '/auth/logout'; };
         chip.appendChild(who);
         chip.appendChild(out);
         banner.appendChild(chip);
+        els.out = out;
       })
       .catch(function () { /* без панели — не страшно */ });
   }
@@ -138,8 +211,24 @@
     var tagline = document.createElement('span');
     tagline.className = 'devbim-tagline';
 
+    // --- переключатель языка интерфейса EN|RU ---
+    var sw = document.createElement('div');
+    sw.className = 'devbim-lang';
+    var mk = function (code, label) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('data-active', '0');
+      b.onclick = function () { setLanguage(code); };
+      sw.appendChild(b);
+      return b;
+    };
+    var swEn = mk('en', 'EN');
+    var swRu = mk('ru', 'RU');
+
     banner.appendChild(link);
     banner.appendChild(tagline);
+    banner.appendChild(sw);
     loadUser(banner);
 
     var root = document.getElementById('root');
@@ -147,6 +236,8 @@
 
     els.link = link;
     els.tagline = tagline;
+    els.swEn = swEn;
+    els.swRu = swRu;
     render();
 
     pollLanguage();

@@ -1,0 +1,653 @@
+{
+  "boards": {
+    "uncategorizedImages": "Некатегоризированные изображения",
+    "deleteAllUncategorizedImages": "Удалить все некатегоризированные изображения",
+    "deletedImagesCannotBeRestored": "Удаленные изображения невозможно восстановить.",
+    "movingImagesToBoard_one": "Перемещение {{count}} изображения на доску:",
+    "movingImagesToBoard_few": "Перемещение {{count}} изображений на доску:",
+    "movingImagesToBoard_many": "Перемещение {{count}} изображений на доску:",
+    "movingImagesToBoard_other": "Перемещение {{count}} изображения на доску:",
+    "imagesWithCount_one": "{{count}} изображение",
+    "imagesWithCount_few": "{{count}} изображения",
+    "imagesWithCount_many": "{{count}} изображений",
+    "imagesWithCount_other": "{{count}} изображения",
+    "assetsWithCount_one": "{{count}} актив",
+    "assetsWithCount_few": "{{count}} актива",
+    "assetsWithCount_many": "{{count}} активов",
+    "assetsWithCount_other": "{{count}} актива"
+  },
+  "common": {
+    "board": "Доска",
+    "clipboard": "Буфер обмена",
+    "error_withCount_one": "{{count}} ошибка",
+    "error_withCount_few": "{{count}} ошибки",
+    "error_withCount_many": "{{count}} ошибок",
+    "error_withCount_other": "{{count}} ошибки",
+    "model_withCount_one": "{{count}} модель",
+    "model_withCount_few": "{{count}} модели",
+    "model_withCount_many": "{{count}} моделей",
+    "model_withCount_other": "{{count}} модели",
+    "loadingModel": "Загрузка модели",
+    "noMatches": "Нет совпадений",
+    "noOptions": "Нет вариантов",
+    "saveChanges": "Сохранить изменения",
+    "search": "Поиск",
+    "clear": "Очистить",
+    "generating": "Генерация",
+    "warnings": "Предупреждения",
+    "start": "Начало",
+    "count": "Количество",
+    "step": "Шаг",
+    "end": "Конец",
+    "min": "Мин",
+    "max": "Макс",
+    "values": "Значения",
+    "resetToDefaults": "Сбросить к значениям по умолчанию",
+    "seed": "Сид",
+    "combinatorial": "Комбинаторный",
+    "layout": "Макет",
+    "row": "Строка",
+    "column": "Столбец",
+    "value": "Значение",
+    "label": "Метка",
+    "systemInformation": "Сведения о системе",
+    "compactView": "Компактный вид",
+    "fullView": "Полный вид",
+    "options_withCount_one": "{{count}} параметр",
+    "options_withCount_few": "{{count}} параметра",
+    "options_withCount_many": "{{count}} параметров",
+    "options_withCount_other": "{{count}} параметра"
+  },
+  "prompt": {
+    "generateFromImage": "Сгенерировать запрос по изображению",
+    "expandCurrentPrompt": "Расширить текущий запрос",
+    "uploadImageForPromptGeneration": "Загрузить изображение для генерации запроса",
+    "expandingPrompt": "Расширение запроса…",
+    "resultTitle": "Расширение запроса завершено",
+    "resultSubtitle": "Выберите, что сделать с расширенным запросом:",
+    "replace": "Заменить",
+    "insert": "Вставить",
+    "discard": "Отменить"
+  },
+  "queue": {
+    "cancelAllExceptCurrentQueueItemAlertDialog": "Отмена всех элементов очереди, кроме текущего, остановит ожидающие элементы, но позволит завершить выполняемый.",
+    "cancelAllExceptCurrentQueueItemAlertDialog2": "Вы уверены, что хотите отменить все ожидающие элементы очереди?",
+    "cancelAllExceptCurrent": "Отменить все, кроме текущего",
+    "cancelAllExceptCurrentTooltip": "Отменить все, кроме текущего элемента",
+    "retrySucceeded": "Элемент снова в очереди",
+    "retryFailed": "Не удалось повторить элемент",
+    "confirm": "Подтвердить",
+    "retryItem": "Повторить элемент",
+    "credits": "Кредиты",
+    "batchQueuedDesc_other": "Добавлено {{count}} сеанса в {{direction}} очереди",
+    "prompts_other": "Запросы",
+    "iterations_other": "Итерации",
+    "generations_other": "Генерации",
+    "batchSize": "Размер пакета"
+  },
+  "modelCache": {
+    "clear": "Очистить кэш моделей",
+    "clearSucceeded": "Кэш моделей очищен",
+    "clearFailed": "Не удалось очистить кэш моделей"
+  },
+  "gallery": {
+    "images": "Изображения",
+    "assets": "Активы",
+    "deleteImage_other": "Удалить {{count}} изображения",
+    "useForPromptGeneration": "Использовать для генерации запроса"
+  },
+  "hotkeys": {
+    "app": {
+      "selectGenerateTab": {
+        "title": "Перейти на вкладку Generate",
+        "desc": "Выбирает вкладку Generate.",
+        "key": "1"
+      }
+    },
+    "canvas": {
+      "invertMask": {
+        "title": "Инвертировать маску",
+        "desc": "Инвертировать выбранную маску перерисовки, создав новую маску с противоположной прозрачностью."
+      },
+      "settings": {
+        "behavior": "Поведение",
+        "display": "Отображение",
+        "grid": "Сетка",
+        "debug": "Отладка"
+      },
+      "toggleNonRasterLayers": {
+        "title": "Показать/скрыть нерастровые слои",
+        "desc": "Показать или скрыть все категории нерастровых слоёв (слои управления, маски перерисовки, региональную точность)."
+      },
+      "fitBboxToMasks": {
+        "title": "Подогнать рамку под маски",
+        "desc": "Автоматически подогнать ограничительную рамку генерации под видимые маски перерисовки"
+      },
+      "applySegmentAnything": {
+        "title": "Применить Segment Anything",
+        "desc": "Применить текущую маску Segment Anything.",
+        "key": "enter"
+      },
+      "cancelSegmentAnything": {
+        "title": "Отменить Segment Anything",
+        "desc": "Отменить текущую операцию Segment Anything.",
+        "key": "esc"
+      }
+    },
+    "gallery": {
+      "starImage": {
+        "title": "Добавить/убрать звезду",
+        "desc": "Добавить или убрать звезду у выбранного изображения."
+      }
+    }
+  },
+  "metadata": {
+    "seamlessXAxis": "Бесшовность по оси X",
+    "seamlessYAxis": "Бесшовность по оси Y"
+  },
+  "modelManager": {
+    "clipLEmbed": "Встраивание CLIP-L",
+    "clipGEmbed": "Встраивание CLIP-G",
+    "noDefaultSettings": "Для этой модели настройки по умолчанию не заданы. Задайте их в менеджере моделей.",
+    "defaultSettingsOutOfSync": "Некоторые настройки не совпадают со значениями по умолчанию модели:",
+    "restoreDefaultSettings": "Нажмите, чтобы использовать настройки модели по умолчанию.",
+    "usingDefaultSettings": "Используются настройки модели по умолчанию",
+    "fileSize": "Размер файла",
+    "filterModels": "Фильтр моделей",
+    "fluxRedux": "FLUX Redux",
+    "hfTokenLabel": "Токен HuggingFace (нужен для некоторых моделей)",
+    "hfTokenHelperText": "Для некоторых моделей требуется токен HF. Нажмите здесь, чтобы создать или получить токен.",
+    "hfTokenInvalid": "Неверный или отсутствующий токен HF",
+    "hfForbidden": "У вас нет доступа к этой модели HF",
+    "hfForbiddenErrorMessage": "Рекомендуем открыть репозиторий: владелец может требовать принятия условий перед загрузкой.",
+    "urlForbidden": "У вас нет доступа к этой модели",
+    "urlForbiddenErrorMessage": "Возможно, потребуется запросить разрешение у сайта, распространяющего модель.",
+    "hfTokenInvalidErrorMessage": "Неверный или отсутствующий токен HuggingFace.",
+    "hfTokenRequired": "Вы пытаетесь загрузить модель, для которой нужен действительный токен HuggingFace.",
+    "hfTokenInvalidErrorMessage2": "Обновите его в ",
+    "hfTokenUnableToVerify": "Не удалось проверить токен HF",
+    "hfTokenUnableToVerifyErrorMessage": "Не удалось проверить токен HuggingFace — вероятно, из-за сетевой ошибки. Попробуйте позже.",
+    "hfTokenSaved": "Токен HF сохранён",
+    "hfTokenReset": "Токен HF сброшен",
+    "urlUnauthorizedErrorMessage": "Для доступа к этой модели может понадобиться настроить API-токен.",
+    "urlUnauthorizedErrorMessage2": "Как это сделать.",
+    "installedModelsCount": "Установлено моделей: {{installed}} из {{total}}.",
+    "allNModelsInstalled": "Все {{count}} моделей установлены",
+    "nToInstall": "к установке: {{count}}",
+    "nAlreadyInstalled": "уже установлено: {{count}}",
+    "modelPickerFallbackNoModelsInstalled": "Модели не установлены.",
+    "modelPickerFallbackNoModelsInstalled2": "Зайдите в <LinkComponent>менеджер моделей</LinkComponent>, чтобы установить модели.",
+    "relatedModels": "Связанные модели",
+    "showOnlyRelatedModels": "Связанные",
+    "sigLip": "SigLIP",
+    "bundleAlreadyInstalled": "Пакет уже установлен",
+    "bundleAlreadyInstalledDesc": "Все модели пакета {{bundleName}} уже установлены.",
+    "launchpadTab": "Launchpad",
+    "launchpad": {
+      "welcome": "Добро пожаловать в управление моделями",
+      "description": "Для большинства возможностей DevBIM нужны установленные модели. Выберите вариант ручной установки или посмотрите подобранные стартовые модели.",
+      "manualInstall": "Ручная установка",
+      "urlDescription": "Установка моделей по URL или локальному пути. Подходит для конкретных нужных вам моделей.",
+      "huggingFaceDescription": "Просмотр и установка моделей прямо из репозиториев HuggingFace.",
+      "scanFolderDescription": "Сканирование локальной папки для автоматического обнаружения и установки моделей.",
+      "recommendedModels": "Рекомендуемые модели",
+      "exploreStarter": "Или просмотрите все доступные стартовые модели",
+      "quickStart": "Пакеты быстрого старта",
+      "bundleDescription": "Каждый пакет включает ключевые модели семейств и подобранные базовые модели для начала работы.",
+      "browseAll": "Или просмотрите все доступные модели:",
+      "stableDiffusion15": "Stable Diffusion 1.5",
+      "sdxl": "SDXL",
+      "fluxDev": "FLUX.1 dev"
+    },
+    "controlLora": "Control LoRA",
+    "llavaOnevision": "LLaVA OneVision",
+    "installingXModels_one": "Устанавливается {{count}} модель",
+    "installingXModels_few": "Устанавливается {{count}} модели",
+    "installingXModels_many": "Устанавливается {{count}} моделей",
+    "installingXModels_other": "Устанавливается {{count}} модели",
+    "skippingXDuplicates_one": ", пропускается дубликатов: {{count}}",
+    "skippingXDuplicates_few": ", пропускается дубликатов: {{count}}",
+    "skippingXDuplicates_many": ", пропускается дубликатов: {{count}}",
+    "skippingXDuplicates_other": ", пропускается дубликатов: {{count}}",
+    "manageModels": "Управление моделями"
+  },
+  "models": {
+    "noCompatibleLoRAs": "Нет совместимых LoRA"
+  },
+  "parameters": {
+    "disabledNoRasterContent": "Недоступно (нет растрового содержимого)",
+    "invoke": {
+      "modelDisabledForTrial": "Генерация с {{modelName}} недоступна на триальных аккаунтах. Обновите аккаунт в его настройках.",
+      "emptyBatches": "пустые пакеты",
+      "batchNodeNotConnected": "Пакетный узел не подключён: {{label}}",
+      "batchNodeEmptyCollection": "Некоторые пакетные узлы содержат пустые коллекции",
+      "collectionEmpty": "пустая коллекция",
+      "collectionTooFewItems": "слишком мало элементов, минимум {{minItems}}",
+      "collectionTooManyItems": "слишком много элементов, максимум {{maxItems}}",
+      "collectionStringTooLong": "слишком длинная строка, максимум {{maxLength}}",
+      "collectionStringTooShort": "слишком короткая строка, минимум {{minLength}}",
+      "collectionNumberGTMax": "{{value}} > {{maximum}} (вкл. максимум)",
+      "collectionNumberLTMin": "{{value}} < {{minimum}} (вкл. минимум)",
+      "collectionNumberGTExclusiveMax": "{{value}} >= {{exclusiveMaximum}} (искл. максимум)",
+      "collectionNumberLTExclusiveMin": "{{value}} <= {{exclusiveMinimum}} (искл. минимум)",
+      "collectionNumberNotMultipleOf": "{{value}} не кратно {{multipleOf}}",
+      "batchNodeCollectionSizeMismatchNoGroupId": "Несовпадение размеров коллекций пакетной группы",
+      "batchNodeCollectionSizeMismatch": "Несовпадение размеров коллекций в пакете {{batchGroupId}}",
+      "modelIncompatibleBboxWidth": "Ширина рамки {{width}}, а {{model}} требует кратности {{multiple}}",
+      "modelIncompatibleBboxHeight": "Высота рамки {{height}}, а {{model}} требует кратности {{multiple}}",
+      "modelIncompatibleScaledBboxWidth": "Ширина масштабированной рамки {{width}}, а {{model}} требует кратности {{multiple}}",
+      "modelIncompatibleScaledBboxHeight": "Высота масштабированной рамки {{height}}, а {{model}} требует кратности {{multiple}}",
+      "fluxModelMultipleControlLoRAs": "Можно использовать только одну Control LoRA за раз",
+      "fluxKontextMultipleReferenceImages": "С Flux Kontext можно использовать только одно эталонное изображение за раз",
+      "canvasIsSelectingObject": "Холст занят (идёт выбор объекта)",
+      "promptExpansionPending": "Идёт расширение запроса",
+      "promptExpansionResultPending": "Примите или отмените результат расширения запроса"
+    },
+    "recallMetadata": "Восстановить метаданные",
+    "modelDisabledForTrial": "Генерация с {{modelName}} недоступна на триальных аккаунтах. Обновите аккаунт в <LinkComponent>настройках</LinkComponent>."
+  },
+  "dynamicPrompts": {
+    "promptsToGenerate": "Сколько запросов генерировать"
+  },
+  "settings": {
+    "enableModelDescriptions": "Показывать описания моделей в выпадающих списках",
+    "enableHighlightFocusedRegions": "Подсветка области фокуса",
+    "modelDescriptionsDisabled": "Описания моделей в списках отключены",
+    "modelDescriptionsDisabledDesc": "Описания моделей в выпадающих списках отключены. Включите их в настройках.",
+    "showDetailedInvocationProgress": "Подробный прогресс генерации",
+    "clearIntermediatesWithCount_one": "Очистить промежуточные ({{count}})",
+    "clearIntermediatesWithCount_few": "Очистить промежуточные ({{count}})",
+    "clearIntermediatesWithCount_many": "Очистить промежуточные ({{count}})",
+    "clearIntermediatesWithCount_other": "Очистить промежуточные ({{count}})",
+    "intermediatesCleared_one": "Очищено промежуточных: {{count}}",
+    "intermediatesCleared_few": "Очищено промежуточных: {{count}}",
+    "intermediatesCleared_many": "Очищено промежуточных: {{count}}",
+    "intermediatesCleared_other": "Очищено промежуточных: {{count}}"
+  },
+  "toast": {
+    "baseModelChangedCleared_one": "Отключено или очищено несовместимых подмоделей: {{count}}",
+    "baseModelChangedCleared_few": "Отключено или очищено несовместимых подмоделей: {{count}}",
+    "baseModelChangedCleared_many": "Отключено или очищено несовместимых подмоделей: {{count}}",
+    "baseModelChangedCleared_other": "Отключено или очищено несовместимых подмоделей: {{count}}",
+    "outOfMemoryErrorDescLocal": "Следуйте <LinkComponent>руководству по работе при малом объёме видеопамяти</LinkComponent>, чтобы реже сталкиваться с нехваткой памяти.",
+    "noRasterLayers": "Растровые слои не найдены",
+    "noRasterLayersDesc": "Создайте хотя бы один растровый слой для экспорта в PSD",
+    "noActiveRasterLayers": "Нет активных растровых слоёв",
+    "noActiveRasterLayersDesc": "Включите хотя бы один растровый слой для экспорта в PSD",
+    "noVisibleRasterLayers": "Нет видимых растровых слоёв",
+    "noVisibleRasterLayersDesc": "Включите хотя бы один растровый слой для экспорта в PSD",
+    "invalidCanvasDimensions": "Недопустимые размеры холста",
+    "canvasTooLarge": "Холст слишком большой",
+    "canvasTooLargeDesc": "Размеры холста превышают максимум, допустимый для экспорта в PSD. Уменьшите ширину и высоту холста и попробуйте снова.",
+    "failedToProcessLayers": "Не удалось обработать слои",
+    "psdExportSuccess": "Экспорт в PSD завершён",
+    "psdExportSuccessDesc": "Успешно экспортировано слоёв в PSD: {{count}}",
+    "problemExportingPSD": "Проблема при экспорте в PSD",
+    "canvasManagerNotAvailable": "Менеджер холста недоступен",
+    "noValidLayerAdapters": "Не найдено допустимых адаптеров слоёв",
+    "pasteSuccess": "Вставлено в {{destination}}",
+    "pasteFailed": "Не удалось вставить",
+    "uploadFailedInvalidUploadDesc_withCount_one": "Может быть не более {{count}} изображения PNG, JPEG или WEBP.",
+    "uploadFailedInvalidUploadDesc_withCount_few": "Может быть не более {{count}} изображений PNG, JPEG или WEBP.",
+    "uploadFailedInvalidUploadDesc_withCount_many": "Может быть не более {{count}} изображений PNG, JPEG или WEBP.",
+    "uploadFailedInvalidUploadDesc_withCount_other": "Может быть не более {{count}} изображений PNG, JPEG или WEBP.",
+    "unableToCopy": "Не удалось скопировать",
+    "unableToCopyDesc": "Браузер не разрешает доступ к буферу обмена. Пользователям Firefox может помочь ",
+    "unableToCopyDesc_theseSteps": "эти шаги",
+    "fluxFillIncompatibleWithT2IAndI2I": "FLUX Fill несовместим с режимами «текст в изображение» и «изображение в изображение». Для этих задач используйте другие модели FLUX.",
+    "imagenIncompatibleGenerationMode": "Google {{model}} поддерживает только режим «текст в изображение». Для «изображения в изображение», перерисовки и дорисовки используйте другие модели.",
+    "chatGPT4oIncompatibleGenerationMode": "ChatGPT 4o поддерживает только режимы «текст в изображение» и «изображение в изображение». Для перерисовки и дорисовки используйте другие модели.",
+    "fluxKontextIncompatibleGenerationMode": "FLUX Kontext не поддерживает генерацию по изображениям на холсте. Повторите через раздел эталонных изображений и отключите растровые слои.",
+    "problemUnpublishingWorkflow": "Проблема при отмене публикации процесса",
+    "problemUnpublishingWorkflowDescription": "Не удалось отменить публикацию процесса. Попробуйте ещё раз.",
+    "workflowUnpublished": "Публикация процесса отменена",
+    "promptGenerationStarted": "Генерация запроса начата",
+    "uploadAndPromptGenerationFailed": "Не удалось загрузить изображение и сгенерировать запрос",
+    "promptExpansionFailed": "Что-то пошло не так. Попробуйте расширить запрос ещё раз.",
+    "maskInverted": "Маска инвертирована",
+    "maskInvertFailed": "Не удалось инвертировать маску",
+    "noVisibleMasks": "Нет видимых масок",
+    "noVisibleMasksDesc": "Создайте или включите хотя бы одну маску перерисовки для инверсии",
+    "noInpaintMaskSelected": "Маска перерисовки не выбрана",
+    "noInpaintMaskSelectedDesc": "Выберите маску перерисовки для инверсии",
+    "invalidBbox": "Недопустимая ограничительная рамка",
+    "invalidBboxDesc": "Ограничительная рамка не имеет допустимых размеров"
+  },
+  "popovers": {
+    "inpainting": {
+      "heading": "Перерисовка (inpainting)",
+      "paragraphs": [
+        "Определяет, какая область будет изменена; управляется силой шумоподавления."
+      ]
+    },
+    "rasterLayer": {
+      "heading": "Растровый слой",
+      "paragraphs": [
+        "Пиксельное содержимое холста, используется при генерации изображений."
+      ]
+    },
+    "regionalGuidance": {
+      "heading": "Региональная точность",
+      "paragraphs": [
+        "Закрасьте область, чтобы указать, где должны появляться элементы из общих запросов."
+      ]
+    },
+    "regionalGuidanceAndReferenceImage": {
+      "heading": "Региональная точность и региональное эталонное изображение",
+      "paragraphs": [
+        "Для региональной точности: закрасьте область, чтобы указать, где должны появляться элементы из общих запросов.",
+        "Для регионального эталонного изображения: закрасьте область, чтобы применить эталонное изображение к её конкретным частям."
+      ]
+    },
+    "globalReferenceImage": {
+      "heading": "Глобальное эталонное изображение",
+      "paragraphs": [
+        "Эталонное изображение, влияющее на всю генерацию целиком."
+      ]
+    },
+    "regionalReferenceImage": {
+      "heading": "Региональное эталонное изображение",
+      "paragraphs": [
+        "Закрасьте область, чтобы применить эталонное изображение к её конкретным частям."
+      ]
+    },
+    "tileSize": {
+      "heading": "Размер плитки",
+      "paragraphs": [
+        "Размер плиток, используемых при увеличении. Крупные плитки требуют больше памяти, но могут давать лучший результат.",
+        "Для моделей SD1.5 по умолчанию 768, для SDXL — 1024. При нехватке памяти уменьшите размер плитки."
+      ]
+    },
+    "tileOverlap": {
+      "heading": "Перекрытие плиток",
+      "paragraphs": [
+        "Перекрытие соседних плиток при увеличении. Большее перекрытие уменьшает видимые швы между плитками, но требует больше памяти.",
+        "Значение по умолчанию 128 подходит в большинстве случаев; при необходимости скорректируйте его под свои задачи и объём памяти."
+      ]
+    }
+  },
+  "controlLayers": {
+    "fitBboxToMasks": "Подогнать рамку под маски",
+    "exportCanvasToPSD": "Экспортировать холст в PSD",
+    "regionCopiedToClipboard": "{{region}} скопировано в буфер обмена",
+    "copyRegionError": "Ошибка копирования {{region}}",
+    "mergeDown": "Объединить со слоем ниже",
+    "mergingLayers": "Объединение слоёв",
+    "ruleOfThirds": "Показать сетку третей",
+    "newSession": "Новая сессия",
+    "addImageNoise": "Добавить $t(controlLayers.imageNoise)",
+    "addDenoiseLimit": "Добавить $t(controlLayers.denoiseLimit)",
+    "invertMask": "Инвертировать маску",
+    "referenceImageRegional": "Эталонное изображение (региональное)",
+    "referenceImageGlobal": "Эталонное изображение (глобальное)",
+    "asRasterLayer": "Как $t(controlLayers.rasterLayer)",
+    "asRasterLayerResize": "Как $t(controlLayers.rasterLayer) (с изменением размера)",
+    "asControlLayer": "Как $t(controlLayers.controlLayer)",
+    "asControlLayerResize": "Как $t(controlLayers.controlLayer) (с изменением размера)",
+    "rasterLayer_withCount_other": "Растровые слои",
+    "controlLayer_withCount_other": "Слои управления",
+    "inpaintMask_withCount_other": "Маски перерисовки",
+    "regionalGuidance_withCount_other": "Региональная точность",
+    "globalReferenceImage_withCount_other": "Глобальные эталонные изображения",
+    "layer_other": "Слои",
+    "layer_withCount_other": "Слои ({{count}})",
+    "convertRasterLayerTo": "Преобразовать $t(controlLayers.rasterLayer) в",
+    "convertControlLayerTo": "Преобразовать $t(controlLayers.controlLayer) в",
+    "convertInpaintMaskTo": "Преобразовать $t(controlLayers.inpaintMask) в",
+    "convertRegionalGuidanceTo": "Преобразовать $t(controlLayers.regionalGuidance) в",
+    "copyRasterLayerTo": "Копировать $t(controlLayers.rasterLayer) в",
+    "copyControlLayerTo": "Копировать $t(controlLayers.controlLayer) в",
+    "copyInpaintMaskTo": "Копировать $t(controlLayers.inpaintMask) в",
+    "copyRegionalGuidanceTo": "Копировать $t(controlLayers.regionalGuidance) в",
+    "newRasterLayer": "Новый $t(controlLayers.rasterLayer)",
+    "newControlLayer": "Новый $t(controlLayers.controlLayer)",
+    "newInpaintMask": "Новая $t(controlLayers.inpaintMask)",
+    "newRegionalGuidance": "Новая $t(controlLayers.regionalGuidance)",
+    "pasteTo": "Вставить в",
+    "pasteToAssets": "Активы",
+    "pasteToAssetsDesc": "Вставить в активы",
+    "pasteToBbox": "Рамка",
+    "pasteToBboxDesc": "Новый слой (в рамке)",
+    "pasteToCanvas": "Холст",
+    "pasteToCanvasDesc": "Новый слой (на холсте)",
+    "pastedTo": "Вставлено в {{destination}}",
+    "showNonRasterLayers": "Показать нерастровые слои (Shift+H)",
+    "hideNonRasterLayers": "Скрыть нерастровые слои (Shift+H)",
+    "useImage": "Использовать изображение",
+    "resetCanvasLayers": "Сбросить слои холста",
+    "resetGenerationSettings": "Сбросить настройки генерации",
+    "replaceCurrent": "Заменить текущее",
+    "controlLayerEmptyState": "<UploadButton>Загрузите изображение</UploadButton>, перетащите изображение из галереи на этот слой, <PullBboxButton>поместите ограничительную рамку в этот слой</PullBboxButton> или начните рисовать на холсте.",
+    "referenceImageEmptyStateWithCanvasOptions": "<UploadButton>Загрузите изображение</UploadButton>, перетащите изображение из галереи на это эталонное изображение или <PullBboxButton>поместите ограничительную рамку в это эталонное изображение</PullBboxButton>.",
+    "referenceImageEmptyState": "<UploadButton>Загрузите изображение</UploadButton> или перетащите изображение из галереи на это эталонное изображение.",
+    "uploadOrDragAnImage": "Перетащите изображение из галереи или <UploadButton>загрузите изображение</UploadButton>.",
+    "imageNoise": "Шум изображения",
+    "denoiseLimit": "Предел шумоподавления",
+    "warnings": {
+      "problemsFound": "Найдены проблемы",
+      "unsupportedModel": "слой не поддерживается выбранной основной моделью",
+      "controlAdapterNoModelSelected": "не выбрана модель слоя управления",
+      "controlAdapterIncompatibleBaseModel": "несовместимая основная модель слоя управления",
+      "controlAdapterNoControl": "не выбрана/не нарисована карта управления",
+      "ipAdapterNoModelSelected": "не выбрана модель эталонного изображения",
+      "ipAdapterIncompatibleBaseModel": "несовместимая основная модель эталонного изображения",
+      "ipAdapterNoImageSelected": "не выбрано изображение эталонного изображения",
+      "rgNoPromptsOrIPAdapters": "нет текстовых запросов или эталонных изображений",
+      "rgNegativePromptNotSupported": "негативный запрос не поддерживается выбранной основной моделью",
+      "rgReferenceImagesNotSupported": "региональные эталонные изображения не поддерживаются выбранной основной моделью",
+      "rgAutoNegativeNotSupported": "авто-негатив не поддерживается выбранной основной моделью",
+      "rgNoRegion": "регион не нарисован",
+      "fluxFillIncompatibleWithControlLoRA": "Control LoRA несовместима с FLUX Fill"
+    },
+    "errors": {
+      "unableToFindImage": "Не удалось найти изображение",
+      "unableToLoadImage": "Не удалось загрузить изображение"
+    },
+    "ipAdapterMethod": {
+      "fullDesc": "Передаёт визуальный стиль (цвета, текстуры) и композицию (раскладку, структуру).",
+      "styleDesc": "Передаёт визуальный стиль (цвета, текстуры), не учитывая раскладку. Ранее называлось «только стиль».",
+      "compositionDesc": "Воспроизводит раскладку и структуру, игнорируя стиль исходного изображения.",
+      "styleStrong": "Стиль (сильный)",
+      "styleStrongDesc": "Применяет сильный визуальный стиль с немного ослабленным влиянием на композицию.",
+      "stylePrecise": "Стиль (точный)",
+      "stylePreciseDesc": "Применяет точный визуальный стиль, исключая влияние на объекты."
+    },
+    "fluxReduxImageInfluence": {
+      "imageInfluence": "Влияние изображения",
+      "lowest": "Минимальное",
+      "low": "Низкое",
+      "medium": "Среднее",
+      "high": "Высокое",
+      "highest": "Максимальное"
+    },
+    "filter": {
+      "advanced": "Дополнительно",
+      "processingLayerWith": "Обработка слоя фильтром {{type}}.",
+      "forMoreControl": "Для большего контроля нажмите «Дополнительно» ниже.",
+      "img_blur": {
+        "label": "Размытие изображения",
+        "description": "Размывает выбранный слой.",
+        "blur_type": "Тип размытия",
+        "blur_radius": "Радиус",
+        "gaussian_type": "Гауссово",
+        "box_type": "Прямоугольное"
+      },
+      "img_noise": {
+        "label": "Шум на изображении",
+        "description": "Добавляет шум в выбранный слой.",
+        "noise_type": "Тип шума",
+        "noise_amount": "Количество",
+        "gaussian_type": "Гауссов",
+        "salt_and_pepper_type": "Соль и перец",
+        "noise_color": "Цветной шум",
+        "size": "Размер шума"
+      },
+      "adjust_image": {
+        "label": "Коррекция изображения",
+        "description": "Корректирует выбранный канал изображения.",
+        "channel": "Канал",
+        "value_setting": "Значение",
+        "scale_values": "Масштабировать значения",
+        "red": "Красный (RGBA)",
+        "green": "Зелёный (RGBA)",
+        "blue": "Синий (RGBA)",
+        "alpha": "Альфа (RGBA)",
+        "cyan": "Голубой (CMYK)",
+        "magenta": "Пурпурный (CMYK)",
+        "yellow": "Жёлтый (CMYK)",
+        "black": "Чёрный (CMYK)",
+        "hue": "Тон (HSV)",
+        "saturation": "Насыщенность (HSV)",
+        "value": "Значение (HSV)",
+        "luminosity": "Светлота (LAB)",
+        "a": "A (LAB)",
+        "b": "B (LAB)",
+        "y": "Y (YCbCr)",
+        "cb": "Cb (YCbCr)",
+        "cr": "Cr (YCbCr)"
+      }
+    },
+    "transform": {
+      "fitModeCover": "Заполнение"
+    },
+    "selectObject": {
+      "selectObject": "Выбор объекта",
+      "pointType": "Тип точки",
+      "invertSelection": "Инвертировать выделение",
+      "include": "Включить",
+      "exclude": "Исключить",
+      "neutral": "Нейтральная",
+      "apply": "Применить",
+      "reset": "Сбросить",
+      "saveAs": "Сохранить как",
+      "cancel": "Отменить",
+      "process": "Обработать",
+      "help1": "Выберите один целевой объект. Добавляйте точки <Bold>Включить</Bold> и <Bold>Исключить</Bold>, чтобы указать, какие части слоя относятся к целевому объекту.",
+      "help2": "Начните с одной точки <Bold>Включить</Bold> внутри целевого объекта. Добавляйте точки, уточняя выделение. Чем меньше точек, тем обычно лучше результат.",
+      "help3": "Инвертируйте выделение, чтобы выбрать всё, кроме целевого объекта.",
+      "clickToAdd": "Нажмите на слой, чтобы добавить точку",
+      "dragToMove": "Перетащите точку, чтобы переместить её",
+      "clickToRemove": "Нажмите на точку, чтобы удалить её"
+    },
+    "settings": {
+      "saveAllImagesToGallery": {
+        "label": "Отправлять новые генерации в галерею",
+        "alert": "Новые генерации отправляются в галерею, минуя холст"
+      },
+      "isolatedLayerPreview": "Изолированный предпросмотр слоя",
+      "isolatedLayerPreviewDesc": "Показывать ли только этот слой при операциях вроде фильтрации или трансформации."
+    },
+    "canvasContextMenu": {
+      "newResizedControlLayer": "Новый слой управления с размером",
+      "newInpaintMask": "Новая маска перерисовки",
+      "newRegionalGuidance": "Новая региональная точность",
+      "copyToClipboard": "Копировать в буфер обмена",
+      "copyCanvasToClipboard": "Копировать холст в буфер обмена",
+      "copyBboxToClipboard": "Копировать рамку в буфер обмена"
+    },
+    "autoSwitch": {
+      "off": "Выкл",
+      "switchOnStart": "В начале",
+      "switchOnFinish": "По завершении"
+    }
+  },
+  "upscaling": {
+    "tileControl": "Управление плитками",
+    "tileSize": "Размер плитки",
+    "tileOverlap": "Перекрытие плиток",
+    "incompatibleBaseModel": "Архитектура основной модели не поддерживает увеличение",
+    "incompatibleBaseModelDesc": "Увеличение поддерживается только для моделей архитектур SD1.5 и SDXL. Смените основную модель, чтобы включить увеличение."
+  },
+  "stylePresets": {
+    "togglePromptPreviews": "Показать/скрыть превью запросов"
+  },
+  "ui": {
+    "launchpad": {
+      "workflowsTitle": "Погружайтесь глубже с рабочими процессами.",
+      "upscalingTitle": "Увеличивайте и добавляйте детали.",
+      "canvasTitle": "Редактируйте и доводите на холсте.",
+      "generateTitle": "Генерируйте изображения по текстовым запросам.",
+      "modelGuideText": "Хотите узнать, какие запросы лучше работают с каждой моделью?",
+      "modelGuideLink": "Посмотрите наше руководство по моделям.",
+      "workflows": {
+        "description": "Рабочие процессы — переиспользуемые шаблоны, автоматизирующие генерацию изображений: быстро выполняйте сложные операции и получайте стабильный результат.",
+        "learnMoreLink": "Подробнее о создании рабочих процессов",
+        "browseTemplates": {
+          "title": "Каталог шаблонов процессов",
+          "description": "Готовые процессы для типовых задач"
+        },
+        "createNew": {
+          "title": "Создать новый процесс",
+          "description": "Начать процесс с нуля"
+        },
+        "loadFromFile": {
+          "title": "Загрузить процесс из файла",
+          "description": "Загрузите процесс, чтобы начать с готовой настройки"
+        }
+      },
+      "upscaling": {
+        "uploadImage": {
+          "title": "Загрузите изображение для увеличения",
+          "description": "Нажмите или перетащите изображение для увеличения (JPG, PNG, WebP до 100 МБ)"
+        },
+        "replaceImage": {
+          "title": "Заменить текущее изображение",
+          "description": "Нажмите или перетащите новое изображение, чтобы заменить текущее"
+        },
+        "imageReady": {
+          "title": "Изображение готово",
+          "description": "Нажмите «Сгенерировать», чтобы начать увеличение"
+        },
+        "readyToUpscale": {
+          "title": "Готово к увеличению!",
+          "description": "Настройте параметры ниже и нажмите кнопку «Сгенерировать», чтобы начать увеличение изображения."
+        },
+        "upscaleModel": "Модель увеличения",
+        "model": "Модель",
+        "scale": "Масштаб",
+        "helpText": {
+          "promptAdvice": "При увеличении описывайте в запросе технику и стиль; конкретное содержимое изображения описывать не нужно.",
+          "styleAdvice": "Увеличение лучше работает с общим стилем вашего изображения."
+        }
+      }
+    }
+  },
+  "system": {
+    "logNamespaces": {
+      "dnd": "Перетаскивание"
+    }
+  },
+  "newUserExperience": {
+    "toGetStartedLocal": "Для начала загрузите или импортируйте модели, необходимые для работы DevBIM. Затем введите запрос в поле и нажмите <StrongComponent>«Сгенерировать»</StrongComponent>, чтобы создать первое изображение. Выберите шаблон запроса, чтобы улучшить результат. Изображения можно сохранять сразу в <StrongComponent>галерею</StrongComponent> или редактировать на <StrongComponent>холсте</StrongComponent>.",
+    "toGetStartedWorkflow": "Для начала заполните поля слева и нажмите <StrongComponent>«Сгенерировать»</StrongComponent>, чтобы создать изображение. Хотите попробовать другие процессы? Нажмите <StrongComponent>значок папки</StrongComponent> рядом с названием процесса, чтобы посмотреть список шаблонов.",
+    "lowVRAMMode": "Для лучшей производительности следуйте <LinkComponent>руководству по работе при малом объёме видеопамяти</LinkComponent>.",
+    "noModelsInstalled": "Похоже, у вас не установлено ни одной модели! Можно <DownloadStarterModelsButton>скачать стартовый пакет моделей</DownloadStarterModelsButton> или <ImportModelsButton>импортировать модели</ImportModelsButton>."
+  },
+  "whatsNew": {
+    "items": [
+      "Новая настройка отправки всех генераций с холста сразу в галерею.",
+      "Новые возможности: инверсия маски (Shift+V) и подгонка рамки по маске (Shift+B).",
+      "Расширена поддержка миниатюр моделей и их конфигураций.",
+      "Прочие улучшения и исправления."
+    ],
+    "readReleaseNotes": "Читать примечания к релизу",
+    "watchRecentReleaseVideos": "Смотреть свежие видео о релизах",
+    "watchUiUpdatesOverview": "Обзор обновлений интерфейса"
+  },
+  "supportVideos": {
+    "supportVideos": "Видеоматериалы",
+    "gettingStarted": "Начало работы",
+    "watch": "Смотреть",
+    "studioSessionsDesc": "Присоединяйтесь к <DiscordLink />, чтобы участвовать в живых сессиях и задавать вопросы. Записи появляются в плейлисте на следующей неделе.",
+    "videos": {
+      "gettingStarted": {
+        "title": "Начало работы с DevBIM",
+        "description": "Полный видеокурс обо всём, что нужно для старта с DevBIM — от первого изображения до продвинутых техник."
+      },
+      "studioSessions": {
+        "title": "Сессии Studio",
+        "description": "Глубокие разборы продвинутых возможностей DevBIM, творческих приёмов и обсуждений сообщества."
+      }
+    }
+  }
+}

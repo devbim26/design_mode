@@ -96,7 +96,8 @@
 | `make_style_previews.py` | Генерация превью пресетов через ImageRouter (демо-сюжеты) |
 | `setup_ifcviewer.py` | Скрипт вкладки «IFC» — 3D-просмотр BIM-моделей (см. «IFC-вьювер») |
 | `ifc/` | Исходники вьювера: страница, роутер, ассеты @thatopen + web-ifc |
-| `setup_navbar_labels.py` | Подписи под пиктограммами левой рейки + поясняющие тултипы; прячет Workflows (запускать последним после остальных setup-скриптов) |
+| `setup_ru_locale.py` + `locales_patch/ru_missing.json` | Полная русская локализация интерфейса: дополняет `dist/locales/ru.json` отсутствующими ключами (после `rebrand_devbim.py`) |
+| `setup_navbar_labels.py` | Подписи под пиктограммами левой рейки + поясняющие тултипы (EN/RU по языку); прячет Workflows (запускать последним после остальных setup-скриптов) |
 | `launch/` | **Все скрипты запуска системы** (главный — `start-system-design.bat`; краткий гайд — `launch/START-HERE.txt`; см. «Запуск») |
 | `data/invokeai.yaml` | Конфиг сервера (host 127.0.0.1, port 9090, CPU, float32) |
 | `docs/` | Скриншоты интерфейса после ребрендинга |
@@ -218,8 +219,8 @@ shapely matplotlib`) и `.git` (клонируется заново с рабо�
 Затем к свежему пакету применяются setup-скрипты строго по порядку:
 `rebrand_devbim.py` → `setup_imagerouter.py` → `setup_ifcviewer.py` →
 `setup_pdfviewer.py` → `setup_designcode.py` → `setup_threed.py` →
-`setup_site_auth.py` → `setup_style_presets.py` →
-`setup_navbar_labels.py` (**строго последним** — прячет Workflows, якорь
+`setup_site_auth.py` → `setup_style_presets.py` → `setup_ru_locale.py`
+→ `setup_navbar_labels.py` (**строго последним** — прячет Workflows, якорь
 вкладки IFC).
 
 Порядок переезда: закоммитить и запушить всё → остановить стек
