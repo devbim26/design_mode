@@ -89,6 +89,9 @@ def _mode() -> str:
 
 
 def _site_password() -> str:
+    v = studio_store.get_setting("site_password")  # задан из /admin — приоритет
+    if v:
+        return v
     v = studio_store.env_value("SITE_PASSWORD")
     if v is None:
         v = os.environ.get("SITE_PASSWORD") or ""
@@ -100,6 +103,18 @@ def _valid_until() -> str | None:
     if v is None:
         v = os.environ.get("SITE_VALID_UNTIL") or ""
     return v.strip() or None
+
+
+def _dc_url_error(url: str) -> str | None:
+    """Валидация адреса сайта дизайн-кода (пусто — допустимо, значит «нет»)."""
+    url = (url or "").strip()
+    if not url:
+        return None
+    if not url.lower().startswith(("http://", "https://")):
+        return "Адрес сайта должен начинаться с http:// или https://"
+    if len(url) > 2048:
+        return "Адрес сайта слишком длинный"
+    return None
 
 
 def _expired() -> bool:
@@ -510,6 +525,81 @@ class SiteAuthMiddleware:
             await _send_json(send, {"ok": True})
             return
 
+        # --- персональные настройки Design Code (п.73) ---
+        m = re.match(r"^/admin/api/users/([^/]+)/designcode$", path)
+        if m and method == "POST":
+            body = await _read_body(receive)
+            try:
+                data = json.loads(body or b"{}")
+            except ValueError:
+                await _send_json(send, {"detail": "invalid JSON body"}, status=422)
+                return
+            url = str(data.get("url") or "").strip()
+            code = str(data.get("code") or "").strip()
+            err = _dc_url_error(url)
+            if err:
+                await _send_json(send, {"detail": err}, status=422)
+                return
+            if len(code) > 256:
+                await _send_json(send, {"detail": "код доступа слишком длинный"}, status=422)
+                return
+            studio_store.set_design_code(unquote(m.group(1)), url, code)
+            await _send_json(send, {"ok": True})
+            return
+
+        # --- общие настройки инстанса (правятся из /admin, приоритет над .env) ---
+        if path == "/admin/api/settings/designcode":
+            if method == "GET":
+                await _send_json(send, {"url": studio_store.get_setting("design_code_url") or "",
+                                        "code": studio_store.get_setting("design_code_access_code") or ""})
+                return
+            if method == "POST":
+                body = await _read_body(receive)
+                try:
+                    data = json.loads(body or b"{}")
+                except ValueError:
+                    await _send_json(send, {"detail": "invalid JSON body"}, status=422)
+                    return
+                url = str(data.get("url") or "").strip()
+                code = str(data.get("code") or "").strip()
+                err = _dc_url_error(url)
+                if err:
+                    await _send_json(send, {"detail": err}, status=422)
+                    return
+                if len(code) > 256:
+                    await _send_json(send, {"detail": "код доступа слишком длинный"}, status=422)
+                    return
+                studio_store.set_setting("design_code_url", url)
+                studio_store.set_setting("design_code_access_code", code)
+                await _send_json(send, {"ok": True})
+                return
+
+        if path == "/admin/api/settings/site-password" and method == "POST":
+            body = await _read_body(receive)
+            try:
+                data = json.loads(body or b"{}")
+            except ValueError:
+                await _send_json(send, {"detail": "invalid JSON body"}, status=422)
+                return
+            pw = str(data.get("password") or "")
+            if len(pw) < 8:
+                await _send_json(send, {"detail": "пароль должен быть не короче 8 символов"}, status=422)
+                return
+            studio_store.set_setting("site_password", pw)
+            await _send_json(send, {"ok": True})
+            return
+
+        if path == "/admin/api/settings/ir-key" and method == "POST":
+            body = await _read_body(receive)
+            try:
+                data = json.loads(body or b"{}")
+            except ValueError:
+                await _send_json(send, {"detail": "invalid JSON body"}, status=422)
+                return
+            studio_store.set_setting("imagerouter_api_key", str(data.get("key") or "").strip())
+            await _send_json(send, {"ok": True})
+            return
+
         await _send_html(send, 200, _ADMIN_PAGE.encode("utf-8"))
 
     # ---------- изоляция владения (sso, role != admin) ----------
@@ -883,22 +973,61 @@ _ADMIN_PAGE = """<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8">
         gap:10px; align-items:center; flex-wrap:wrap; }
   .totals { margin-top:10px; font-size:13.5px; color:#7C8598; }
   .ok { color:#4ADE80; } .err { color:#FCA5A5; }
-  #genmodal { position:fixed; inset:0; background:rgba(0,0,0,.65); display:none;
+  .settings { margin-top:22px; border:1px solid #23262D; border-radius:10px;
+        padding:14px 16px; font-size:13px; color:#A7B0C0; }
+  .settings h2 { font-size:14px; color:#E6EAF2; margin:0 0 4px; }
+  .settings .srow { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin:10px 0 2px; }
+  .settings .srow b { min-width:225px; font-weight:600; color:#E6EAF2; }
+  .settings .srow input { flex:1; min-width:200px; }
+  .settings .srow input.narrow { flex:0 0 230px; }
+  .settings .hint { font-size:11.5px; color:#5A6474; }
+  .dc-personal { border-color:#38BDF8; color:#38BDF8; }
+  #genmodal, #dcmodal { position:fixed; inset:0; background:rgba(0,0,0,.65); display:none;
         align-items:center; justify-content:center; z-index:50; }
-  #genmodal .box { background:#14161A; border:1px solid #2A2E37; border-radius:12px;
+  #genmodal .box, #dcmodal .box { background:#14161A; border:1px solid #2A2E37; border-radius:12px;
         padding:20px 22px; max-width:min(1100px, calc(100vw - 40px));
         max-height:calc(100vh - 80px); overflow:auto;
         box-shadow:0 12px 40px rgba(0,0,0,.5); }
-  #genmodal h3 { font-size:15px; margin-bottom:12px; }
+  #genmodal h3, #dcmodal h3 { font-size:15px; margin-bottom:12px; }
   #genmodal table { font-size:12.5px; margin-top:0; }
-  #genmodal .close { float:right; }
+  #genmodal .close, #dcmodal .close { float:right; }
   #genmodal td.errtext { max-width:260px; overflow:hidden; text-overflow:ellipsis;
         white-space:nowrap; color:#FCA5A5; }
+  #dcmodal .fld { font-size:12px; color:#7C8598; margin:0 0 4px; }
+  #dcmodal .grp { margin-bottom:12px; }
+  #dcmodal .grp input { width:100%; box-sizing:border-box; }
+  #dcmodal .acts { display:flex; gap:8px; }
 </style></head><body>
 <h1>Пользователи студии</h1>
 <p><a href="/">← к студии</a> · <button id="alllogs" style="margin-left:6px">Журнал всех генераций</button></p>
 <div class="owner" id="owner"></div>
 <div class="totals" id="totals"></div>
+<div class="settings">
+  <h2>Общие настройки</h2>
+  <div class="hint">Правятся здесь, без доступа к серверу; действуют сразу (перезапуск не нужен). Приоритет над .env.</div>
+  <div class="srow">
+    <b>Design Code — для всех:</b>
+    <input id="dcUrl" placeholder="https://адрес-сайта-дизайн-кода/">
+    <input id="dcCode" class="narrow" placeholder="код доступа (пусто — без кода)">
+    <button id="dcSave">Сохранить</button>
+  </div>
+  <div class="hint">Адрес и код вкладки «Design Code» по умолчанию — для владельца и пользователей
+    без персональных настроек. Пустой код — вкладка не спрашивает код.</div>
+  <div class="srow">
+    <b>Пароль владельца (вход):</b>
+    <input id="pw1" class="narrow" type="password" placeholder="новый пароль (8+ символов)">
+    <input id="pw2" class="narrow" type="password" placeholder="повторите пароль">
+    <button id="pwSave">Сменить</button>
+  </div>
+  <div class="hint">Вход владельца: пустая почта + этот пароль на форме входа.</div>
+  <div class="srow">
+    <b>Ключ ImageRouter (общий):</b>
+    <input id="irKey" type="password" placeholder="токен (пусто — вернуть ключ из .env)">
+    <button id="irSave">Сохранить</button>
+  </div>
+  <div class="hint">Генерации владельца и админов без персонального токена. Очистка поля
+    возвращает ключ из .env.</div>
+</div>
 <h2 style="font-size:15px;margin-top:24px">Создать пользователя</h2>
 <form id="f" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap;align-items:center">
   <input name="email" placeholder="почта" required>
@@ -909,7 +1038,8 @@ _ADMIN_PAGE = """<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8">
   <button type="submit">Создать</button>
 </form>
 <table id="t"><thead><tr>
-  <th>Email</th><th>Имя</th><th>Роль</th><th>Токен IR</th><th>Генерации ок/ош</th><th>~$</th>
+  <th>Email</th><th>Имя</th><th>Роль</th><th>Токен IR</th><th>Design Code</th>
+  <th>Генерации ок/ош</th><th>~$</th>
   <th>Картинки</th><th>Борды</th>
   <th>IFC</th><th>PDF</th><th>3D</th><th>Последний вход</th><th>Действия</th>
 </tr></thead><tbody></tbody></table>
@@ -920,6 +1050,23 @@ _ADMIN_PAGE = """<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8">
     <th>Время</th><th class="u">Пользователь</th><th>Тип</th><th>Модель</th><th>Статус</th>
     <th>Карт.</th><th>~$</th><th>Длит.</th><th>Ошибка</th>
   </tr></thead><tbody></tbody></table>
+</div></div>
+<div id="dcmodal"><div class="box" style="max-width:560px">
+  <button class="close" onclick="document.getElementById('dcmodal').style.display='none'">✕ Закрыть</button>
+  <h3 id="dcmodal-title">Design Code</h3>
+  <p class="hint" id="dcmodal-hint" style="color:#7C8598;font-size:12px;margin:0 0 14px"></p>
+  <div class="grp">
+    <div class="fld">URL сайта дизайн-кода (пусто — как у всех)</div>
+    <input id="dcMUrl" placeholder="https://…">
+  </div>
+  <div class="grp">
+    <div class="fld">Код доступа (пусто — как у всех)</div>
+    <input id="dcMCode" placeholder="код" autocomplete="off">
+  </div>
+  <div class="acts">
+    <button id="dcMSave">Сохранить</button>
+    <button id="dcMClear">Сбросить персональные</button>
+  </div>
 </div></div>
 <script>
 function esc(s) {
@@ -987,8 +1134,63 @@ document.getElementById('genmodal').addEventListener('mousedown', function (e) {
   if (e.target === this) this.style.display = 'none';
 });
 document.addEventListener('keydown', function (e) {
-  if (e.key === 'Escape') document.getElementById('genmodal').style.display = 'none';
+  if (e.key === 'Escape') {
+    document.getElementById('genmodal').style.display = 'none';
+    document.getElementById('dcmodal').style.display = 'none';
+  }
 });
+
+// ============ Design Code: персональные настройки пользователя ============
+function dcHost(u) { try { return new URL(u).host; } catch (e) { return u || ''; } }
+var dcGlobal = { url: '', code: '' };
+var dcUser = null;
+var dcModal = document.getElementById('dcmodal');
+dcModal.addEventListener('mousedown', function (e) { if (e.target === this) this.style.display = 'none'; });
+function openDcModal(u) {
+  dcUser = u;
+  document.getElementById('dcmodal-title').textContent = 'Design Code — ' + u.email;
+  document.getElementById('dcmodal-hint').textContent =
+    'Общие настройки сейчас: ' + (dcGlobal.url || 'адрес не задан') +
+    ' · код ' + (dcGlobal.code ? 'задан' : 'не задан') +
+    '. Пустые поля — пользователь работает на общих.';
+  document.getElementById('dcMUrl').value = u.dc_url || '';
+  document.getElementById('dcMCode').value = u.dc_code || '';
+  dcModal.style.display = 'flex';
+  document.getElementById('dcMUrl').focus();
+}
+document.getElementById('dcMSave').onclick = function () {
+  post('/admin/api/users/' + encodeURIComponent(dcUser.user_id) + '/designcode',
+       { url: document.getElementById('dcMUrl').value, code: document.getElementById('dcMCode').value });
+};
+document.getElementById('dcMClear').onclick = function () {
+  post('/admin/api/users/' + encodeURIComponent(dcUser.user_id) + '/designcode', { url: '', code: '' });
+};
+
+// ============ Общие настройки (Design Code / пароль владельца / ключ IR) ============
+fetch('/admin/api/settings/designcode').then(r => r.json()).then(s => {
+  dcGlobal = s;
+  // тултипы «— общие —» могут отрисоваться раньше этого ответа — обновляем
+  document.querySelectorAll('#t .dccell button').forEach(function (b) {
+    if (b._u && !b._u.dc_url && !b._u.dc_code)
+      b.title = 'Персональных настроек нет, действуют общие: ' + (s.url || 'адрес не задан') +
+        ' · код ' + (s.code ? 'задан' : 'не задан');
+  });
+  document.getElementById('dcUrl').value = s.url || '';
+  document.getElementById('dcCode').value = s.code || '';
+});
+document.getElementById('dcSave').onclick = function () {
+  post('/admin/api/settings/designcode',
+       { url: document.getElementById('dcUrl').value, code: document.getElementById('dcCode').value });
+};
+document.getElementById('pwSave').onclick = function () {
+  var a = document.getElementById('pw1').value, b = document.getElementById('pw2').value;
+  if (a !== b) { alert('Пароли не совпадают'); return; }
+  if (a.length < 8) { alert('Пароль должен быть не короче 8 символов'); return; }
+  post('/admin/api/settings/site-password', { password: a });
+};
+document.getElementById('irSave').onclick = function () {
+  post('/admin/api/settings/ir-key', { key: document.getElementById('irKey').value });
+};
 document.getElementById('alllogs').onclick = () => openLogs(null, 'Журнал всех генераций');
 document.getElementById('f').onsubmit = function (e) {
   e.preventDefault();
@@ -1007,12 +1209,27 @@ fetch('/admin/api/users').then(r => r.json()).then(d => {
     const when = new Date(u.last_seen * 1000).toLocaleString();
     tr.innerHTML = '<td>' + esc(u.email) + '</td><td>' + esc(u.name || '') + '</td>' +
       '<td>' + u.effective_role + (u.role_override ? ' *' : '') + '</td>' +
-      '<td>' + (u.has_token ? 'есть' : '—') + '</td>' + genCellHtml(u.gen) +
+      '<td>' + (u.has_token ? 'есть' : '—') + '</td>' +
+      '<td class="dccell"></td>' + genCellHtml(u.gen) +
       '<td>' + u.counts.images + '</td><td>' + u.counts.boards + '</td>' +
       '<td>' + u.counts.ifc + '</td><td>' + u.counts.pdf + '</td><td>' + u.counts.threed + '</td>' +
       '<td>' + when + '</td><td></td>';
     const td = tr.lastElementChild;
     const uid = encodeURIComponent(u.user_id);
+    const btnDc = document.createElement('button');
+    if (u.dc_url || u.dc_code) {
+      btnDc.textContent = u.dc_url ? dcHost(u.dc_url) : '— код —';
+      btnDc.className = 'dc-personal';
+      btnDc.title = (u.dc_url || 'персональный URL не задан') +
+        ' · персональный код ' + (u.dc_code ? 'задан' : 'не задан');
+    } else {
+      btnDc.textContent = '— общие —';
+      btnDc.title = 'Персональных настроек нет, действуют общие: ' +
+        (dcGlobal.url || 'адрес не задан') + ' · код ' + (dcGlobal.code ? 'задан' : 'не задан');
+    }
+    btnDc.onclick = () => openDcModal(u);
+    btnDc._u = u;
+    tr.querySelector('.dccell').appendChild(btnDc);
     tot += u.gen.total; tok += u.gen.ok; tf += u.gen.failed;
     tc += (u.gen.cost_usd || 0);
     const btnLog = document.createElement('button');
@@ -1063,7 +1280,12 @@ fetch('/admin/api/users').then(r => r.json()).then(d => {
 });
 function post(url, body) {
   return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body) }).then(() => location.reload());
+    body: JSON.stringify(body) })
+    .then(r => r.json().then(j => ({ s: r.status, j })))
+    .then(({ s, j }) => {
+      if (s >= 400) { alert(j && j.detail || ('HTTP ' + s)); return; }
+      location.reload();
+    });
 }
 </script></body></html>"""
 

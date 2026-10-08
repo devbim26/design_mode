@@ -12,6 +12,12 @@ sys.path.insert(0, str(ROOT / "design_code"))
 import design_code_router as dcr  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 
+# герметичность (п.73): настройки из БД (settings/персональные) в этих тестах
+# не участвуют — иначе _store() находит venv-копию studio_store и читает
+# боевую data/studio.sqlite; цепочки per-user/settings — test_admin_designcode
+dcr._setting = lambda key: None
+dcr._user_cfg = lambda uid: None
+
 
 def expect(status, fn, *args):
     try:
@@ -34,29 +40,29 @@ def main():
 
     # --- код задан: верный/неверный (через _env_value — как в бою) ---
     dcr._env_value = lambda key: {"DESIGN_CODE_ACCESS_CODE": "nw2026"}.get(key)
-    r = dcr.auth(body)
+    r = dcr.auth(body, None)
     assert r == {"ok": True, "protected": True, "url": "https://nw.dev-bim.com/"}, r
-    e = expect(401, dcr.auth, dcr.AuthBody(url="https://nw.dev-bim.com/", code="wrong"))
+    e = expect(401, dcr.auth, dcr.AuthBody(url="https://nw.dev-bim.com/", code="wrong"), None)
     assert "код" in e.detail.lower() or "Код" in e.detail, e.detail
-    expect(400, dcr.auth, dcr.AuthBody(url="about:blank", code="nw2026"))
+    expect(400, dcr.auth, dcr.AuthBody(url="about:blank", code="nw2026"), None)
 
     # --- код не задан: защита отключена, любой код принимается ---
     dcr._env_value = lambda key: None
-    r = dcr.auth(dcr.AuthBody(url="http://127.0.0.1:8020", code="-"))
+    r = dcr.auth(dcr.AuthBody(url="http://127.0.0.1:8020", code="-"), None)
     assert r["ok"] is True and r["protected"] is False, r
 
     # --- статус: protected + default_url из .env ---
     dcr._env_value = lambda key: {"DESIGN_CODE_ACCESS_CODE": "nw2026",
                                   "DESIGN_CODE_URL": "https://nw.dev-bim.com/"}[key]
-    st = dcr.auth_status()
+    st = dcr.auth_status(None)
     assert st == {"protected": True, "default_url": "https://nw.dev-bim.com/"}, st
     dcr._env_value = lambda key: {"DESIGN_CODE_ACCESS_CODE": "  ",
                                   "DESIGN_CODE_URL": ""}[key]
-    st = dcr.auth_status()
+    st = dcr.auth_status(None)
     # пустое/пробельное значение ключа = код выключен, префикс тоже гаснет
     assert st == {"protected": False, "default_url": None}, st
     dcr._env_value = lambda key: None
-    st = dcr.auth_status()
+    st = dcr.auth_status(None)
     assert st == {"protected": False, "default_url": None}, st
 
     # _default_url: os.environ-фолбэк

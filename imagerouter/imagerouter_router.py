@@ -545,6 +545,14 @@ def _env_key() -> Optional[str]:
 
 
 def _load_key() -> Optional[str]:
+    # общий ключ, заданный в админ-панели (settings studio.sqlite) — приоритет
+    # над .env: после переезда владельцу хватает браузера, чтобы сменить ключ
+    try:
+        key = (_studio_store().get_setting("imagerouter_api_key") or "").strip()
+        if key:
+            return key
+    except Exception:  # noqa: BLE001 — БД недоступна: прежняя цепочка
+        pass
     key = _env_key()
     if key:
         return key

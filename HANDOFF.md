@@ -3404,6 +3404,64 @@ invokeai==6.2.0` их нужно запускать повторно в поря
     venv 08.10 (invokeai 6.2.0, torch 2.7.1, numpy 1.26.4,
     pillow 12.3.0, ifcopenshell 0.8.5, shapely 2.1.2, matplotlib 3.11.1).
 
+73. **Настройки Design Code и владельца — в админ-панель** (08.10, ветка
+    `user`; запрос пользователя «перенеси настройки доступа к дизайн-коду
+    в админскую вкладку: напротив каждого клиента два поля — URL моего
+    сервиса и токен; после переезда доступ к серверу ограничен, вынеси
+    всё необходимое»). Спека:
+    `docs/superpowers/specs/2026-10-08-admin-designcode-settings-design.md`.
+    - **Хранилище**: studio.sqlite — новая таблица `settings(key,value)`
+      (общие настройки инстанса) + колонки `users.dc_url`/`users.dc_code`
+      (персональные настройки Design Code; миграция в init_db).
+      `studio_store.get_setting/set_setting` (пустое значение → строка
+      удаляется = «как в .env»), `set_design_code`. ГРАБЛЯ: сеттеры сами
+      делают `if not _ready: init_db()` — вход владельца (пустая почта)
+      идёт по ветке ДО init_db, иначе первый POST из админки ловил
+      «no such table: settings» (500).
+    - **Design Code, цепочка на каждое из двух НЕЗАВИСИМЫХ полей (URL и
+      код)**: персональное пользователя → общее (settings) → .env →
+      os.environ. Пользователя роутер берёт из заголовка `x-studio-user`
+      (инжектит siteauth; password-режим компаний — персональных нет,
+      `_user_cfg` гардится `auth_mode()`, спуф заголовка бесполезен).
+      admin-local без персональных → общие. GET/POST
+      `/api/v1/designcode/auth` семантику НЕ меняли, страница вьювера НЕ
+      менялась (protected/default_url теперь per-user). Код хранится
+      открыто в БД и виден админу — это не секрет уровня пароля.
+    - **Админ-API** (`/admin`, гейт admin как у соседних; без сессии 401,
+      не-админ 403): POST `/admin/api/users/{uid}/designcode {url,code}`
+      (пустые — сброс персональных; URL обязан http(s), ≤2048; код
+      ≤256); GET/POST `/admin/api/settings/designcode {url,code}`;
+      POST `/admin/api/settings/site-password {password}` (≥8;
+      `_site_password()` читает settings → .env → devbim);
+      POST `/admin/api/settings/ir-key {key}` (пусто — вернуть .env;
+      `imagerouter_router._load_key` читает settings ПЕРВЫМ). GET
+      `/admin/api/users` отдаёт dc_url/dc_code (password_hash/ir_token
+      по-прежнему не светятся).
+    - **UI /admin**: блок «Общие настройки» над таблицей — Design Code
+      для всех (URL+код), пароль владельца (новый+повтор), общий ключ
+      ImageRouter; в таблице колонка «Design Code» (кнопка с хостом
+      персонального URL или «— общие —») → модалка URL+код с подсказкой
+      общих значений и кнопкой «Сбросить персональные». post() теперь
+      алертит detail при HTTP>=400 (раньше молчал). Всё действует сразу,
+      без рестарта (значения перечитываются на каждом вызове).
+    - E2E 08.10 (браузер + python-клиент): вход владельца → /admin
+      рендерит блок/колонку/модалку (скриншот
+      docs/admin-designcode-modal.png); python-клиентом — круг
+      set/read/clear глобальных (=значения .env, поведение не менялось),
+      персональные у тестового клиента (свой код проходит, общий — 401,
+      сброс → снова .env), гейты 401/403/422; тестовый аккаунт
+      dc-live-test@x.ru отозван. Тесты: `tests/test_admin_designcode.py`
+      (API+цепочки+UI-фрагменты+node --check админ-скрипта);
+      `tests/test_designcode.py` дополнен: прямые вызовы auth/auth_status
+      передают x_studio_user=None (дефолт Header-объекта при прямом
+      вызове — не None!), `_setting`/`_user_cfg` заглушены для
+      герметичности (иначе venv-копия studio_store читает боевую БД).
+    - Деплой: `setup_designcode.py` + `setup_site_auth.py` +
+      `setup_imagerouter.py` + рестарт. «Что ещё» из .env в админку НЕ
+      вынесено (сознательно): ADMIN_PASSWORD (нужен только
+      password-компаниям без админки), STUDIO_* секреты, SITE_VALID_UNTIL
+      (лицензии компаний).
+
 
 ```powershell
 cd "C:\PROJECTS\InvokeAI"
