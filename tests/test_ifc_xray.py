@@ -107,6 +107,17 @@ def test_shade_engine() -> None:
     assert "cur.onBeforeCompile === state.patch" in ensure and \
         "shadeApply(state, state.patch, state.opts)" in ensure, \
         "shadeEnsure не дожимает сходимость при LOD"
+    # vse ScreenSpace-LOD @thatopen (дальние элементы квадами): цвет — юниформа
+    # lodColor (в их шейдере НЕТ include-чанков) — серому красим юниформу,
+    # рентген бьёт по якорям их шейдера (рамка квада = граница элемента)
+    assert "m.uniforms && m.uniforms.lodColor" in js, \
+        "нет vse-ветки по юниформе lodColor"
+    assert "xu.value.setRGB(g, g, g)" in js, "lodColor клона не перекрашивается в luma"
+    assert "gl_Position = lodPosition;" in js and "vXQ = position.xy;" in js, \
+        "рентген не передаёт координаты квада в vse-вершинник"
+    assert "gl_FragColor = vec4(mix(color * 0.45, xec, isEdge), mix(0.06, 1.0, isEdge)); }" in js, \
+        "нет рамки квада (дальний каркас) в vse-фрагментнике"
+    assert "xo.value = 0.07" in js, "нет lodOpacity-страховки прозрачности vse"
     # сечения режут перекрашенное: клиппинг-плоскости копируются на клоны
     assert "cur.clippingPlanes = src.clippingPlanes" in js, "клиппинг не копируется"
     # состояния переживают F5
