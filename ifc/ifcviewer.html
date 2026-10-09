@@ -246,6 +246,17 @@
     padding:5px 12px; font-size:12px; z-index:6; max-width:calc(100% - 20px);
   }
   #etoast.err{color:var(--err); border-color:var(--err)}
+
+  /* --- серый режим: светлый фон вьюпорта (graybg на body из shadeRun) —
+     серая модель на тёмном фоне сливается; кнопки/логотип/подсказка темнеют
+     для контраста --- */
+  body.graybg #viewport{background:#d4d4d4}
+  body.graybg #viewport .devbim-logo{color:#3c4046}
+  body.graybg #viewport .devbim-logo .sub{color:#5a5e64}
+  body.graybg #toolbar button{color:#2b2e33; border-color:#8b9096}
+  body.graybg #toolbar button:hover{color:#111}
+  body.graybg #toolbar button.active{background:#22333d; color:#7fd4ff; border-color:#38BDF8}
+  body.graybg #navhelp{color:#2b2e33; background:rgba(212,212,212,.85); border-color:#8b9096}
 </style>
 </head>
 <body>
@@ -503,9 +514,7 @@ async function loadIfc(bytes, name) {
   fragments.core.update(true);
   // стили @thatopen докладываются асинхронно после update — даём им осесть; дальнейшую сходимость дожимает aiEnsure
   if (aiPaletteState.on) setTimeout(() => { if (aiPaletteState.on && model) aiApply(); }, 1500);
-  [xrayState, grayState].forEach((s) => {
-    if (s.on) setTimeout(() => { if (s.on && model) shadeApply(s, s.patch, s.opts); }, 1500);
-  });
+  [xrayState, grayState].forEach((s) => { if (s.on) shadeConverge(s); });
   await setProgress(0.9);
 
   await buildTree();
@@ -930,6 +939,7 @@ aiSetEnabled(localStorage.getItem("devbim:ifc:aiPalette") === "1");
 // прозрачное (рентген-эффект).
 function xrayShaderPatch(shader) {
   shader.uniforms.uXEdge = { value: new Color(0x38bdf8) };
+  // (а) обычная геометрия — встроенные материалы three (include-чанки):
   shader.vertexShader = "varying vec3 vXN;\n" + shader.vertexShader.replace(
     "#include <project_vertex>",
     `#include <project_vertex>
@@ -946,6 +956,19 @@ function xrayShaderPatch(shader) {
         float isEdge = smoothstep(0.04, 0.25, edge);
         diffuseColor.rgb = mix(diffuseColor.rgb * 0.45, uXEdge, isEdge);
         diffuseColor.a = mix(0.06, 1.0, isEdge); }`);
+  // (б) vse ScreenSpace-LOD @thatopen (дальние элементы квадами, шейдер без
+  // чанков): рамка квада = граница элемента — дальний «каркас». Якоря их
+  // шейдера; у встроенных материалов этих строк нет — replace молча пропускает
+  shader.vertexShader = "varying vec2 vXQ;\n" + shader.vertexShader.replace(
+    "gl_Position = lodPosition;",
+    "gl_Position = lodPosition;\n        vXQ = position.xy;");
+  shader.fragmentShader = shader.fragmentShader.replace(
+    "gl_FragColor = vec4(color, alpha);",
+    `{ float xb = 1.0 - abs(vXQ.x);
+       float yb = min(abs(vXQ.y), abs(vXQ.y - 1.0));
+       float isEdge = 1.0 - smoothstep(0.0, 0.03, min(xb, yb));
+       vec3 xec = vec3(0.22, 0.74, 0.97);
+       gl_FragColor = vec4(mix(color * 0.45, xec, isEdge), mix(0.06, 1.0, isEdge)); }`);
 }
 
 // --- Оттенки серого: вся модель в градациях luma — нейтральный снимок под
@@ -975,6 +998,24 @@ function shadeApply(state, patch, opts = {}) {
       xm.transparent = true; xm.depthWrite = false; xm.side = DoubleSide;
     }
     xm.onBeforeCompile = patch;
+    // vse (@thatopen ScreenSpace-LOD — дальние элементы квадами): цвет —
+    // ЮНИФОРМА lodColor, include-патч к их шейдеру НЕ применяется
+    // (в нём нет color_fragment) — серому перекрашиваем юниформу клона;
+    // рентген бьёт по их якорям сам (xrayShaderPatch, ветка «б»),
+    // lodOpacity — страховка прозрачности, если якорь не нашёлся
+    const lu = m.uniforms && m.uniforms.lodColor;
+    if (lu && lu.value && lu.value.isColor && patch === grayShaderPatch) {
+      const xu = xm.uniforms && xm.uniforms.lodColor;
+      if (xu && xu.value) {
+        const c = lu.value;
+        const g = 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
+        xu.value.setRGB(g, g, g);
+      }
+    }
+    if (lu && patch === xrayShaderPatch) {
+      const xo = xm.uniforms && xm.uniforms.lodOpacity;
+      if (xo && xo.value === 1) xo.value = 0.07;  // если якорь шейдера не нашёлся
+    }
     if (m.lodSize) xm.lodSize = m.lodSize;  // onBeforeRender LOD-мешей
     // LOD-меши @thatopen читают material[0].lodSize — массив той же длины
     o.userData.shadeOriginal = o.material;
@@ -1020,11 +1061,27 @@ function shadeEnsure(state) {
   if (wired < state.meshes) shadeApply(state, state.patch, state.opts);
 }
 
+// Дожим сходимости: стили @thatopen докладываются на меши асинхронно
+// (секунды после «Модель загружена») и кладут свои материалы ПОВЕРХ подмены —
+// без дожима остаются цветные/залитые островки. Серия re-apply после
+// загрузки модели/включения режима; движение камеры дожимает shadeEnsure.
+function shadeConverge(state) {
+  if (state.timers) state.timers.forEach(clearTimeout);
+  state.timers = [400, 1200, 2200, 3500, 5200, 8000].map((t) =>
+    setTimeout(() => { if (state.on && model) shadeApply(state, state.patch, state.opts); }, t));
+}
+
+function shadeStop(state) {
+  if (state.timers) { state.timers.forEach(clearTimeout); state.timers = null; }
+}
+
 function shadeRun(state, on) {
   state.on = !!on;
   localStorage.setItem(state.key, on ? "1" : "0");
   const b = $(state.btn);
   b.classList.toggle("active", state.on);
+  // серый режим: светлый фон вьюпорта — серая модель сливается с тёмным
+  if (state === grayState) document.body.classList.toggle("graybg", !!on);
   // режимы-перекраски и палитра подменяют материалы — вместе не живут
   if (state.on) {
     for (const other of [xrayState, grayState]) {
@@ -1032,7 +1089,8 @@ function shadeRun(state, on) {
     }
     if (aiPaletteState.on) aiSetEnabled(false);
   }
-  if (state.on) shadeApply(state, state.patch, state.opts); else shadeRestore(state);
+  if (state.on) { shadeApply(state, state.patch, state.opts); shadeConverge(state); }
+  else { shadeStop(state); shadeRestore(state); }
 }
 
 xrayState.key = "devbim:ifc:xray"; xrayState.btn = "btn-xray";

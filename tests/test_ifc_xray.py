@@ -75,7 +75,8 @@ def test_gray_material() -> None:
 
 
 def test_shade_engine() -> None:
-    js = module_script(SRC.read_text(encoding="utf-8"))
+    s = SRC.read_text(encoding="utf-8")
+    js = module_script(s)
     for frag in (
         "function shadeApply(state, patch, opts = {})",
         "function shadeRestore(state)",
@@ -115,9 +116,20 @@ def test_shade_engine() -> None:
     assert "if (xrayState.on) shadeEnsure(xrayState);" in js and \
         "if (grayState.on) shadeEnsure(grayState);" in js, \
         "нет shadeEnsure в слушателе камеры"
-    # отложенный apply после асинхронных стилей @thatopen — оба режима
-    assert "if (s.on) setTimeout(() => { if (s.on && model) shadeApply(s, s.patch, s.opts); }, 1500);" in js, \
-        "loadIfc-хук не пере-применяет режимы после стилей @thatopen"
+    # дожим сходимости: стили @thatopen кладут материалы ПОВЕРХ подмены
+    # асинхронно — без серии re-apply остаются цветные/залитые островки
+    assert "function shadeConverge(state)" in js and \
+        "[400, 1200, 2200, 3500, 5200, 8000]" in js, \
+        "нет серии дожимающих re-apply после загрузки/включения"
+    assert "function shadeStop(state)" in js, "нет остановки серии при выключении"
+    assert "shadeApply(state, state.patch, state.opts); shadeConverge(state);" in js, \
+        "включение режима не запускает дожим"
+    assert "[xrayState, grayState].forEach((s) => { if (s.on) shadeConverge(s); });" in js, \
+        "loadIfc-хук не дожимает режимы после стилей @thatopen"
+    # серый режим: светлый фон вьюпорта (на тёмном серая модель сливается)
+    assert "body.graybg #viewport{background:#d4d4d4}" in s, "нет светлого фона вьюпорта"
+    assert 'document.body.classList.toggle("graybg", !!on)' in js, \
+        "graybg-класс не вешается/не снимается с body"
     # отладка
     assert "xray: {" in js, "нет отладочного __ifc.xray"
 
