@@ -154,7 +154,7 @@ async def main():
 
     # отклонённый токен -> 400 (подмена валидатора)
     async def fake_bad(t):
-        return False, "Токен ImageRouter отклонён — проверьте ключ"
+        return False, "Токен DevBIM Design отклонён — проверьте ключ"
     site_auth._validate_ir_token = fake_bad
     r = await call("POST", f"/admin/api/users/{quote(uid)}/token",
                    jbody(token="sk-bad"), cookie=admin_cookie)

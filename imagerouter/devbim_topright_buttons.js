@@ -107,7 +107,7 @@
         'photo — the AI render will restore the scene from the new angle.'
     }
   };
-  var lang = 'ru';
+  var lang = 'en';   // до первого чтения настроек — английский (дефолт продукта)
 
   // --- стили: как chakra-кнопки приложения (высота Generate = 36px) ---
   var CSS =
@@ -285,14 +285,24 @@
     else b.removeAttribute('aria-busy');
   }
 
-  // --- язык интерфейса: IndexedDB «invoke» / «invoke-store» (как баннер) ---
+  // --- язык интерфейса: IndexedDB «invoke» / «invoke-store» (как баннер).
+  // ГРАБЛЯ 08.10: открывать БЕЗ создания — «голый» indexedDB.open('invoke')
+  // на свежем профиле создаёт пустую базу v1 раньше приложения и убивает
+  // персистентность redux-remember. Создание откатываем, без стора — null.
   function readLanguage(cb) {
     var req;
     try { req = indexedDB.open('invoke'); } catch (e) { cb(null); return; }
+    req.onupgradeneeded = function (ev) {
+      if (ev.oldVersion === 0) {
+        try { req.transaction.abort(); } catch (e) { /* ничего */ }
+      }
+    };
     req.onsuccess = function () {
+      var db = req.result;
+      if (!db.objectStoreNames.contains('invoke-store')) { db.close(); cb(null); return; }
       var get;
       try {
-        get = req.result.transaction('invoke-store', 'readonly')
+        get = db.transaction('invoke-store', 'readonly')
           .objectStore('invoke-store').get('@@invokeai-system');
       } catch (e) { cb(null); return; }
       get.onsuccess = function () {
@@ -302,6 +312,7 @@
       get.onerror = function () { cb(null); };
     };
     req.onerror = function () { cb(null); };
+    req.onblocked = function () { cb(null); };
   }
 
   function pollLanguage() {

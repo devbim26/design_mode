@@ -11,6 +11,16 @@ setup_style_presets.py — профессиональные style-пресеты
   Interiors   — «Interiors — …»   (Daylight / Evening Light / Public Space)
   Master Plan — «Master Plan — …» (Aerial Top-Down / Bird's Eye 45° /
                                     Orthographic — Album Sheet)
+  Re-render   — «Facades|Interiors — Re-render from 3D View»: пересъёмка
+                                    базового фото с камеры 3D-схемы (серый/
+                                    рентген-скрин из IFC-вьювера). Весь
+                                    контент — ТОЛЬКО с фото, из 3D-картинки —
+                                    исключительно ракурс камеры (жалоба
+                                    09.10: ИИ перетягивал форму и цвета
+                                    из 3D). Роли картинок описываются по
+                                    ВИДУ (цветное фото vs бесцветная схема),
+                                    поэтому темплейт работает при любом
+                                    порядке изображений в запросе.
 
 Названия и тексты — на английском (русскоязычная адаптация интерфейса —
 позже; после неё переименовать PRESETS и превью). Пользователь пишет свой
@@ -82,6 +92,25 @@ NEG_PLAN = (
     "painting, illustration, sketch, cartoon, low quality, blurry, text, "
     "labels, annotations, legend, north arrow, dimension lines, blueprint "
     "style, watermark, distorted geometry, warped roads, fisheye"
+)
+
+# Ре-рендер по 3D-ракурсу: гоним перенос формы/цвета со схемы. Кусы
+# «painting/blurry/…» уже есть в NEG_FACADE/NEG_INTERIOR, здесь — только
+# специфичное, добавляется к ним через запятую. Блок boxy/low-poly —
+# после живого теста 09.10: диван «квадратнел» как в 3D, а плейсхолдер
+# растения (прямоугольник) отрисовывался шкафом.
+NEG_RERENDER_3D = (
+    "colors or materials copied from the 3d schematic, gray desaturated "
+    "image, wireframe look, blueprint look, x-ray translucent ghost "
+    "geometry, colored outline overlay, untextured clay render, flat "
+    "white or gray surfaces, restyled architecture and furniture, "
+    "mismatched photographic style, different season or time of day "
+    "than the base photo, geometry copied from the 3d schematic, boxy "
+    "or blocky furniture, squared-off cushions and armrests, cube-like "
+    "placeholder objects, plain boxes rendered as wardrobes or cabinets, "
+    "low-poly simplified shapes, altered object proportions, distorted "
+    "object dimensions, missing or merged object parts, changed lamp "
+    "shade counts"
 )
 
 # --- Новые промты по умолчанию: {prompt} = текст пользователя из UI ---
@@ -264,6 +293,82 @@ PRESETS: list[dict] = [
                 ", strong cast shadows, perspective distortion, axonometric "
                 "view, visible building facades, 3d buildings, tilted camera"
             ),
+        },
+    },
+    # ---------- РЕ-РЕНДЕР ПО 3D-РАКУРСУ (фото + скрин IFC-вьювера) ----------
+    # Сценарий (жалоба 09.10): есть базовое фото (все материалы, цвета,
+    # люди) и скрин 3D-сцены в режиме «Серый»/«Рентген». Нужно развернуть
+    # фото к камере 3D-сцены, НЕ перетаскивая из 3D ни форм, ни цветов.
+    # Роли картинок описываем по ВИДУ, а не по номеру — работает и когда
+    # фото — исходник/канвас, и когда оба лежат в референсах в любом
+    # порядке. Темплейт стоит в промте ПЕРЕД блоком референсов роутера,
+    # поэтому прямо объявляем свой приоритет над общими примечаниями.
+    {
+        "name": "Facades — Re-render from 3D View",
+        "type": "default",
+        "preset_data": {
+            "positive_prompt": (
+                "{prompt}, photorealistic re-render of the photographed "
+                "project from a new camera angle. IMAGE ROLES — follow "
+                "strictly, they take priority over any generic image notes. "
+                "The full-color photograph is the master and the ONLY source "
+                "of content, shapes and details: same building volumes, "
+                "facade materials, colors, window and balcony design, "
+                "landscaping, people and lighting as photographed. The "
+                "colorless 3D schematic (grayscale or wireframe) is a CAMERA "
+                "GUIDE ONLY: take from it only where the camera stands, its "
+                "direction, height and framing — nothing else; ignore its "
+                "gray tones, wireframe lines and its crude blocky "
+                "placeholder geometry entirely. The schematic's plain blocks "
+                "are just position markers: a block may stand for a canopy, "
+                "a column, a tree or a bench — never draw a block as a plain "
+                "box or cube; put the real photographed object there "
+                "instead. Every element keeps its photographed shape and "
+                "exact proportions — balconies, railings, window frames, "
+                "canopies exactly as designed: never squared off, never "
+                "resized, never simplified; reproduce them part-for-part "
+                "(same mullions, railing posts, steps). Result: the very "
+                "same photographed building re-shot from the new camera — "
+                "same palette, white balance and photographic style, "
+                "photorealistic, ultra-detailed, 8k. Surfaces not visible in "
+                "the photograph: complete them naturally in the same "
+                "materials and design language"
+            ),
+            "negative_prompt": NEG_FACADE + ", " + NEG_RERENDER_3D,
+        },
+    },
+    {
+        "name": "Interiors — Re-render from 3D View",
+        "type": "default",
+        "preset_data": {
+            "positive_prompt": (
+                "{prompt}, photorealistic re-render of the photographed "
+                "interior from a new camera angle. IMAGE ROLES — follow "
+                "strictly, they take priority over any generic image notes. "
+                "The full-color photograph is the master and the ONLY source "
+                "of content, shapes and details: same room geometry, "
+                "finishes, furniture forms, decor, plants, people and "
+                "lighting as photographed. The colorless 3D schematic "
+                "(grayscale or wireframe) is a CAMERA GUIDE ONLY: take from "
+                "it only where the camera stands, its direction, height and "
+                "framing — nothing else; ignore its gray tones, wireframe "
+                "lines and its crude blocky placeholder geometry entirely. "
+                "The schematic's plain blocks are just position markers: a "
+                "block may stand for a plant, a lamp or a table — never draw "
+                "a block as a box, a cube or a wardrobe; put the real "
+                "photographed object there instead. Every object keeps its "
+                "photographed shape and exact proportions — soft rounded "
+                "cushions, curved armrests, slender legs exactly as "
+                "photographed: never squared off, never resized, never "
+                "simplified; reproduce objects part-for-part (same number of "
+                "lamp shades, cushions, drawers). Result: the very same "
+                "photographed room re-shot from the new camera — same "
+                "palette, white balance and photographic style, global "
+                "illumination, ultra-detailed, 8k. Areas not visible in the "
+                "photograph: complete them naturally in the same materials "
+                "and furnishing style"
+            ),
+            "negative_prompt": NEG_INTERIOR + ", " + NEG_RERENDER_3D,
         },
     },
 ]

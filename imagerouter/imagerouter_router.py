@@ -545,6 +545,14 @@ def _env_key() -> Optional[str]:
 
 
 def _load_key() -> Optional[str]:
+    # общий ключ, заданный в админ-панели (settings studio.sqlite) — приоритет
+    # над .env: после переезда владельцу хватает браузера, чтобы сменить ключ
+    try:
+        key = (_studio_store().get_setting("imagerouter_api_key") or "").strip()
+        if key:
+            return key
+    except Exception:  # noqa: BLE001 — БД недоступна: прежняя цепочка
+        pass
     key = _env_key()
     if key:
         return key
@@ -638,7 +646,7 @@ def _auth_headers(studio_user: "str | None" = None) -> dict[str, str]:
         if studio_user and studio_user != "admin-local":
             raise HTTPException(
                 status_code=401,
-                detail="Персональный токен ImageRouter не задан — обратитесь к администратору.")
+                detail="Персональный токен DevBIM Design не задан — обратитесь к администратору.")
         raise HTTPException(status_code=401, detail="API key is not configured")
     return {"Authorization": f"Bearer {key}"}
 
@@ -1809,7 +1817,7 @@ def _handle_canvas_generation(queue_id: str, payload: dict, studio_user: str | N
     key = effective_key(studio_user)
     if not key:
         raise _IRClientError(
-            ("Персональный токен ImageRouter не задан — обратитесь к администратору."
+            ("Персональный токен DevBIM Design не задан — обратитесь к администратору."
              if studio_user and studio_user != "admin-local" else
              "Generation service is not configured: no API key. "
              "Please contact your administrator."),
@@ -2197,7 +2205,7 @@ def _handle_upscale_generation(queue_id: str, payload: dict, studio_user: str | 
     key = effective_key(studio_user)
     if not key:
         raise _IRClientError(
-            ("Персональный токен ImageRouter не задан — обратитесь к администратору."
+            ("Персональный токен DevBIM Design не задан — обратитесь к администратору."
              if studio_user and studio_user != "admin-local" else
              "Generation service is not configured: no API key. "
              "Please contact your administrator."),
@@ -2651,7 +2659,7 @@ class ImageRouterCanvasMiddleware:
                     traceback.print_exc()
                     _gen_log_entry(studio_user, info, "error", 0,
                                    time.monotonic() - t0, f"{e}")
-                    await self._send_json(send, _ir_error_body(f"ImageRouter: {e}"), status=422)
+                    await self._send_json(send, _ir_error_body(f"DevBIM Design: {e}"), status=422)
                     return
                 # журнал генераций админ-панели: картинок = длина item_ids
                 _gen_log_entry(studio_user, info, "ok",

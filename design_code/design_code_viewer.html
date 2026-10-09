@@ -144,6 +144,12 @@
       <button type="button" class="ghost" id="btnCancel" hidden>Cancel</button>
     </div>
   </form>
+  <div class="card" id="deniedCard" hidden>
+    <div class="logo">Dev<span class="bim">BIM</span></div>
+    <h1>Design Code</h1>
+    <p class="hint">Access to the design code knowledge base has not been
+      granted for this account.<br>Please contact your studio administrator.</p>
+  </div>
 </div>
 
 <script>
@@ -155,6 +161,7 @@
   var gate = $("gate"), form = $("form"), urlIn = $("url"), codeIn = $("code"),
       codeLabel = $("codeLabel"), errIn = $("err"), btnOpen = $("btnOpen"),
       btnDefault = $("btnDefault"), btnCancel = $("btnCancel"), bar = $("bar"),
+      deniedCard = $("deniedCard"),
       host = $("host"), frame = $("site"), frameWrap = $("frameWrap");
   var protectedMode = true, currentUrl = null, busy = false, defaultUrl = "";
 
@@ -193,11 +200,24 @@
     btnCancel.hidden = !currentUrl;   // отменить можно, только когда есть что показать
     urlIn.value = savedUrl() || defaultUrl;
     gate.hidden = false;
+    form.hidden = false;
+    deniedCard.hidden = true;
     bar.classList.remove("on");
     frameWrap.classList.remove("on");
     capbarOff();
     frame.src = "about:blank";
     setTimeout(function () { (protectedMode && urlIn.value ? codeIn : urlIn).focus(); }, 50);
+  }
+
+  // п.74: дизайн-код этому пользователю не выдан — карточка вместо формы
+  function showDenied() {
+    gate.hidden = false;
+    form.hidden = true;
+    deniedCard.hidden = false;
+    bar.classList.remove("on");
+    frameWrap.classList.remove("on");
+    capbarOff();
+    frame.src = "about:blank";
   }
 
   form.addEventListener("submit", function (ev) {
@@ -540,6 +560,7 @@
   try { unlocked = sessionStorage.getItem(SS_UNLOCK) === "1"; } catch (e) {}
   fetch("/api/v1/designcode/auth").then(function (r) { return r.json(); })
     .then(function (status) {
+      if (status.denied) { showDenied(); return; }
       protectedMode = !!status.protected;
       defaultUrl = status.default_url || "";
       var su = savedUrl();

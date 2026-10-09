@@ -62,6 +62,8 @@ ASSIGN = {
     "Master Plan — Aerial (Top-Down)": 0,
     "Master Plan — Bird's Eye (45°)": 0,
     "Master Plan — Orthographic (Album Sheet)": 0,
+    "Facades — Re-render from 3D View": 0,
+    "Interiors — Re-render from 3D View": 0,
 }
 
 # Демо-сюжеты: короткий типовой объект вместо {prompt}
@@ -92,6 +94,14 @@ DEMO_SUBJECTS = {
     "Master Plan — Orthographic (Album Sheet)":
         "site plan of a residential complex with courtyards, driveways "
         "and parking",
+    # ре-рендер по 3D-ракурсу: превью — обычный архиз-кадр демо-объекта
+    # (темплейт ссылается на приложенные картинки, которых в txt2img нет)
+    "Facades — Re-render from 3D View":
+        "modern 6-storey residential building, dark brick and light metal "
+        "panels, street with trees and pedestrians",
+    "Interiors — Re-render from 3D View":
+        "modern open-plan living room with kitchen island, warm wood and "
+        "beige tones",
 }
 
 

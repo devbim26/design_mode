@@ -99,6 +99,16 @@ def init_db() -> None:
                 c.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
             if "ir_token" not in cols:
                 c.execute("ALTER TABLE users ADD COLUMN ir_token TEXT")
+            # персональные настройки Design Code (админ-панель, п.73)
+            if "dc_url" not in cols:
+                c.execute("ALTER TABLE users ADD COLUMN dc_url TEXT")
+            if "dc_code" not in cols:
+                c.execute("ALTER TABLE users ADD COLUMN dc_code TEXT")
+            # общие настройки инстанса, правятся из /admin без доступа к .env
+            c.execute(
+                """CREATE TABLE IF NOT EXISTS settings(
+                     key TEXT PRIMARY KEY, value TEXT NOT NULL)"""
+            )
             try:
                 c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(lower(email))")
             except Exception as e:  # noqa: BLE001 — дубли в легаси-БД не должны ронять старт
@@ -281,6 +291,42 @@ def set_ir_token(user_id: str, token: "str | None") -> None:
 def get_ir_token(user_id: str) -> "str | None":
     u = get_user(user_id)
     return (u.get("ir_token") or None) if u else None
+
+
+# --- персональные настройки Design Code (админ-панель, п.73) ---
+
+def set_design_code(user_id: str, url: "str | None", code: "str | None") -> None:
+    """URL сайта дизайн-кода и код доступа конкретного пользователя
+    (пусто/None — персонального значения нет, действует общее)."""
+    if not _ready:  # вход владельца идёт до init_db — таблицы может ещё не быть
+        init_db()
+    with _LOCK, _conn() as c:
+        c.execute("UPDATE users SET dc_url=?, dc_code=? WHERE user_id=?",
+                  (((url or "").strip() or None), ((code or "").strip() or None), user_id))
+
+
+# --- общие настройки инстанса (правятся из /admin, приоритет над .env) ---
+
+def get_setting(key: str) -> "str | None":
+    """Значение из таблицы settings; None — не задано (фолбэк на .env)."""
+    try:
+        with _conn() as c:
+            row = c.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+            return (row["value"] or None) if row else None
+    except Exception:
+        return None
+
+
+def set_setting(key: str, value: "str | None") -> None:
+    v = (value or "").strip()
+    if not _ready:  # как set_design_code: таблицы settings может ещё не быть
+        init_db()
+    with _LOCK, _conn() as c:
+        if v:
+            c.execute("INSERT INTO settings(key,value) VALUES(?,?) "
+                      "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, v))
+        else:
+            c.execute("DELETE FROM settings WHERE key=?", (key,))
 
 
 # --- владение ---

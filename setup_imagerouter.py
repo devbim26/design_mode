@@ -126,24 +126,34 @@ WF_DST = SP / "invokeai" / "app" / "services" / "workflow_records" / "default_wo
 JS_CANVAS_BRIDGE_ANCHOR = "const cue=u.memo("
 JS_CANVAS_BRIDGE = "window.__devbimCanvasBridge={getManager:()=>ru.get()};"
 
-# Новый компонент InstallModels: одна вкладка ImageRouter с iframe.
+# Новый компонент InstallModels: одна вкладка DevBIM Design с iframe.
+# Провайдер облачной генерации в интерфейсе не называется (решение 21.09
+# «провайдера не называем»; 09.10 — вкладка ImageRouter переименована).
 # __NAME__ — имя минифицированного компонента из оригинального бандла.
 JS_NEW_COMPONENT = (
     'const __NAME__=u.memo(()=>{const{t:e}=M();'
     'return o.jsxs(E,{layerStyle:"first",borderRadius:"base",w:"full",h:"full",flexDir:"column",gap:4,children:['
     'o.jsxs(E,{alignItems:"center",justifyContent:"space-between",children:['
-    'o.jsx(Ct,{fontSize:"xl",children:"ImageRouter"}),'
+    'o.jsx(Ct,{fontSize:"xl",children:"DevBIM Design"}),'
     'o.jsx(pe,{alignItems:"center",variant:"link",leftIcon:o.jsx(Zp,{}),'
     'onClick:()=>window.open("https://docs.imagerouter.io/"),'
-    'children:o.jsx(W,{variant:"subtext",children:"docs.imagerouter.io"})})'
+    'children:o.jsx(W,{variant:"subtext",children:"Docs"})})'
     ']}),'
     'o.jsxs(a1,{variant:"collapse",height:"100%",display:"flex",flexDir:"column",index:0,children:['
-    'o.jsxs(r1,{children:[o.jsx(bs,{children:"ImageRouter"})]}),'
+    'o.jsxs(r1,{children:[o.jsx(bs,{children:"DevBIM Design"})]}),'
     'o.jsxs(l1,{p:3,height:"100%",children:['
-    'o.jsx(Cs,{height:"100%",children:o.jsx("iframe",{src:"/imagerouter.html",title:"ImageRouter",'
+    'o.jsx(Cs,{height:"100%",children:o.jsx("iframe",{src:"/imagerouter.html",title:"DevBIM Design",'
     'style:{width:"100%",height:"100%",minHeight:"240px",border:"none"}})})'
     ']})]})]})});__NAME__.displayName="InstallModels";'
 )
+
+# Старые подписи (до 09.10) в уже пропатченном бандле -> DevBIM Design.
+# patch_js прогоняет по ним бандл, когда инъекция на месте, но лейблы старые.
+JS_RELABEL = [
+    ('children:"ImageRouter"', 'children:"DevBIM Design"'),
+    ('title:"ImageRouter"', 'title:"DevBIM Design"'),
+    ('children:"docs.imagerouter.io"', 'children:"Docs"'),
+]
 
 # Оригинальный InstallModels: аккордеон с 5 вкладками локальной установки.
 JS_OLD_RE = re.compile(
@@ -162,7 +172,7 @@ JS_MODELS_TAB_RE = re.compile(
 )
 JS_MODELS_TAB_NEW = (
     r'const \1=()=>o.jsx(E,{layerStyle:"body",w:"full",h:"full",p:0,'
-    r'children:[o.jsx("iframe",{src:"/imagerouter.html",title:"ImageRouter",'
+    r'children:[o.jsx("iframe",{src:"/imagerouter.html",title:"DevBIM Design",'
     r'style:{width:"100%",height:"100%",border:"none"}})]})'
 )
 JS_MODELS_TAB_DONE = 'h:"full",p:0,children:[o.jsx("iframe",{src:"/imagerouter.html"'
@@ -391,12 +401,35 @@ def patch_api_app() -> bool:
     return True
 
 
+def relabel_js() -> bool:
+    """Переименование старых подписей ImageRouter -> DevBIM Design в уже
+    пропатченных бандлах (инъекция узнаваема по imagerouter.html, поэтому
+    повторный patch_js её пропускает — здесь же дожимаем лейблы)."""
+    changed = False
+    for f in DIST.glob("assets/*.js"):
+        s = f.read_text(encoding="utf-8")
+        if "imagerouter.html" not in s:
+            continue
+        s2 = s
+        for old, new in JS_RELABEL:
+            s2 = s2.replace(old, new)
+        if s2 != s:
+            bak = f.with_suffix(f.suffix + ".imagerouter-bak")
+            if not bak.exists():
+                shutil.copy2(f, bak)
+            f.write_text(s2, encoding="utf-8")
+            print(f"Подписи ImageRouter -> DevBIM Design: {f.name} (бэкап: {bak.name})")
+            changed = True
+    return changed
+
+
 def patch_js() -> bool:
     targets = [f for f in DIST.glob("assets/*.js") if "launchpadTab" in f.read_text(encoding="utf-8")]
     if not targets:
         already = [f for f in DIST.glob("assets/*.js") if "imagerouter.html" in f.read_text(encoding="utf-8")]
         if already:
-            print("JS уже пропатчен (вкладка ImageRouter на месте), пропуск")
+            print("JS уже пропатчен (вкладка DevBIM Design на месте), пропуск")
+            relabel_js()
             return False
         print("ОШИБКА: не найден бандл с вкладками Model Manager")
         sys.exit(1)

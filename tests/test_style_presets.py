@@ -44,6 +44,29 @@ for prefix in ("Facades", "Interiors", "Master Plan"):
     assert got, f"нет пресетов сценария {prefix}"
     print(f"{prefix}: {len(got)} пресетов")
 
+# 4b. ре-рендер по 3D-ракурсу: якоря живых уроков обязаны присутствовать
+#     в текстах (утечка цвета/формы из 3D — диван «квадратнел», плейсхолдер
+#     растения → шкаф; дрейф пропорций; ГЛАВНЫЙ УРОК итерации 4: длинный
+#     промпт (~350 слов) РАЗМЫВАЕТ внимание редактирующей модели и boxy
+#     вернулся — поэтому v4 компрессирована и прижата лимитом длины)
+rr = [p for p in sp.PRESETS if "Re-render from 3D View" in p["name"]]
+assert len(rr) == 2, f"ожидались 2 пресета Re-render, есть {len(rr)}"
+for p in rr:
+    pos = p["preset_data"]["positive_prompt"]
+    assert "CAMERA GUIDE ONLY" in pos, p["name"]
+    assert "position markers" in pos, p["name"]
+    assert "never draw a block" in pos, p["name"]
+    assert "never squared off, never resized, never simplified" in pos, p["name"]
+    assert "part-for-part" in pos, p["name"]
+    assert "take priority over any generic image notes" in pos, p["name"]
+    # грабля итерации 3->4: не давать промпту снова разрастись
+    assert len(pos.split()) <= 240, (
+        f"{p['name']}: {len(pos.split())} слов — компрессия нарушена")
+    neg = p["preset_data"]["negative_prompt"]
+    assert "boxy" in neg and "low-poly" in neg, p["name"]
+    assert "geometry copied from the 3d schematic" in neg, p["name"]
+    assert "missing or merged object parts" in neg, p["name"]
+
 # 5. живая БД: default-пресеты совпадают с seed-файлом по именам и текстам
 con = sqlite3.connect(sp.DB)
 rows = con.execute(

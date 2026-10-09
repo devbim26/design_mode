@@ -199,7 +199,7 @@ class EnhancePromptInvocation(BaseInvocation):
         key = _context_key(context)
         if key == "":
             raise ValueError(
-                "Personal ImageRouter token is not set. Please contact your administrator.")
+                "Personal DevBIM Design token is not set. Please contact your administrator.")
         return StringOutput(value=call_vlm(SYSTEM_ENHANCE, self.prompt, urls, key=key))
 
 
@@ -225,5 +225,5 @@ class AnalyzeImageInvocation(BaseInvocation):
         key = _context_key(context)
         if key == "":
             raise ValueError(
-                "Personal ImageRouter token is not set. Please contact your administrator.")
+                "Personal DevBIM Design token is not set. Please contact your administrator.")
         return StringOutput(value=call_vlm(SYSTEM_ANALYZE, "", [url], key=key))

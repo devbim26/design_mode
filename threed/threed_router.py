@@ -364,8 +364,8 @@ def _call_vlm(system: str, prompt: str, image_url: "str | list[str] | None",
     if not key:
         if user and user != "admin-local":
             raise ValueError(
-                "Персональный токен ImageRouter не задан — обратитесь к администратору")
-        raise ValueError("API-ключ ImageRouter не задан (.env: IMAGEROUTER_API_KEY)")
+                "Персональный токен DevBIM Design не задан — обратитесь к администратору")
+        raise ValueError("API-ключ DevBIM Design не задан (.env: IMAGEROUTER_API_KEY)")
     content = [{"type": "text", "text": prompt or "No user prompt; analyze the image."}]
     urls = image_url if isinstance(image_url, list) else ([image_url] if image_url else [])
     for u in urls:
@@ -390,7 +390,7 @@ def _call_vlm(system: str, prompt: str, image_url: "str | list[str] | None",
         elif isinstance(err, str):
             msg = err
     if resp.status_code >= 400 or msg:
-        raise ValueError(f"ImageRouter: {msg or f'HTTP {resp.status_code}'}")
+        raise ValueError(f"DevBIM Design: {msg or f'HTTP {resp.status_code}'}")
     choices = data.get("choices") if isinstance(data, dict) else None
     text = ((choices[0].get("message") or {}).get("content") or "") if choices else ""
     if not text.strip():
