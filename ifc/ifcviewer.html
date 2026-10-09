@@ -276,6 +276,8 @@
       <button id="btn-person" class="ghost" title="Человек для масштаба: постановка на перекрытие и вид от глаз (1,7 м)">👤 ▾</button>
       <button id="btn-camera" class="ghost" title="Камера для ИИ-рендеринга: FOV, вертикали, орто-фасад, рамка кадра">📷 ▾</button>
       <button id="btn-palette" class="ghost" title="AI-палитра: плоские цвета по нормалям граней (стороны света + вверх/вниз) — снимок для ИИ, где внутренний/наружный угол однозначен; легенда копируется при снимке">🎨</button>
+      <button id="btn-xray" class="ghost" title="Рентген: только каркас модели (рёбра граней) без поверхностей — видна структура целиком, как на снимке; сечения режут и каркас; выключается этой же кнопкой">🦴 Рентген</button>
+      <button id="btn-gray" class="ghost" title="Оттенки серого: все цвета модели — градации серого; нейтральный снимок под перегенерацию цветовой раскраски (ИИ красит заново, без цветового шума исходника); выключается этой же кнопкой">🔳 Серый</button>
     </div>
     <div id="campanel">
       <h3>Камера <span class="spacer"></span><button id="cam-close" class="ghost" title="Закрыть панель">✕</button></h3>
@@ -411,9 +413,11 @@ clipper.enabled = true;
 
 // init библиотеки синхронно стреляет update камеры → объявление обязано стоять ДО слушателя (иначе TDZ)
 const aiPaletteState = { on: false, meshes: 0 };
+const xrayState = { on: false, meshes: 0, patch: xrayShaderPatch, opts: { transparent: true } };   // рентген: каркас без поверхностей
+const grayState = { on: false, meshes: 0, patch: grayShaderPatch, opts: {} };                       // оттенки серого: нейтральный снимок под перерисовку
 
 // обновление LOD/видимости фрагментов при движении камеры
-world.camera.controls.addEventListener("update", () => { fragments.core.update(); if (aiPaletteState.on) aiEnsure(); });
+world.camera.controls.addEventListener("update", () => { fragments.core.update(); if (aiPaletteState.on) aiEnsure(); if (xrayState.on) shadeEnsure(xrayState); if (grayState.on) shadeEnsure(grayState); });
 
 const ifcLoader = new IfcLoader(components);
 await ifcLoader.setup({
@@ -499,6 +503,9 @@ async function loadIfc(bytes, name) {
   fragments.core.update(true);
   // стили @thatopen докладываются асинхронно после update — даём им осесть; дальнейшую сходимость дожимает aiEnsure
   if (aiPaletteState.on) setTimeout(() => { if (aiPaletteState.on && model) aiApply(); }, 1500);
+  [xrayState, grayState].forEach((s) => {
+    if (s.on) setTimeout(() => { if (s.on && model) shadeApply(s, s.patch, s.opts); }, 1500);
+  });
   await setProgress(0.9);
 
   await buildTree();
@@ -698,6 +705,14 @@ window.__ifc = {
     enable: () => aiSetEnabled(true), disable: () => aiSetEnabled(false),
     get state() { return { ...aiPaletteState }; },
   },
+  xray: {
+    enable: () => xraySetEnabled(true), disable: () => xraySetEnabled(false),
+    get state() { return { ...xrayState }; },
+  },
+  gray: {
+    enable: () => graySetEnabled(true), disable: () => graySetEnabled(false),
+    get state() { return { ...grayState }; },
+  },
 };
 
 // --- контекст для ИИ-промта: этаж/помещение по предкам в дереве ---
@@ -893,11 +908,143 @@ function aiSetEnabled(on) {
   localStorage.setItem("devbim:ifc:aiPalette", on ? "1" : "0");
   const b = $("btn-palette");
   b.classList.toggle("active", aiPaletteState.on);
+  // рентген/серый и палитра подменяют материалы — вместе не живут
+  if (aiPaletteState.on && xrayState.on) xraySetEnabled(false);
+  if (aiPaletteState.on && grayState.on) graySetEnabled(false);
   if (aiPaletteState.on) aiApply(); else aiRestore();
 }
 
 $("btn-palette").addEventListener("click", () => aiSetEnabled(!aiPaletteState.on));
 aiSetEnabled(localStorage.getItem("devbim:ifc:aiPalette") === "1");
+
+// --- Рентген: каркас (рёбра граней) без поверхностей — «скелет» модели ---
+// ГРАБЛИ @thatopen (3 шт.): (1) у геометрии фрагментов GPU-буферы без .array
+// — three.js НЕ МОЖЕТ построить wireframe-атрибут (material.wireframe роняет
+// рендер на index.array.length); (2) вложенные производные dFdx(dFdx(...))
+// на этом стеке дают ровный ноль — ребро ловим fwidth от varying нормали
+// (первая производная); (3) стандартный MeshBasicMaterial получает СЫРОЙ
+// (сжатый) атрибут normal — рёбра пропадают; поэтому каркасный материал —
+// КЛОН оригинала меша (его шейдер-декодер отдаёт верные нормали) с общей
+// onBeforeCompile-инъекцией: ребро = разрыв нормали между соседними
+// пикселями, чистые рёбра ГРАНЕЙ без диагоналей триангуляции, тело почти
+// прозрачное (рентген-эффект).
+function xrayShaderPatch(shader) {
+  shader.uniforms.uXEdge = { value: new Color(0x38bdf8) };
+  shader.vertexShader = "varying vec3 vXN;\n" + shader.vertexShader.replace(
+    "#include <project_vertex>",
+    `#include <project_vertex>
+    { mat3 xnm = mat3(modelMatrix);
+      #ifdef USE_INSTANCING
+        xnm = mat3(instanceMatrix) * xnm;
+      #endif
+      vXN = normalize(xnm * normal); }`);
+  shader.fragmentShader = "varying vec3 vXN;\nuniform vec3 uXEdge;\n" +
+    shader.fragmentShader.replace(
+      "#include <color_fragment>",
+      `#include <color_fragment>
+      { float edge = length(fwidth(vXN));
+        float isEdge = smoothstep(0.04, 0.25, edge);
+        diffuseColor.rgb = mix(diffuseColor.rgb * 0.45, uXEdge, isEdge);
+        diffuseColor.a = mix(0.06, 1.0, isEdge); }`);
+}
+
+// --- Оттенки серого: вся модель в градациях luma — нейтральный снимок под
+// перегенерацию цветовой раскраски (ИИ красит заново, без цветового шума) ---
+function grayShaderPatch(shader) {
+  shader.fragmentShader = shader.fragmentShader.replace(
+    "#include <color_fragment>",
+    `#include <color_fragment>
+    { diffuseColor.rgb = vec3(dot(diffuseColor.rgb, vec3(0.299, 0.587, 0.114))); }`);
+}
+
+// --- общий движок подмены материалов для режимов-перекрасок (рентген/серый);
+// паттерн AI-палитры: клон оригинала (их шейдер-декодер нормалей), оригинал
+// в userData, дожим сходимости при пересоздании мешей LOD ---
+function shadeApply(state, patch, opts = {}) {
+  if (!model) return;
+  shadeRestore(state);
+  model.object.traverse((o) => {
+    if (!o.isMesh) return;
+    const m = aiFirstMat(o);
+    if (!m || !m.clone) return;
+    const xm = m.clone();
+    // клон годится и для ShaderMaterial @thatopen (шейдер-строки в полях),
+    // и для встроенных материалов three (шейдер генерится, onBeforeCompile
+    // патчит его ДО подстановки чанков — replace по include-строке корректен)
+    if (opts.transparent) {
+      xm.transparent = true; xm.depthWrite = false; xm.side = DoubleSide;
+    }
+    xm.onBeforeCompile = patch;
+    if (m.lodSize) xm.lodSize = m.lodSize;  // onBeforeRender LOD-мешей
+    // LOD-меши @thatopen читают material[0].lodSize — массив той же длины
+    o.userData.shadeOriginal = o.material;
+    o.material = Array.isArray(o.material) ? Array.from(o.material, () => xm) : xm;
+    state.meshes++;
+  });
+  // страховка на случай материальных клиппинг-плоскостей: та же ссылка на
+  // плоскости, что у оригинала (сечения режут перекрашенное на уровне рендерера)
+  model.object.traverse((o) => {
+    if (!o.isMesh || !o.userData.shadeOriginal) return;
+    const src = Array.isArray(o.userData.shadeOriginal) ? o.userData.shadeOriginal[0]
+                                                       : o.userData.shadeOriginal;
+    const cur = aiFirstMat(o);
+    if (src && src.clippingPlanes && cur) cur.clippingPlanes = src.clippingPlanes;
+  });
+}
+
+function shadeRestore(state) {
+  if (!model) return;
+  model.object.traverse((o) => {
+    if (o.isMesh && o.userData.shadeOriginal) {
+      // библиотека может заменить материал поверх подмены — тогда текущий материал истина, shadeOriginal устарел
+      const cur = aiFirstMat(o);
+      if (cur && (cur.onBeforeCompile === xrayShaderPatch ||
+                  cur.onBeforeCompile === grayShaderPatch)) {
+        o.material = o.userData.shadeOriginal;
+      }
+      delete o.userData.shadeOriginal;
+    }
+  });
+  state.meshes = 0;
+}
+
+function shadeEnsure(state) {
+  // пересоздание мешей LOD детектим по факту действующей подмены (как aiEnsure)
+  if (!model) return;
+  let wired = 0;
+  model.object.traverse((o) => {
+    if (!o.isMesh) return;
+    const cur = aiFirstMat(o);
+    if (cur && cur.onBeforeCompile === state.patch) wired++;
+  });
+  if (wired < state.meshes) shadeApply(state, state.patch, state.opts);
+}
+
+function shadeRun(state, on) {
+  state.on = !!on;
+  localStorage.setItem(state.key, on ? "1" : "0");
+  const b = $(state.btn);
+  b.classList.toggle("active", state.on);
+  // режимы-перекраски и палитра подменяют материалы — вместе не живут
+  if (state.on) {
+    for (const other of [xrayState, grayState]) {
+      if (other !== state && other.on) shadeRun(other, false);
+    }
+    if (aiPaletteState.on) aiSetEnabled(false);
+  }
+  if (state.on) shadeApply(state, state.patch, state.opts); else shadeRestore(state);
+}
+
+xrayState.key = "devbim:ifc:xray"; xrayState.btn = "btn-xray";
+grayState.key = "devbim:ifc:gray"; grayState.btn = "btn-gray";
+
+function xraySetEnabled(on) { shadeRun(xrayState, on); }
+function graySetEnabled(on) { shadeRun(grayState, on); }
+
+$("btn-xray").addEventListener("click", () => xraySetEnabled(!xrayState.on));
+xraySetEnabled(localStorage.getItem(xrayState.key) === "1");
+$("btn-gray").addEventListener("click", () => graySetEnabled(!grayState.on));
+graySetEnabled(localStorage.getItem(grayState.key) === "1");
 
 function updatePromptContext() {
   const src = personGroup ? personCtxId : (selection.size === 1 ? [...selection][0] : null);
