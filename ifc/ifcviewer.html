@@ -329,7 +329,7 @@
         <input readonly id="person-context" title="Вставьте в промт после снимка (Ctrl+V)">
       </div>
       <button id="person-remove">✕ Убрать человека</button>
-      <div class="person-hint">Клик по вертикальной грани (стене) опустит человека на пол под ней. В виде от глаз: мышь — осмотр, WASD/стрелки — ходьба, Shift — быстрее, ESC — вернуться к обзору.</div>
+      <div class="person-hint">Клик по вертикальной грани (стене) опустит человека на пол под ней. В виде от глаз: мышь — осмотр, WASD/стрелки — ходьба, колесо — шаг вперёд/назад, Shift — быстрее, ESC — вернуться к обзору.</div>
     </div>
     <div id="secpanel">
       <h3>Сечения <span class="spacer"></span><button id="sec-close" class="ghost" title="Закрыть панель">✕</button></h3>
@@ -1733,8 +1733,35 @@ function enterFP() {
   fpState.prevT = performance.now();
   fpState.raf = requestAnimationFrame(fpLoop);
   updatePersonEyeButton();
-  setStatus("Вид от глаз (1,7 м): мышь — осмотр, WASD/стрелки — ходьба, Shift — быстрее, ESC — выход");
+  setStatus("Вид от глаз (1,7 м): мышь — осмотр, WASD/стрелки — ходьба, колесо — шаг вперёд/назад, Shift — быстрее, ESC — выход");
 }
+
+// колесо в «виде от глаз» = шаг вперёд/назад по взгляду: зум-орбита тут
+// невозможна (камера жёстко на глазах человека — колесо раньше молча
+// ничего не делало, жалоба «колесо не зумирует»)
+$("viewport").addEventListener("wheel", (e) => {
+  if (!fpState.active) return;
+  e.preventDefault();
+  const step = Math.max(-3, Math.min(3, -e.deltaY / 100)) * 1.2;   // м за щелчок
+  const fx = -Math.sin(fpState.yaw), fz = -Math.cos(fpState.yaw);
+  fpState.eye.x += fx * step;
+  fpState.eye.z += fz * step;
+  if (personGroup) {
+    personGroup.position.x = fpState.eye.x;
+    personGroup.position.z = fpState.eye.z;
+  }
+  const token = ++fpState.snapToken;
+  snapToGround(fpState.eye.x, fpState.eye.y, fpState.eye.z).then((res) => {
+    if (!fpState.active || token !== fpState.snapToken || !personGroup || res === null) return;
+    personGroup.position.y = res.y;
+    fpState.eye.y = res.y + EYE_HEIGHT;
+    if (res.localId != null && res.localId !== personCtxId) {
+      personCtxId = res.localId;
+      updatePromptContext();
+    }
+  });
+  fragments.core.update();
+}, { passive: false });
 
 function fpLoop() {
   if (!fpState.active) return;

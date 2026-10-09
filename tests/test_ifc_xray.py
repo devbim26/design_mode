@@ -139,6 +139,12 @@ def test_shade_engine() -> None:
     assert "body.lightbg #viewport{background:#d4d4d4}" in s, "нет светлого фона вьюпорта"
     assert 'document.body.classList.toggle("lightbg", xrayState.on || grayState.on)' in js, \
         "lightbg-класс не пересчитывается по обоим режимам"
+    # «вид от глаз»: колесо = шаг вперёд/назад по взгляду (зум-орбита в FP
+    # невозможна — камера на глазах; колесо раньше молча не делало ничего)
+    assert 'wheel' in js and "if (!fpState.active) return;" in js and \
+        "fpState.eye.x += fx * step;" in js, \
+        "нет wheel-шага в режиме вида от глаз"
+    assert "колесо — шаг вперёд/назад" in s, "подсказка не упоминает шаг колесом"
     # отладка
     assert "xray: {" in js, "нет отладочного __ifc.xray"
 
