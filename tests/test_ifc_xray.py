@@ -134,10 +134,11 @@ def test_shade_engine() -> None:
         "включение режима не запускает дожим"
     assert "[xrayState, grayState].forEach((s) => { if (s.on) shadeConverge(s); });" in js, \
         "loadIfc-хук не дожимает режимы после стилей @thatopen"
-    # серый режим: светлый фон вьюпорта (на тёмном серая модель сливается)
-    assert "body.graybg #viewport{background:#d4d4d4}" in s, "нет светлого фона вьюпорта"
-    assert 'document.body.classList.toggle("graybg", !!on)' in js, \
-        "graybg-класс не вешается/не снимается с body"
+    # светлый фон вьюпорта — в рентгене И сером (на тёмном каркас/серая
+    # модель сливаются); снимается когда оба выключены
+    assert "body.lightbg #viewport{background:#d4d4d4}" in s, "нет светлого фона вьюпорта"
+    assert 'document.body.classList.toggle("lightbg", xrayState.on || grayState.on)' in js, \
+        "lightbg-класс не пересчитывается по обоим режимам"
     # отладка
     assert "xray: {" in js, "нет отладочного __ifc.xray"
 

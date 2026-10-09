@@ -247,16 +247,16 @@
   }
   #etoast.err{color:var(--err); border-color:var(--err)}
 
-  /* --- серый режим: светлый фон вьюпорта (graybg на body из shadeRun) —
-     серая модель на тёмном фоне сливается; кнопки/логотип/подсказка темнеют
-     для контраста --- */
-  body.graybg #viewport{background:#d4d4d4}
-  body.graybg #viewport .devbim-logo{color:#3c4046}
-  body.graybg #viewport .devbim-logo .sub{color:#5a5e64}
-  body.graybg #toolbar button{color:#2b2e33; border-color:#8b9096}
-  body.graybg #toolbar button:hover{color:#111}
-  body.graybg #toolbar button.active{background:#22333d; color:#7fd4ff; border-color:#38BDF8}
-  body.graybg #navhelp{color:#2b2e33; background:rgba(212,212,212,.85); border-color:#8b9096}
+  /* --- режимы перекраски (рентген/серый): светлый фон вьюпорта (lightbg на
+     body из shadeRun) — на тёмном фоне каркас/серая модель сливаются;
+     кнопки/логотип/подсказка темнеют для контраста --- */
+  body.lightbg #viewport{background:#d4d4d4}
+  body.lightbg #viewport .devbim-logo{color:#3c4046}
+  body.lightbg #viewport .devbim-logo .sub{color:#5a5e64}
+  body.lightbg #toolbar button{color:#2b2e33; border-color:#8b9096}
+  body.lightbg #toolbar button:hover{color:#111}
+  body.lightbg #toolbar button.active{background:#22333d; color:#7fd4ff; border-color:#38BDF8}
+  body.lightbg #navhelp{color:#2b2e33; background:rgba(212,212,212,.85); border-color:#8b9096}
 </style>
 </head>
 <body>
@@ -1077,8 +1077,6 @@ function shadeRun(state, on) {
   localStorage.setItem(state.key, on ? "1" : "0");
   const b = $(state.btn);
   b.classList.toggle("active", state.on);
-  // серый режим: светлый фон вьюпорта — серая модель сливается с тёмным
-  if (state === grayState) document.body.classList.toggle("graybg", !!on);
   // режимы-перекраски и палитра подменяют материалы — вместе не живут
   if (state.on) {
     for (const other of [xrayState, grayState]) {
@@ -1088,6 +1086,9 @@ function shadeRun(state, on) {
   }
   if (state.on) { shadeApply(state, state.patch, state.opts); shadeConverge(state); }
   else { shadeStop(state); shadeRestore(state); }
+  // светлый фон вьюпорта — в рентгене И сером (на тёмном каркас/серая
+  // модель сливаются); снимается когда оба режима выключены
+  document.body.classList.toggle("lightbg", xrayState.on || grayState.on);
 }
 
 xrayState.key = "devbim:ifc:xray"; xrayState.btn = "btn-xray";
