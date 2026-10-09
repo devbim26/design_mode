@@ -3,3 +3,6 @@
 *.png binary
 *.wasm binary
 *.mjs text eol=lf
+deploy/Dockerfile text eol=lf
+deploy/*.py text eol=lf
+deploy/*.yaml text eol=lf

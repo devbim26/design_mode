@@ -1,0 +1,14 @@
+# CPU torch wheels are installed first from the official PyTorch CPU index.
+torch==2.7.1+cpu
+torchvision==0.22.1+cpu
+invokeai==6.2.0
+ifcopenshell==0.8.5
+shapely==2.1.2
+matplotlib==3.10.7
+numpy==1.26.4
+PyYAML==6.0.2
+# Keep InvokeAI 6.2's ecosystem before incompatible major upgrades.
+transformers==4.51.3
+huggingface-hub==0.30.2
+opencv-contrib-python==4.11.0.86
+opencv-python==4.11.0.86

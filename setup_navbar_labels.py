@@ -31,10 +31,11 @@ App-*.js из *.navbarlabels-bak.
 import shutil
 import sys
 from pathlib import Path
+from package_layout import site_packages
 
 BASE = Path(__file__).resolve().parent
 VENV = BASE / "venv"
-DIST = VENV / "Lib" / "site-packages" / "invokeai" / "frontend" / "web" / "dist"
+DIST = site_packages(VENV) / "invokeai" / "frontend" / "web" / "dist"
 
 # --- App-бандл: TabButton (Ad). Было: IconButton в тултипе; стало:
 #     колонка E [IconButton, подпись W], тултип = пояснение из DBLT

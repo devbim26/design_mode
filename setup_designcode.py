@@ -31,11 +31,12 @@
 import shutil
 import sys
 from pathlib import Path
+from package_layout import site_packages
 
 BASE = Path(__file__).resolve().parent
 SRC = BASE / "design_code"
 VENV = BASE / "venv"
-SP = VENV / "Lib" / "site-packages"
+SP = site_packages(VENV)
 DIST = SP / "invokeai" / "frontend" / "web" / "dist"
 ROUTER_DST = SP / "invokeai" / "app" / "api" / "routers" / "design_code.py"
 API_APP = SP / "invokeai" / "app" / "api_app.py"

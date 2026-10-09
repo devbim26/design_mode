@@ -51,15 +51,18 @@ seed-файлом как default_style_presets.json.orig.
 from __future__ import annotations
 
 import json
+from contextlib import closing
 import shutil
 import sqlite3
 import sys
 import uuid
 from pathlib import Path
+from package_layout import site_packages
 
 ROOT = Path(__file__).resolve().parent
+SP = site_packages(ROOT / "venv")
 SEED_JSON = (
-    ROOT / "venv" / "Lib" / "site-packages" / "invokeai" / "app" / "services"
+    SP / "invokeai" / "app" / "services"
     / "style_preset_records" / "default_style_presets.json"
 )
 SEED_BACKUP = SEED_JSON.with_suffix(".json.orig")
@@ -70,7 +73,7 @@ DB = ROOT / "data" / "databases" / "invokeai.db"
 # обязаны быть корректными именами файлов Windows (без / \ : * ? " < > |).
 SRC_IMAGES = ROOT / "style_preset_images"
 VENV_IMAGES = (
-    ROOT / "venv" / "Lib" / "site-packages" / "invokeai" / "app" / "services"
+    SP / "invokeai" / "app" / "services"
     / "style_preset_images" / "default_style_preset_images"
 )
 
@@ -428,9 +431,10 @@ def sync_db(db_path: Path, presets: list[dict]) -> None:
                 )
     finally:
         con.close()
-    n = sqlite3.connect(db_path).execute(
-        "SELECT COUNT(*) FROM style_presets WHERE type = 'default'"
-    ).fetchone()[0]
+    with closing(sqlite3.connect(db_path)) as con:
+        n = con.execute(
+            "SELECT COUNT(*) FROM style_presets WHERE type = 'default'"
+        ).fetchone()[0]
     print(f"БД синхронизирована ({db_path.parent.parent.name}/): "
           f"{n} default-пресетов")
 
@@ -481,7 +485,8 @@ def main() -> None:
     _validate(PRESETS)
     deploy_seed(PRESETS)
     deploy_images()
-    sync_db(DB, PRESETS)
+    if "--no-db-sync" not in sys.argv:
+        sync_db(DB, PRESETS)
     print("Готово. В UI список стилей обновится после F5 (кэш RTK Query).")
 
 

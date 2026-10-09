@@ -17,11 +17,12 @@ site_auth, задеплоенную старым патчем ПОСЛЕ GZip, �
 import shutil
 import sys
 from pathlib import Path
+from package_layout import site_packages
 
 BASE = Path(__file__).resolve().parent
 SRC = BASE / "siteauth" / "site_auth.py"
 VENV = BASE / "venv"
-SP = VENV / "Lib" / "site-packages"
+SP = site_packages(VENV)
 DST = SP / "invokeai" / "app" / "api" / "routers" / "site_auth.py"
 API_APP = SP / "invokeai" / "app" / "api_app.py"
 
@@ -174,5 +175,6 @@ if __name__ == "__main__":
     deploy_module()
     patch_api_app()
     patch_sockets()
-    ensure_env_password()
+    if "--no-env" not in sys.argv:
+        ensure_env_password()
     print("Готово. Перезапустите сервер (launch\\start_server.bat).")

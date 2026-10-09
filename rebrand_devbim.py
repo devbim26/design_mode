@@ -20,14 +20,16 @@ import shutil
 import sys
 import urllib.parse
 from pathlib import Path
+from package_layout import site_packages
 
 BASE = Path(__file__).resolve().parent
 VENV = BASE / "venv"
-DIST = VENV / "Lib" / "site-packages" / "invokeai" / "frontend" / "web" / "dist"
+SP = site_packages(VENV)
+DIST = SP / "invokeai" / "frontend" / "web" / "dist"
 BACKUP = BASE / "dist_original_backup"
 BACKEND_FILES = [
-    VENV / "Lib" / "site-packages" / "invokeai" / "app" / "api_app.py",
-    VENV / "Lib" / "site-packages" / "invokeai" / "backend" / "util" / "logging.py",
+    SP / "invokeai" / "app" / "api_app.py",
+    SP / "invokeai" / "backend" / "util" / "logging.py",
 ]
 BRAND = "DevBIM"
 SITE = "https://devbim.com"

@@ -11,6 +11,9 @@ data/*
 
 # Секреты (ключ ImageRouter, админский пароль) — в репозиторий не входят
 .env
+deploy/.env
+deploy/backup*/
+.codex-tmp/
 
 # Служебные папки инструментов
 .playwright-mcp/

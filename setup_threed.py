@@ -14,11 +14,10 @@ designcode → threed → siteauth (гейт: imagerouter-роутер обяз�
 import shutil
 import sys
 from pathlib import Path
+from package_layout import site_packages
 
 BASE = Path(__file__).resolve().parent
 SRC = BASE / "threed"
-API_APP_REL = Path("Lib") / "site-packages" / "invokeai" / "app" / "api_app.py"
-ROUTERS_REL = Path("Lib") / "site-packages" / "invokeai" / "app" / "api" / "routers"
 
 IMPORT_ANCHOR = "    design_code,\n"
 IMPORT_NEW = "    design_code,\n    threed,\n"
@@ -27,7 +26,7 @@ ROUTER_NEW = (ROUTER_ANCHOR + 'app.include_router(threed.threed_router, prefix="
 
 
 def deploy_files(venv: Path) -> bool:
-    routers = venv / ROUTERS_REL
+    routers = site_packages(venv) / "invokeai" / "app" / "api" / "routers"
     if not (routers / "imagerouter.py").exists():
         print("ОШИБКА: нет imagerouter-роутера — сначала setup_imagerouter.py")
         sys.exit(1)
@@ -72,7 +71,7 @@ def patch_api_app(api_app: Path) -> bool:
 
 def main() -> None:
     venv = BASE / "venv"
-    api_app = venv / API_APP_REL
+    api_app = site_packages(venv) / "invokeai" / "app" / "api_app.py"
     if not api_app.exists():
         print("Не найден venv InvokeAI:", api_app)
         sys.exit(1)

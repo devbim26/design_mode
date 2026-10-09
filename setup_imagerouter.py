@@ -61,11 +61,12 @@ import re
 import shutil
 import sys
 from pathlib import Path
+from package_layout import site_packages
 
 BASE = Path(__file__).resolve().parent
 SRC = BASE / "imagerouter"
 VENV = BASE / "venv"
-SP = VENV / "Lib" / "site-packages"
+SP = site_packages(VENV)
 DIST = SP / "invokeai" / "frontend" / "web" / "dist"
 ROUTER_DST = SP / "invokeai" / "app" / "api" / "routers" / "imagerouter.py"
 API_APP = SP / "invokeai" / "app" / "api_app.py"
@@ -2014,7 +2015,8 @@ def main() -> None:
         if not p.exists():
             print("Не найдено:", p)
             sys.exit(1)
-    ensure_env_file()
+    if "--no-env" not in sys.argv:
+        ensure_env_file()
     deploy_files()
     deploy_mask_toggle()
     deploy_cut_tool()
