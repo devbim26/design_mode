@@ -280,7 +280,7 @@ async def _validate_ir_token(token: str) -> tuple[bool, str]:
     if resp.status_code == 200:
         return True, ""
     if 400 <= resp.status_code < 500:
-        return False, "Токен ImageRouter отклонён — проверьте ключ"
+        return False, "Токен DevBIM Design отклонён — проверьте ключ"
     print(f"[studio] IR token check HTTP {resp.status_code}", file=sys.stderr)
     return True, ""
 
@@ -1022,7 +1022,7 @@ _ADMIN_PAGE = """<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8">
   </div>
   <div class="hint">Вход владельца: пустая почта + этот пароль на форме входа.</div>
   <div class="srow">
-    <b>Ключ ImageRouter (общий):</b>
+    <b>Ключ DevBIM Design (общий):</b>
     <input id="irKey" type="password" placeholder="токен (пусто — вернуть ключ из .env)">
     <button id="irSave">Сохранить</button>
   </div>
@@ -1035,11 +1035,11 @@ _ADMIN_PAGE = """<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8">
   <input name="name" placeholder="имя">
   <input name="password" placeholder="пароль (8+ символов)" required minlength="8">
   <select name="role"><option value="user">user</option><option value="admin">admin</option></select>
-  <input name="token" placeholder="токен ImageRouter (необязательно)">
+  <input name="token" placeholder="токен DevBIM Design (необязательно)">
   <button type="submit">Создать</button>
 </form>
 <table id="t"><thead><tr>
-  <th>Email</th><th>Имя</th><th>Роль</th><th>Токен IR</th><th>Design Code</th>
+  <th>Email</th><th>Имя</th><th>Роль</th><th>Токен</th><th>Design Code</th>
   <th>Генерации ок/ош</th><th>~$</th>
   <th>Картинки</th><th>Борды</th>
   <th>IFC</th><th>PDF</th><th>3D</th><th>Последний вход</th><th>Действия</th>
@@ -1257,7 +1257,7 @@ fetch('/admin/api/users').then(r => r.json()).then(d => {
     const btnTok = document.createElement('button');
     btnTok.textContent = 'Токен…';
     btnTok.onclick = () => {
-      const t = prompt('Токен ImageRouter для ' + u.email + ' (пусто — очистить)');
+      const t = prompt('Токен DevBIM Design для ' + u.email + ' (пусто — очистить)');
       if (t !== null) post('/admin/api/users/' + uid + '/token', { token: t });
     };
     const btn = document.createElement('button');

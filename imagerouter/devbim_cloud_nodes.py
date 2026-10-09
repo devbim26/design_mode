@@ -177,7 +177,7 @@ def _api(context: "InvocationContext | None" = None) -> tuple[str, Any]:
     if not key:
         if user and user != "admin-local":
             raise ValueError(
-                "Personal ImageRouter token is not set. "
+                "Personal DevBIM Design token is not set. "
                 "Please contact your administrator."
             )
         raise ValueError(

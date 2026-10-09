@@ -3680,3 +3680,42 @@ node -e "import('file:///C:/PROJECTS/InvokeAI/venv/Lib/site-packages/invokeai/fr
       сливалась. Тесты/test_ifc_xray.py дополнены (серия, graybg, юниформы).
     - Деплой: `setup_ifcviewer.py` (статика dist/ifcviewer.html, бандлы
       НЕ тронуты — Ctrl+F5 достаточно, рестарт сервера не нужен).
+77. **ImageRouter в интерфейсе переименован в «DevBIM Design»** (09.10,
+    ветка `user`; просьба: «проверь на упоминание в интерфейсе
+    ImageRouter… замени»). Провайдер в UI больше не называется нигде
+    (продолжение решения 21.09 «провайдера не называем» — тогда убрали
+    его из описаний моделей, теперь и из лейблов).
+    - **Model Manager**: вкладка и заголовок «ImageRouter» -> «DevBIM
+      Design» (инъекция `JS_NEW_COMPONENT` в `setup_imagerouter.py`);
+      кнопка-ссылка «docs.imagerouter.io» -> «Docs» (URL тот же);
+      iframe title тоже «DevBIM Design». Для УЖЕ пропатченного бандла
+      новый шаг `relabel_js()` (вызывается из ветки «уже пропатчен»
+      `patch_js`): замены `children/title:"ImageRouter"` ->
+      `"DevBIM Design"` + `children:"docs.imagerouter.io"` -> `"Docs"`
+      по всем assets/*.js с imagerouter.html; идемпотентен, бэкап тот же
+      `*.imagerouter-bak`.
+    - **iframe-страница** `imagerouter/imagerouter.html`: `<title>`, h1
+      (`DevBIM <span class=bim>Design</span>` — акцент на «Design»),
+      тултип баланса, плейсхолдер «API-ключ DevBIM Design (sk-…)»;
+      из подсказки про хранение ключа убран путь data/imagerouter.json.
+      Ссылки «получить API-ключ»/«документация» (imagerouter.io) и
+      API-пути `/api/v1/imagerouter/*` оставлены — это функциональные
+      URL, не лейблы.
+    - **siteauth**: ошибка входа «Токен DevBIM Design отклонён…»,
+      админка — «Ключ DevBIM Design (общий)», плейсхолдеры токена
+      (форма создания + prompt()), колонка таблицы «Токен IR» -> «Токен».
+    - **Тосты/ошибки роутеров**: «Персональный токен DevBIM Design не
+      задан…» (imagerouter_router x3, threed_router), префикс ошибок
+      шлюза «DevBIM Design: …» вместо «ImageRouter: …», EN-вариант
+      «Personal DevBIM Design token is not set…» (prompt_enhancer,
+      devbim_cloud_nodes).
+    - НЕ переименованы (внутреннее, пользователю не видны): префикс
+      ключей моделей `imagerouter/` (на нём держится мидлварь/метки/
+      воркфлоу-ноды; имя модели в селекторе и так без префикса —
+      `mid.split("/")[-1]`), env `IMAGEROUTER_API_KEY`, пути
+      `/api/v1/imagerouter/*`, `imagerouter://…`, комментарии/докстринги.
+      Деплой: `setup_imagerouter.py` + `setup_site_auth.py` +
+      `setup_threed.py`, рестарт `launch\_restart_server.ps1`. Тесты:
+      test_panel_layout, test_userauth_admin/login/token/genlog,
+      test_upscale_cloud, test_prompt_enhancer — OK (в test_userauth_admin
+      мок-строка синхронизирована).
