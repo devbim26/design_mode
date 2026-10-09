@@ -84,9 +84,8 @@ def test_shade_engine() -> None:
         "function shadeRun(state, on)",
     ):
         assert frag in js, f"нет {frag}"
-    # подмена — КЛОНОМ оригинала: годится и ShaderMaterial @thatopen, и
-    # встроенным материалам three (шейдер генерится, инъекция по чанку)
-    assert "const xm = m.clone()" in js, "материал не клонирует оригинал"
+    # подмена: встроенным материалам three — клон, vse — новый конструктором
+    assert "xm = m.clone();" in js, "встроенный материал не клонируется"
     assert "xm.onBeforeCompile = patch" in js, "клону не ставится шейдерный патч"
     assert "if (!xm.vertexShader || !xm.fragmentShader) return" not in js, \
         "предохранитель по шейдер-строкам отсекает встроенные материалы three (interior-модели)"
@@ -94,7 +93,6 @@ def test_shade_engine() -> None:
     # массив материалов подменяется массивом той же длины, lodSize переносится
     assert "Array.from(o.material, () => xm)" in js, \
         "массив материалов не сохраняется при подмене (LOD-меши роняют рендер)"
-    assert "if (m.lodSize) xm.lodSize = m.lodSize;" in js, "lodSize не переносится на клон"
     # оригинал в userData, счётчик
     assert "o.userData.shadeOriginal = o.material" in js, "оригинал не сохраняется"
     # восстановление защищено от устаревших shadeOriginal (замена библиотекой)
@@ -107,17 +105,16 @@ def test_shade_engine() -> None:
     assert "cur.onBeforeCompile === state.patch" in ensure and \
         "shadeApply(state, state.patch, state.opts)" in ensure, \
         "shadeEnsure не дожимает сходимость при LOD"
-    # vse ScreenSpace-LOD @thatopen (дальние элементы квадами): цвет — юниформа
-    # lodColor (в их шейдере НЕТ include-чанков) — серому красим юниформу,
-    # рентген бьёт по якорям их шейдера (рамка квада = граница элемента)
-    assert "m.uniforms && m.uniforms.lodColor" in js, \
-        "нет vse-ветки по юниформе lodColor"
-    assert "xu.value.setRGB(g, g, g)" in js, "lodColor клона не перекрашивается в luma"
-    assert "gl_Position = lodPosition;" in js and "vXQ = position.xy;" in js, \
-        "рентген не передаёт координаты квада в vse-вершинник"
-    assert "gl_FragColor = vec4(mix(color * 0.45, xec, isEdge), mix(0.06, 1.0, isEdge)); }" in js, \
-        "нет рамки квада (дальний каркас) в vse-фрагментнике"
-    assert "xo.value = 0.07" in js, "нет lodOpacity-страховки прозрачности vse"
+    # vse ScreenSpace-LOD @thatopen — ЭТО ЛИНИИ (полосы-границы элементов):
+    # clone() их класса ПАДАЕТ (new vse() без t.color), цвет — ЮНИФОРМА
+    # lodColor — строим НОВЫЙ материал их конструктором
+    assert "if (m.isLodMaterial)" in js, "нет ветки vse (isLodMaterial)"
+    assert "new m.constructor({ color: col, opacity: op, transparent: !!m.transparent })" in js, \
+        "vse-материал не строится конструктором (clone у них падает)"
+    assert "col = new Color(g, g, g);" in js, "серому не передаётся luma-цвет в конструктор vse"
+    assert "col = 0x38bdf8;" in js, "рентгену линии-границы не красятся акцентом"
+    assert "gl_FragColor = vec4(vec3(0.22, 0.74, 0.97), 0.9);" in js, \
+        "vse-линии не красятся целиком в акцент (якорь их фрагментника)"
     # сечения режут перекрашенное: клиппинг-плоскости копируются на клоны
     assert "cur.clippingPlanes = src.clippingPlanes" in js, "клиппинг не копируется"
     # состояния переживают F5

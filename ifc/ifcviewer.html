@@ -956,19 +956,14 @@ function xrayShaderPatch(shader) {
         float isEdge = smoothstep(0.04, 0.25, edge);
         diffuseColor.rgb = mix(diffuseColor.rgb * 0.45, uXEdge, isEdge);
         diffuseColor.a = mix(0.06, 1.0, isEdge); }`);
-  // (б) vse ScreenSpace-LOD @thatopen (дальние элементы квадами, шейдер без
-  // чанков): рамка квада = граница элемента — дальний «каркас». Якоря их
-  // шейдера; у встроенных материалов этих строк нет — replace молча пропускает
-  shader.vertexShader = "varying vec2 vXQ;\n" + shader.vertexShader.replace(
-    "gl_Position = lodPosition;",
-    "gl_Position = lodPosition;\n        vXQ = position.xy;");
+  // (б) vse ScreenSpace-LOD @thatopen — ЭТО УЖЕ ЛИНИИ (полосы-границы
+  // элементов, ScreenSpace-ширина): красим целиком в акцент — вместе с
+  // прозрачной заливкой обычной геометрии даёт полный каркас. Якорь их
+  // фрагментника; у встроенных материалов этой строки нет — replace молча
+  // пропускает (первая ветка уже сделала своё)
   shader.fragmentShader = shader.fragmentShader.replace(
     "gl_FragColor = vec4(color, alpha);",
-    `{ float xb = 1.0 - abs(vXQ.x);
-       float yb = min(abs(vXQ.y), abs(vXQ.y - 1.0));
-       float isEdge = 1.0 - smoothstep(0.0, 0.03, min(xb, yb));
-       vec3 xec = vec3(0.22, 0.74, 0.97);
-       gl_FragColor = vec4(mix(color * 0.45, xec, isEdge), mix(0.06, 1.0, isEdge)); }`);
+    `gl_FragColor = vec4(vec3(0.22, 0.74, 0.97), 0.9);`);
 }
 
 // --- Оттенки серого: вся модель в градациях luma — нейтральный снимок под
@@ -989,34 +984,36 @@ function shadeApply(state, patch, opts = {}) {
   model.object.traverse((o) => {
     if (!o.isMesh) return;
     const m = aiFirstMat(o);
-    if (!m || !m.clone) return;
-    const xm = m.clone();
-    // клон годится и для ShaderMaterial @thatopen (шейдер-строки в полях),
-    // и для встроенных материалов three (шейдер генерится, onBeforeCompile
-    // патчит его ДО подстановки чанков — replace по include-строке корректен)
+    if (!m) return;
+    // vse ScreenSpace-LOD @thatopen (дальние элементы квадами): их clone()
+    // ПАДАЕТ (new vse() без t.color), шейдер без include-чанков, цвет —
+    // ЮНИФОРМА lodColor. Строим новый материал их конструктором: gray сразу
+    // с luma-цветом; рентген красит по якорям их шейдера (xrayShaderPatch,
+    // ветка «б» — рамка квада = граница элемента). Встроенным материалам
+    // three (interior-модели) шейдер генерится сам — обычный clone + инъекция
+    let xm;
+    if (m.isLodMaterial) {
+      const u = m.uniforms || {};
+      const lc = u.lodColor && u.lodColor.value && u.lodColor.value.isColor ? u.lodColor.value : null;
+      const op = u.lodOpacity && u.lodOpacity.value != null ? u.lodOpacity.value : 1;
+      let col = lc ? lc.getHex() : 0xffffff;
+      if (patch === grayShaderPatch && lc) {
+        const g = 0.299 * lc.r + 0.587 * lc.g + 0.114 * lc.b;
+        col = new Color(g, g, g);
+      } else if (patch === xrayShaderPatch) {
+        col = 0x38bdf8;   // линии-границы — акцент (и страховка без шейдер-патча)
+      }
+      try {
+        xm = new m.constructor({ color: col, opacity: op, transparent: !!m.transparent });
+      } catch (e) { return; }
+    } else {
+      if (!m.clone) return;
+      xm = m.clone();
+    }
     if (opts.transparent) {
       xm.transparent = true; xm.depthWrite = false; xm.side = DoubleSide;
     }
     xm.onBeforeCompile = patch;
-    // vse (@thatopen ScreenSpace-LOD — дальние элементы квадами): цвет —
-    // ЮНИФОРМА lodColor, include-патч к их шейдеру НЕ применяется
-    // (в нём нет color_fragment) — серому перекрашиваем юниформу клона;
-    // рентген бьёт по их якорям сам (xrayShaderPatch, ветка «б»),
-    // lodOpacity — страховка прозрачности, если якорь не нашёлся
-    const lu = m.uniforms && m.uniforms.lodColor;
-    if (lu && lu.value && lu.value.isColor && patch === grayShaderPatch) {
-      const xu = xm.uniforms && xm.uniforms.lodColor;
-      if (xu && xu.value) {
-        const c = lu.value;
-        const g = 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
-        xu.value.setRGB(g, g, g);
-      }
-    }
-    if (lu && patch === xrayShaderPatch) {
-      const xo = xm.uniforms && xm.uniforms.lodOpacity;
-      if (xo && xo.value === 1) xo.value = 0.07;  // если якорь шейдера не нашёлся
-    }
-    if (m.lodSize) xm.lodSize = m.lodSize;  // onBeforeRender LOD-мешей
     // LOD-меши @thatopen читают material[0].lodSize — массив той же длины
     o.userData.shadeOriginal = o.material;
     o.material = Array.isArray(o.material) ? Array.from(o.material, () => xm) : xm;
