@@ -75,6 +75,7 @@
   // --- эмблема «devBIM - Design» (без иконки: чистый текстовый вордмарк) ---
 
   var lang = 'en';   // до первого чтения настроек — английский (дефолт продукта)
+  var suppressPollUntil = 0;  // после клика: не откатывать язык поллингом (персист с дебаунсом)
   var els = {};
 
   function texts() { return TEXTS[lang] || TEXTS.en; }
@@ -171,6 +172,7 @@
   function setLanguage(l) {
     if (!TEXTS[l]) return;
     lang = l;
+    suppressPollUntil = Date.now() + 2500;  // персист с дебаунсом — не откатывать подсветку
     render();
     var st = appStore();
     if (st) {
@@ -185,6 +187,9 @@
   }
 
   function pollLanguage() {
+    // сразу после клика polled-значение ещё старое (персист с дебаунсом) —
+    // игнорируем его пару секунд, чтобы подсветка не мигала
+    if (Date.now() < suppressPollUntil) return;
     readLanguage(function (l) {
       if (l && l !== lang) { lang = l; render(); }
     });

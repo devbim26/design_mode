@@ -3542,3 +3542,68 @@ node -e "import('file:///C:/PROJECTS/InvokeAI/venv/Lib/site-packages/invokeai/fr
 
 Откат интеграции: восстановить `*.imagerouter-bak`, удалить
 `routers/imagerouter.py` и `dist/imagerouter.html` (детали в README).
+
+75. **Английский — дефолт UI + переключатель EN|RU в баннере + полная
+    русская локализация** (08.10, ветка `user`; запрос пользователя
+    «вверху надпись "Создавай реалистичные…" — переведи, английский у нас
+    дефолт; сделай русскую локализацию интерфейса и переключатель вверху
+    экрана»). Спека:
+    `docs/superpowers/specs/2026-10-08-ui-language-switcher-design.md`.
+    - **Дефолт EN**: `devbim_banner.js` и
+      `imagerouter/devbim_topright_buttons.js` до первого чтения настроек
+      показывали русский (`var lang='ru'`) — теперь `'en'` (дефолт
+      приложения: system.language='en' в бандле). «Выйти» в баннере
+      локализован (ru «Выйти» / en «Log out»).
+    - **Переключатель EN|RU в баннере** (правый край, перед чипом
+      пользователя): клик диспатчит `{type:'system/languageChanged',
+      payload:'en'|'ru'}` в стор приложения — глобал
+      `window.__devbimPEStore` (DevbimPEWatch из setup_imagerouter),
+      фолбэк `__devbimCanvasBridge.getManager().stateApi.store`, затем
+      прямая запись в IndexedDB `@@invokeai-system` (merge; применится
+      после F5). App слушает system.language → i18n.changeLanguage —
+      весь интерфейс+оверлеи переводятся сразу; redux-remember сам
+      персистит. Подсветка активного языка — поллинг IDB (1 c), после
+      клика поллинг душится 2.5 с (персист с дебаунсом — иначе подсветка
+      мигала). Экшен и селектор найдены в бандле: slice name 'system',
+      редьюсер `languageChanged:(e,t)=>{e.language=t.payload}`,
+      селектор `_G=ge(H2,e=>e.language)` (тот же App-чанк, читается в
+      рендере — TDZ нет).
+    - **ГРАБЛЯ (найдена живой проверкой, чинится здесь же)**: «голый»
+      `indexedDB.open('invoke')` в баннере/кнопках на СВЕЖЕМ профиле
+      браузера создаёт пустую базу v1 раньше приложения — upgrade при
+      равной версии не выполняется, store 'invoke-store' не создаётся
+      EVER, персистентность redux-remember молча мертва (настройки/язык
+      не сохраняются после F5). Фикс: onupgradeneeded с oldVersion===0 →
+      `req.transaction.abort()` (не создаём базу), без стора — тихий
+      null. Профили, УЖЕ отравленные старым баннером, не самолечатся —
+      лечение: закрыть вкладки 9090 → DevTools → Application →
+      IndexedDB → invoke → Delete database → F5.
+    - **Полная русская локализация**: апстримный ru.json покрывал
+      1490/2031 ключей en. Новый `setup_ru_locale.py` +
+      `locales_patch/ru_missing.json` (448 переводов + русские формы
+      плюрализма _one/_few/_many/_other; разделы workflows.*/nodes.* не
+      переводим — вкладка скрыта) глубоким merge добавляют ТОЛЬКО
+      отсутствующие ключи (идемпотентно; существующие/брендированные не
+      трогает). Запускать ПОСЛЕ rebrand_devbim.py (он переписывает все
+      locales). Цепочка в AGENTS/README/спеке обновлена: … → setup_ru_
+      locale.py → setup_navbar_labels.py (по-прежнему строго последним).
+      Терминология сведена с апстримом: запрос= prompt, Доска= board,
+      рамка= bbox, маска перерисовки= inpaint mask, слой управления=
+      control layer, эталонное изображение= reference image, увеличение=
+      upscaling, сид= seed.
+    - **Тултипы рейки bilingual**: setup_navbar_labels.py карта DBLT
+      v1 `[подпись, тултип RU]` → v2 `[подпись, EN, RU]`, тултип
+      выбирается в рендере `T(_G)==="ru"?c[2]:c[1]`; скрипт мигрирует
+      уже-пропатченный бандл v1→v2 (якорь — точный v1-фрагмент),
+      свежая установка — прежний якорь Ad. Идемпотентен (маркер v2).
+    - E2E 08.10 (IAB-браузер, вход тестовым пользователем, скриншот
+      docs/lang-switcher-ru.png): дефолт EN (слоган/Log out/тултипы);
+      клик RU мгновенно переводит слоган+«Выйти»+«Доски»+UI; F5 —
+      выбор СОХРАНЯЕТСЯ (проверено на чистом origin localhost:9090 —
+      там базу создало приложение со store'ом, в отравленном профиле
+      127.0.0.1 персистентность мертва из-за старого бага, см. граблю);
+      RU→EN без мигания. Тестовый пользователь lang-switch-test@devbim.
+      local отозван. Тесты: `tests/test_ui_language.py` (дефолты EN,
+      диспатч, guard IndexedDB, комплектность ru.json 2031/2031 минус
+      workflows/nodes, плейсхолдеры, бренд DevBIM, миграция v1→v2,
+      v2 в деплое).

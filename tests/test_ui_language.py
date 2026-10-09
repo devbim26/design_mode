@@ -39,6 +39,12 @@ def test_banner_default_en_and_switcher():
     assert "logout: 'Выйти'" in s and "logout: 'Log out'" in s
     # фолбэк прямой записью в IndexedDB
     assert "function writeLanguage" in s and "@@invokeai-system" in s
+    # грабля 08.10: баннер НЕ должен создавать базу «invoke» сам — иначе на
+    # свежем профиле браузера пустая база v1 убивает персистентность redux
+    assert "onupgradeneeded" in s and "oldVersion === 0" in s, \
+        "открытие IndexedDB обязано откатывать создание новой базы"
+    assert "objectStoreNames.contains('invoke-store')" in s, \
+        "без стора приложения читать нечего — тихо null"
     print("OK: баннер — дефолт EN, переключатель EN|RU, «Выйти» локализован")
 
 
@@ -58,7 +64,10 @@ def test_topright_default_en():
     s = (BASE / "imagerouter" / "devbim_topright_buttons.js").read_text(encoding="utf-8")
     assert "var lang = 'en'" in s, "кнопки ✨/3D стартуют с английского"
     assert "var lang = 'ru'" not in s
-    print("OK: кнопки ✨/3D — дефолт EN")
+    # та же защита от создания пустой базы «invoke» (грабля 08.10)
+    assert "onupgradeneeded" in s and "oldVersion === 0" in s
+    assert "objectStoreNames.contains('invoke-store')" in s
+    print("OK: кнопки ✨/3D — дефолт EN + защита IndexedDB")
 
 
 def test_ru_locale_merge_missing_only():
